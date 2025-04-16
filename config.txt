@@ -1,0 +1,11 @@
+[packdb]
+build_dir = build
+db_file = packdb.db
+
+[tpch]
+scale_factor = 1.0
+
+[hardware]
+core_count = 64
+
+[end]

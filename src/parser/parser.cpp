@@ -15,6 +15,8 @@
 #include "parser/parser.hpp"
 #include "postgres_parser.hpp"
 
+#include "duckdb/packdb/util/debug.hpp"
+
 namespace duckdb {
 
 Parser::Parser(ParserOptions options_p) : options(options_p) {
@@ -229,10 +231,12 @@ void Parser::ParseQuery(const string &query) {
 		// If DuckDB fails to parse the entire sql string, break the string down into individual statements
 		// using ';' as the delimiter so that parser extensions can parse the statement
 		if (parsing_succeed) {
+            deb(query);
 			// no-op
 			// return here would require refactoring into another function. o.w. will just no-op in order to run wrap up
 			// code at the end of this function
 		} else if (!options.extensions || options.extensions->empty()) {
+            std::cout << "Error is here!" << std::endl;
 			throw ParserException::SyntaxError(query, parser_error, parser_error_location);
 		} else {
 			// split sql string into statements and re-parse using extension
