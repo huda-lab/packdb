@@ -47,7 +47,6 @@ make -j$CORE_COUNT
 
 SQL_SCRIPT=$(mktemp)
 cat << EOF > "$SQL_SCRIPT"
-INSTALL tpch;
 LOAD tpch;
 CALL dbgen(sf = $SCALE_FACTOR);
 EOF
