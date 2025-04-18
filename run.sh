@@ -35,8 +35,8 @@ while IFS='=' read -r key value; do
 done < "$CONFIG_FILE"
 
 HOME=$(pwd)
-# python3 scripts/generate_grammar.py
-# python3 scripts/generate_flex.py
+python3 scripts/generate_grammar.py
+python3 scripts/generate_flex.py
 cd "$BUILD_DIR"
 make -j$CORE_COUNT
 ./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"

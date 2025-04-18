@@ -231,7 +231,6 @@ void Parser::ParseQuery(const string &query) {
 		// If DuckDB fails to parse the entire sql string, break the string down into individual statements
 		// using ';' as the delimiter so that parser extensions can parse the statement
 		if (parsing_succeed) {
-            deb(query);
 			// no-op
 			// return here would require refactoring into another function. o.w. will just no-op in order to run wrap up
 			// code at the end of this function
