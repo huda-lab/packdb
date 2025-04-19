@@ -26,11 +26,6 @@ while IFS='=' read -r key value; do
         db_file) DB_FILE=$value ;;
       esac
       ;;
-    hardware)
-      case "$key" in
-        core_count) CORE_COUNT=$value ;;
-      esac
-      ;;
   esac
 done < "$CONFIG_FILE"
 
@@ -38,6 +33,6 @@ HOME=$(pwd)
 python3 scripts/generate_grammar.py
 python3 scripts/generate_flex.py
 cd "$BUILD_DIR"
-make -j$CORE_COUNT
+make -j$(nproc)
 ./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"
 

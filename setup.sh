@@ -31,19 +31,13 @@ while IFS='=' read -r key value; do
         scale_factor) SCALE_FACTOR=$value ;;
       esac
       ;;
-    hardware)
-      case "$key" in
-        core_count) CORE_COUNT=$value ;;
-      esac
-      ;;
   esac
 done < "$CONFIG_FILE"
 
-git submodule update --init --recursive
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 cmake ..
-make -j$CORE_COUNT
+make -j$(nproc)
 
 SQL_SCRIPT=$(mktemp)
 cat << EOF > "$SQL_SCRIPT"
