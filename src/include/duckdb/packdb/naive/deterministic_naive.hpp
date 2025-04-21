@@ -1,0 +1,4 @@
+#ifndef DETERMINISTIC_NAIVE_HPP
+#define DETERMINISTIC_NAIVE_HPP
+
+#endif

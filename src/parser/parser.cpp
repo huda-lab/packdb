@@ -15,7 +15,7 @@
 #include "parser/parser.hpp"
 #include "postgres_parser.hpp"
 
-#include "duckdb/packdb/util/debug.hpp"
+#include "duckdb/packdb/utility/debug.hpp"
 
 namespace duckdb {
 

@@ -1,4 +1,4 @@
-#include "duckdb/packdb/util/debug.hpp"
+#include "duckdb/packdb/utility/debug.hpp"
 
 #include <omp.h>
 #include <cassert>

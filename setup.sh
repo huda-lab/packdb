@@ -34,10 +34,30 @@ while IFS='=' read -r key value; do
   esac
 done < "$CONFIG_FILE"
 
+BUILD_GENERATOR=""
+BUILD_COMMAND=""
+HOME=$PWD
+
+if command -v ninja >/dev/null 2>&1; then
+  echo "Ninja executable found. Using Ninja build system."
+  BUILD_GENERATOR="Ninja"
+  BUILD_COMMAND="ninja"
+else
+  echo "Ninja executable not found. Using Make build system."
+  BUILD_GENERATOR="Unix Makefiles"
+  BUILD_COMMAND="make -j$(nproc)"
+fi
+
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
-cmake ..
-make -j$(nproc)
+
+if [ -f CMakeCache.txt ]; then
+    echo "Existing CMakeCache.txt found. Removing for potentially fresh configuration."
+    rm CMakeCache.txt
+fi
+
+cmake -G "$BUILD_GENERATOR" ..
+$BUILD_COMMAND
 
 SQL_SCRIPT=$(mktemp)
 cat << EOF > "$SQL_SCRIPT"
