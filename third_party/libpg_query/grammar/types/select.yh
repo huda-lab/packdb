@@ -1,3 +1,6 @@
+%type <node> package_func opt_repeat package_select
+%type <target> package_target
+
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause values_clause_opt_comma
 

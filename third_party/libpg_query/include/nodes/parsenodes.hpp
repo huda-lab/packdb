@@ -1292,6 +1292,10 @@ typedef struct PGSelectStmt {
 	struct PGNode *larg; /* left child */
 	struct PGNode *rarg; /* right child */
 	                           /* Eventually add fields for CORRESPONDING spec here */
+
+    // packdb
+    PGNode *repeat;
+
 } PGSelectStmt;
 
 /* ----------------------

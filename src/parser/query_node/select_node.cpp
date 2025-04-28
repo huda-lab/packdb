@@ -48,6 +48,10 @@ string SelectNode::ToString() const {
 	if (from_table && from_table->type != TableReferenceType::EMPTY_FROM) {
 		result += " FROM " + from_table->ToString();
 	}
+    // packdb
+    if (repeat){
+        result += " REPEAT " + repeat->ToString();
+    }
 	if (where_clause) {
 		result += " WHERE " + where_clause->ToString();
 	}
@@ -126,6 +130,10 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 	if (!TableRef::Equals(from_table, other.from_table)) {
 		return false;
 	}
+    // packdb
+	if (!ParsedExpression::Equals(repeat, other.repeat)) {
+		return false;
+	}
 	// WHERE
 	if (!ParsedExpression::Equals(where_clause, other.where_clause)) {
 		return false;
@@ -157,6 +165,8 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 		result->select_list.push_back(child->Copy());
 	}
 	result->from_table = from_table ? from_table->Copy() : nullptr;
+    // packdb
+    result->repeat = repeat ? repeat->Copy() : nullptr;
 	result->where_clause = where_clause ? where_clause->Copy() : nullptr;
 	// groups
 	for (auto &group : groups.group_expressions) {

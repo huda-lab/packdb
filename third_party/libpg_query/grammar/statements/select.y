@@ -69,7 +69,8 @@ select_with_parens:
  *	2002-08-28 bjm
  */
 select_no_parens:
-			simple_select						{ $$ = $1; }
+            package_select                      { $$ = $1; }
+			| simple_select						{ $$ = $1; }
 			| select_clause sort_clause
 				{
 					insertSelectOptions((PGSelectStmt *) $1, $2, NIL,
@@ -167,9 +168,50 @@ opt_select:
 			}
 	;
 
+package_func: PACKAGE '(' func_arg_list ')' 
+                {
+                    PGList *func_name = list_make1(makeString("package"));
+					PGFuncCall *n = makeFuncCall(func_name, $3, @1);
+					$$ = (PGNode *)n;
+                }
+            ;
+
+package_target: package_func AS ColLabelOrString
+				{
+					$$ = makeNode(PGResTarget);
+					$$->name = $3;
+					$$->indirection = NIL;
+					$$->val = (PGNode *)$1;
+					$$->location = @1;
+				}
+                | package_func    
+                {
+					$$ = makeNode(PGResTarget);
+					$$->name = NULL;
+					$$->indirection = NIL;
+					$$->val = (PGNode *)$1;
+					$$->location = @1;
+				}
+            ;
+
+opt_repeat: REPEAT Iconst { $$ = makeIntConst($2, @1);}
+            | /*EMPTY*/   { $$ = NULL;}
+            ;
+
+package_select:
+    SELECT package_target from_clause opt_repeat where_clause
+        {
+            PGSelectStmt *n = makeNode(PGSelectStmt);
+            n->targetList = list_make1($2);
+            n->fromClause = $3;
+            n->repeat = $4;
+            n->whereClause = $5;
+            $$ = (PGNode *)n;
+        }
+        ;
 
 simple_select:
-			SELECT opt_all_clause opt_target_list_opt_comma
+            SELECT opt_all_clause opt_target_list_opt_comma
 			into_clause from_clause where_clause
 			group_clause having_clause window_clause qualify_clause sample_clause
 				{

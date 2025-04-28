@@ -235,7 +235,6 @@ void Parser::ParseQuery(const string &query) {
 			// return here would require refactoring into another function. o.w. will just no-op in order to run wrap up
 			// code at the end of this function
 		} else if (!options.extensions || options.extensions->empty()) {
-            std::cout << "Error is here!" << std::endl;
 			throw ParserException::SyntaxError(query, parser_error, parser_error_location);
 		} else {
 			// split sql string into statements and re-parse using extension

@@ -42,6 +42,8 @@ public:
 	AggregateHandling aggregate_handling;
 	//! The SAMPLE clause
 	unique_ptr<SampleOptions> sample;
+    // packdb
+    unique_ptr<ParsedExpression> repeat;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {
 		return select_list;

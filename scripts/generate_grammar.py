@@ -237,6 +237,8 @@ text = text.replace("{{{ KEYWORD_DEFINITIONS }}}", kw_definitions)
 def concat_dir(dname, extension, add_line_numbers=False):
     result = ""
     for fname in os.listdir(dname):
+        if fname.startswith('.'):
+            continue
         fpath = os.path.join(dname, fname)
         if os.path.isdir(fpath):
             result += concat_dir(fpath, extension)

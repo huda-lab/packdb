@@ -100,7 +100,8 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 				result.from_table = TransformFrom(stmt.fromClause);
 			}
 		}
-
+        // packdb
+        result.repeat = TransformExpression(stmt.repeat);
 		// where
 		result.where_clause = TransformExpression(stmt.whereClause);
 		// group by
