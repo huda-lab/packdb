@@ -493,6 +493,8 @@ typedef enum PGNodeTag {
 	T_PGSampleOptions,
 	T_PGLimitPercent,
 	T_PGPositionalReference,
+    T_PGVariableTest,
+    T_PGDecideClause,
 
 	/*
 	 * TAGS FOR REPLICATION GRAMMAR PARSE NODES (replnodes.h)

@@ -1,0 +1,12 @@
+# name: test/packdb/test_parser.test
+# description: Test PackDB's Parser
+# group: [packdb]
+
+statement ok
+ATTACH 'build/packdb.db' AS packdb;
+
+statement ok
+SET search_path = 'packdb,main';
+
+statement ok
+SELECT * FROM lineitem DECIDE x SUCH THAT SUM(l_extendedprice*x) > 10 AND x <= 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;

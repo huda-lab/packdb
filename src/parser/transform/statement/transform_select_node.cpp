@@ -100,8 +100,18 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 				result.from_table = TransformFrom(stmt.fromClause);
 			}
 		}
-        // packdb
-        result.repeat = TransformExpression(stmt.repeat);
+        // PackDB's decide
+        if (!stmt.decideClause) {
+            auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
+            TransformExpressionList(*decide_clause.variables, result.decide_variables);
+            result.decide_constraints = TransformExpression(decide_clause.constraints);
+            if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {
+                result.decide_sense = DecideSense::MAXIMIZE;
+            } else if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MINIMIZE) {
+                result.decide_sense = DecideSense::MINIMIZE;
+            }
+            result.decide_objective = TransformExpression(decide_clause.objective);
+        }
 		// where
 		result.where_clause = TransformExpression(stmt.whereClause);
 		// group by

@@ -48,13 +48,25 @@ string SelectNode::ToString() const {
 	if (from_table && from_table->type != TableReferenceType::EMPTY_FROM) {
 		result += " FROM " + from_table->ToString();
 	}
-    // packdb
-    if (repeat){
-        result += " REPEAT " + repeat->ToString();
-    }
 	if (where_clause) {
 		result += " WHERE " + where_clause->ToString();
 	}
+    if (!decide_variables.empty()) {
+        result += " DECIDE ";
+    	for (idx_t i = 0; i < decide_variables.size(); i++) {
+    		if (i > 0) {
+    			result += ", ";
+    		}
+            result += decide_variables[i]->ToString();
+        }
+        result += " SUCH THAT " + decide_constraints->ToString();
+        if (decide_sense == DecideSense::MAXIMIZE) {
+            result += " MAXIMIZE ";
+        } else if (decide_sense == DecideSense::MINIMIZE) {
+            result += " MINIMIZE ";
+        }
+        result += decide_objective->ToString();
+    }
 	if (!groups.grouping_sets.empty()) {
 		result += " GROUP BY ";
 		// if we are dealing with multiple grouping sets, we have to add a few additional brackets
@@ -130,8 +142,19 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 	if (!TableRef::Equals(from_table, other.from_table)) {
 		return false;
 	}
-    // packdb
-	if (!ParsedExpression::Equals(repeat, other.repeat)) {
+    // packdb's DECIDE
+	if (!ParsedExpression::ListEquals(decide_variables, other.decide_variables)) {
+		return false;
+	}
+	if (!ParsedExpression::Equals(decide_constraints, other.decide_constraints)) {
+		return false;
+	}
+    if (!decide_variables.empty() && !other.decide_variables.empty()) {
+        if (decide_sense != other.decide_sense) {
+            return false;
+        }
+    }
+	if (!ParsedExpression::Equals(decide_objective, other.decide_objective)) {
 		return false;
 	}
 	// WHERE
@@ -165,8 +188,15 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 		result->select_list.push_back(child->Copy());
 	}
 	result->from_table = from_table ? from_table->Copy() : nullptr;
-    // packdb
-    result->repeat = repeat ? repeat->Copy() : nullptr;
+    // packdb's decide
+	for (auto &child : decide_variables) {
+		result->decide_variables.push_back(child->Copy());
+	}
+    result->decide_constraints = decide_constraints ? decide_constraints->Copy() : nullptr;
+    if (!decide_variables.empty()) {
+        result->decide_sense = decide_sense;
+    }
+    result->decide_objective = decide_objective ? decide_objective->Copy() : nullptr;
 	result->where_clause = where_clause ? where_clause->Copy() : nullptr;
 	// groups
 	for (auto &group : groups.group_expressions) {

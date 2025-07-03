@@ -1,1 +1,1 @@
-SELECT * FROM (SELECT PACKAGE(*) AS p FROM lineitem AS l REPEAT 0);
+SELECT * FROM lineitem DECIDE x SUCH THAT SUM(l_extendedprice*x) > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;

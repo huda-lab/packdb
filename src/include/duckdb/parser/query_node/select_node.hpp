@@ -18,6 +18,8 @@
 
 namespace duckdb {
 
+enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1 };
+
 //! SelectNode represents a standard SELECT statement
 class SelectNode : public QueryNode {
 public:
@@ -42,8 +44,11 @@ public:
 	AggregateHandling aggregate_handling;
 	//! The SAMPLE clause
 	unique_ptr<SampleOptions> sample;
-    // packdb
-    unique_ptr<ParsedExpression> repeat;
+    // packdb's DECIDE
+    vector<unique_ptr<ParsedExpression>> decide_variables;
+    unique_ptr<ParsedExpression> decide_constraints;
+    DecideSense decide_sense; // Becareful as it can hold garbage due to no initialization
+    unique_ptr<ParsedExpression> decide_objective;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {
 		return select_list;

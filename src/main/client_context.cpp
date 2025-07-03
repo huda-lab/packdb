@@ -366,7 +366,6 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
 	}
     deb(query);
 	planner.CreatePlan(std::move(statement));
-    std::cout << "OK" << std::endl;
 	D_ASSERT(planner.plan || !planner.properties.bound_all_parameters);
 	profiler.EndPhase();
 
@@ -634,56 +633,12 @@ vector<unique_ptr<SQLStatement>> ClientContext::ParseStatements(const string &qu
 	return ParseStatementsInternal(*lock, query);
 }
 
-// packdb
-void ClientContext::packdb_process(vector<unique_ptr<SQLStatement>> &statements){
-    for (auto &stmt : statements) {
-        if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-            auto &select_stmt = stmt->Cast<SelectStatement>();
-            auto &select_node = select_stmt.node->Cast<SelectNode>();
-            std::string query_string = select_node.ToString();
-            if (query_string.find("package") != std::string::npos) {
-                deb(query_string);
-                shared_ptr<ClientContext> cc = make_shared_ptr<ClientContext>(db);
-                unique_ptr<QueryResult> result = cc->Query("SELECT COUNT(*) FROM customer;", false);
-                if (!result->HasError()) {
-                    // Fetch DataChunks until there are no more
-                    while (true) {
-                        auto chunk = result->Fetch();
-                        if (!chunk || chunk->size() == 0) {
-                            break; // No more data
-                        }
-            
-                        // Iterate over each row in the DataChunk
-                        for (idx_t row = 0; row < chunk->size(); row++) {
-                            for (idx_t col = 0; col < chunk->ColumnCount(); col++) {
-                                // Get the value at the current row and column
-                                auto value = chunk->GetValue(col, row);
-                                std::cout << value.ToString();
-                                if (col < chunk->ColumnCount() - 1) {
-                                    std::cout << "\t"; // Separate columns with tabs
-                                }
-                            }
-                            std::cout << std::endl; // New line for each row
-                        }
-                    }
-                } else {
-                    // Handle error case
-                    std::cerr << "Query error: " << result->GetError() << std::endl;
-                }
-            }
-        }
-    }
-}
-
 vector<unique_ptr<SQLStatement>> ClientContext::ParseStatementsInternal(ClientContextLock &lock, const string &query) {
 	Parser parser(GetParserOptions());
 	parser.ParseQuery(query);
 
 	PragmaHandler handler(*this);
 	handler.HandlePragmaStatements(lock, parser.statements);
-
-    // packdb
-    packdb_process(parser.statements);
 
 	return std::move(parser.statements);
 }
@@ -693,9 +648,6 @@ void ClientContext::HandlePragmaStatements(vector<unique_ptr<SQLStatement>> &sta
 
 	PragmaHandler handler(*this);
 	handler.HandlePragmaStatements(*lock, statements);
-
-    // packdb
-    packdb_process(statements);
 }
 
 unique_ptr<LogicalOperator> ClientContext::ExtractPlan(const string &query) {

@@ -1242,6 +1242,29 @@ typedef struct PGPivotStmt {
  */
 typedef enum PGSetOperation { PG_SETOP_NONE = 0, PG_SETOP_UNION, PG_SETOP_INTERSECT, PG_SETOP_EXCEPT, PG_SETOP_UNION_BY_NAME } PGSetOperation;
 
+typedef enum PGVariableType {
+    PG_VAR_REAL,
+    PG_VAR_INTEGER,
+    PG_VAR_BINARY
+} PGVariableType;
+
+typedef struct PGVariableTest {
+    char *name;
+    PGVariableType type;
+} PGVariableTest;
+
+typedef enum PGObjectiveSense {
+	PG_OBJ_MAXIMIZE,         /* maximize objective */
+	PG_OBJ_MINIMIZE          /* minimize objective */
+} PGObjectiveSense;
+
+typedef struct PGDecideClause {
+    PGList *variables;      /* DECIDE <variables> */
+    PGNode *constraints;    /* SUCH THAT <constraints> */
+    PGObjectiveSense sense; /* [MAXIMIZE|MINIMIZE] <objective> */
+    PGNode *objective;     
+} PGDecideClause;
+
 typedef struct PGSelectStmt {
 	PGNodeTag type;
 
@@ -1254,6 +1277,7 @@ typedef struct PGSelectStmt {
 	PGList *targetList;       /* the target list (of PGResTarget) */
 	PGList *fromClause;       /* the FROM clause */
 	PGNode *whereClause;      /* WHERE qualification */
+    PGNode *decideClause;     /* PackDB's DECIDE...SUCH THAT... clause */
 	PGList *groupClause;      /* GROUP BY clauses */
 	PGNode *havingClause;     /* HAVING conditional-expression */
 	PGList *windowClause;     /* WINDOW window_name AS (...), ... */
@@ -1292,10 +1316,6 @@ typedef struct PGSelectStmt {
 	struct PGNode *larg; /* left child */
 	struct PGNode *rarg; /* right child */
 	                           /* Eventually add fields for CORRESPONDING spec here */
-
-    // packdb
-    PGNode *repeat;
-
 } PGSelectStmt;
 
 /* ----------------------
