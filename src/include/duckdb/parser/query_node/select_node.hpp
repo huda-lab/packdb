@@ -15,10 +15,9 @@
 #include "duckdb/parser/parsed_data/sample_options.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/common/enums/aggregate_handling.hpp"
+#include "duckdb/common/enums/decide_sense.hpp"
 
 namespace duckdb {
-
-enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1 };
 
 //! SelectNode represents a standard SELECT statement
 class SelectNode : public QueryNode {
@@ -69,6 +68,8 @@ public:
 
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<QueryNode> Deserialize(Deserializer &deserializer);
+
+    bool HasDecideClause() const;
 };
 
 } // namespace duckdb

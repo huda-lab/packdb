@@ -8,5 +8,14 @@ ATTACH 'build/packdb.db' AS packdb;
 statement ok
 SET search_path = 'packdb,main';
 
-statement ok
-SELECT * FROM lineitem DECIDE x SUCH THAT SUM(l_extendedprice*x) > 10 AND x <= 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;
+# decide_variables should not exist in the table
+statement error
+SELECT * FROM lineitem DECIDE l_quantity SUCH THAT x IS REAL AND x > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;
+----
+<REGEX>:Binder Error.*DECIDE variable '[a-zA-Z_][a-zA-Z0-9_]*' conflicts with an existing column name.*
+
+# unknown variables in constraints
+statement error
+SELECT * FROM lineitem DECIDE y SUCH THAT x IS REAL AND x > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;
+----
+<REGEX>:Binder Error.*Referenced column "[a-zA-Z_][a-zA-Z0-9_]*" not found in FROM clause!.*

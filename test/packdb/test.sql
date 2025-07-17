@@ -1,1 +1,1 @@
-SELECT * FROM lineitem DECIDE x SUCH THAT SUM(l_extendedprice*x) > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;
+SELECT * FROM lineitem DECIDE x SUCH THAT x IS REAL AND x > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 1;

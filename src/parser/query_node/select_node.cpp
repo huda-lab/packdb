@@ -4,10 +4,16 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 SelectNode::SelectNode()
     : QueryNode(QueryNodeType::SELECT_NODE), aggregate_handling(AggregateHandling::STANDARD_HANDLING) {
+}
+
+bool SelectNode::HasDecideClause() const {
+    return !decide_variables.empty();
 }
 
 string SelectNode::ToString() const {
@@ -51,7 +57,7 @@ string SelectNode::ToString() const {
 	if (where_clause) {
 		result += " WHERE " + where_clause->ToString();
 	}
-    if (!decide_variables.empty()) {
+    if (HasDecideClause()) {
         result += " DECIDE ";
     	for (idx_t i = 0; i < decide_variables.size(); i++) {
     		if (i > 0) {
@@ -149,7 +155,7 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 	if (!ParsedExpression::Equals(decide_constraints, other.decide_constraints)) {
 		return false;
 	}
-    if (!decide_variables.empty() && !other.decide_variables.empty()) {
+    if (HasDecideClause() && other.HasDecideClause()) {
         if (decide_sense != other.decide_sense) {
             return false;
         }

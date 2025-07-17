@@ -1242,17 +1242,6 @@ typedef struct PGPivotStmt {
  */
 typedef enum PGSetOperation { PG_SETOP_NONE = 0, PG_SETOP_UNION, PG_SETOP_INTERSECT, PG_SETOP_EXCEPT, PG_SETOP_UNION_BY_NAME } PGSetOperation;
 
-typedef enum PGVariableType {
-    PG_VAR_REAL,
-    PG_VAR_INTEGER,
-    PG_VAR_BINARY
-} PGVariableType;
-
-typedef struct PGVariableTest {
-    char *name;
-    PGVariableType type;
-} PGVariableTest;
-
 typedef enum PGObjectiveSense {
 	PG_OBJ_MAXIMIZE,         /* maximize objective */
 	PG_OBJ_MINIMIZE          /* minimize objective */

@@ -7,6 +7,8 @@
 #include "duckdb/parser/transformer.hpp"
 #include "duckdb/parser/query_node/cte_node.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 void Transformer::TransformModifiers(duckdb_libpgquery::PGSelectStmt &stmt, QueryNode &node) {
@@ -101,7 +103,7 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 			}
 		}
         // PackDB's decide
-        if (!stmt.decideClause) {
+        if (stmt.decideClause) {
             auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
             TransformExpressionList(*decide_clause.variables, result.decide_variables);
             result.decide_constraints = TransformExpression(decide_clause.constraints);

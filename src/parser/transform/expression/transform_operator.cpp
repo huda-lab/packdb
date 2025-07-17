@@ -13,6 +13,8 @@
 #include "duckdb/parser/parser_options.hpp"
 #include "duckdb/parser/transformer.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 unique_ptr<ParsedExpression> Transformer::TransformUnaryOperator(const string &op, unique_ptr<ParsedExpression> child) {
@@ -68,7 +70,6 @@ unique_ptr<ParsedExpression> Transformer::TransformInExpression(const string &na
 		// IN
 		operator_type = ExpressionType::COMPARE_IN;
 	}
-
 	if (root.rexpr->type == duckdb_libpgquery::T_PGList) {
 		auto result = make_uniq<OperatorExpression>(operator_type, std::move(left_expr));
 		TransformExpressionList(*PGPointerCast<duckdb_libpgquery::PGList>(root.rexpr), result->children);
@@ -211,7 +212,6 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 	}
 	auto left_expr = TransformExpression(root.lexpr);
 	auto right_expr = TransformExpression(root.rexpr);
-
 	if (!left_expr) {
 		// prefix operator
 		return TransformUnaryOperator(name, std::move(right_expr));

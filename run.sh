@@ -46,7 +46,7 @@ fi
 cd "$BUILD_DIR"
 $BUILD_COMMAND
 
-# Quicktest
-./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"
 # Unittest
 test/unittest [packdb]
+# Quicktest
+./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"

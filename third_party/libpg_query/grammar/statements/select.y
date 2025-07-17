@@ -167,8 +167,17 @@ opt_select:
 			}
 	;
 
+variable_type:
+			INTEGER
+				{ $$ = makeTypeName("integer_variable"); $$->location = @1; }
+			| REAL
+				{ $$ = makeTypeName("real_variable"); $$->location = @1; }
+			| BINARY
+				{ $$ = makeTypeName("binary_variable"); $$->location = @1; }
+		;
+
 decide_clause:
-			DECIDE name_list_opt_comma_opt_bracket SUCH THAT a_expr MAXIMIZE a_expr							
+			DECIDE columnrefList SUCH THAT a_expr MAXIMIZE a_expr							
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     n->variables = $2;
@@ -177,7 +186,7 @@ decide_clause:
                     n->objective = $7;
                     $$ = (PGNode *)n;
                 }
-			| DECIDE name_list_opt_comma_opt_bracket SUCH THAT a_expr MINIMIZE a_expr							
+			| DECIDE columnrefList SUCH THAT a_expr MINIMIZE a_expr							
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     n->variables = $2;
@@ -2523,6 +2532,10 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr IS NOT OF '(' type_list ')'		%prec IS
 				{
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "<>", $1, (PGNode *) $6, @2);
+				}
+			| a_expr IS variable_type			        %prec IS
+				{
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", $1, (PGNode *) $3, @2);
 				}
 			| a_expr BETWEEN opt_asymmetric b_expr AND a_expr		%prec BETWEEN
 				{

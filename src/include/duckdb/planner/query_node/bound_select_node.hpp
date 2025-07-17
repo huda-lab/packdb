@@ -50,6 +50,8 @@ public:
 	unique_ptr<BoundTableRef> from_table;
 	//! The WHERE clause
 	unique_ptr<Expression> where_clause;
+    //! The DECIDE clause
+    
 	//! list of groups
 	BoundGroupByNode groups;
 	//! HAVING clause

@@ -493,7 +493,6 @@ typedef enum PGNodeTag {
 	T_PGSampleOptions,
 	T_PGLimitPercent,
 	T_PGPositionalReference,
-    T_PGVariableTest,
     T_PGDecideClause,
 
 	/*

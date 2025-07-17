@@ -364,7 +364,6 @@ ClientContext::CreatePreparedStatementInternal(ClientContextLock &lock, const st
 			planner.parameter_data.emplace(value.first, BoundParameterData(value.second));
 		}
 	}
-    deb(query);
 	planner.CreatePlan(std::move(statement));
 	D_ASSERT(planner.plan || !planner.properties.bound_all_parameters);
 	profiler.EndPhase();

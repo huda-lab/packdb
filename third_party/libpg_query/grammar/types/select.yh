@@ -98,7 +98,7 @@
 
 
 %type <typnam>	Typename SimpleTypename ConstTypename opt_Typename
-				GenericType Numeric opt_float
+				GenericType Numeric opt_float variable_type
 				Character ConstCharacter
 				CharacterWithLength CharacterWithoutLength
 				ConstDatetime ConstInterval

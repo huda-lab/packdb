@@ -30,6 +30,8 @@
 #include "duckdb/planner/expression_binder/where_binder.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 unique_ptr<Expression> Binder::BindOrderExpression(OrderBinder &order_binder, unique_ptr<ParsedExpression> expr) {
@@ -454,6 +456,10 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 		unique_ptr<ParsedExpression> condition = std::move(statement.where_clause);
 		result->where_clause = where_binder.Bind(condition);
 	}
+
+    if (statement.HasDecideClause()) {
+        deb("OK");
+    }
 
 	// now bind all the result modifiers; including DISTINCT and ORDER BY targets
 	OrderBinder order_binder({*this}, statement, bind_state);

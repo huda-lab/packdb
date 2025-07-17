@@ -16,6 +16,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/planner/expression_binder/constant_binder.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/table_binding.hpp"
 
 #include <algorithm>
 
@@ -687,6 +688,11 @@ void BindContext::AddCTEBinding(idx_t index, const string &alias, const vector<s
 	}
 	cte_bindings[alias] = std::move(binding);
 	cte_references[alias] = make_shared_ptr<idx_t>(0);
+}
+
+void BindContext::AddDummyBinding(idx_t index, const string &alias, const vector<string> &names,
+                                  const vector<LogicalType> &types) {
+	AddBinding(make_uniq<DummyBinding>(types, names, alias));
 }
 
 void BindContext::AddContext(BindContext other) {

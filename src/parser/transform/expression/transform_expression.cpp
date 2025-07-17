@@ -2,6 +2,8 @@
 #include "duckdb/parser/expression/default_expression.hpp"
 #include "duckdb/parser/transformer.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 unique_ptr<ParsedExpression> Transformer::TransformResTarget(duckdb_libpgquery::PGResTarget &root) {
@@ -31,6 +33,12 @@ unique_ptr<ParsedExpression> Transformer::TransformExpression(duckdb_libpgquery:
 	switch (node.type) {
 	case duckdb_libpgquery::T_PGColumnRef:
 		return TransformColumnRef(PGCast<duckdb_libpgquery::PGColumnRef>(node));
+    case duckdb_libpgquery::T_PGTypeName:
+    {
+        auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
+		auto logical_type = TransformTypeName(type_name_node);
+		return make_uniq<ConstantExpression>(Value(logical_type.ToString()));
+    }
 	case duckdb_libpgquery::T_PGAConst:
 		return TransformConstant(PGCast<duckdb_libpgquery::PGAConst>(node));
 	case duckdb_libpgquery::T_PGAExpr:
