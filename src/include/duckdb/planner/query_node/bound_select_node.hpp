@@ -15,6 +15,7 @@
 #include "duckdb/parser/parsed_data/sample_options.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
+#include "duckdb/common/enums/decide.hpp"
 
 namespace duckdb {
 
@@ -51,7 +52,10 @@ public:
 	//! The WHERE clause
 	unique_ptr<Expression> where_clause;
     //! The DECIDE clause
-    
+    vector<unique_ptr<Expression>> decide_variables;
+    unique_ptr<Expression> decide_constraints;
+    DecideSense decide_sense;
+    unique_ptr<Expression> decide_objective;
 	//! list of groups
 	BoundGroupByNode groups;
 	//! HAVING clause
@@ -102,5 +106,8 @@ public:
 	idx_t GetRootIndex() override {
 		return need_prune ? prune_index : projection_index;
 	}
+    bool HasDecideClause() const {
+        return !decide_variables.empty();
+    }
 };
 } // namespace duckdb

@@ -15,7 +15,7 @@
 #include "duckdb/parser/parsed_data/sample_options.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/common/enums/aggregate_handling.hpp"
-#include "duckdb/common/enums/decide_sense.hpp"
+#include "duckdb/common/enums/decide.hpp"
 
 namespace duckdb {
 
@@ -46,7 +46,7 @@ public:
     // packdb's DECIDE
     vector<unique_ptr<ParsedExpression>> decide_variables;
     unique_ptr<ParsedExpression> decide_constraints;
-    DecideSense decide_sense; // Becareful as it can hold garbage due to no initialization
+    DecideSense decide_sense;
     unique_ptr<ParsedExpression> decide_objective;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {

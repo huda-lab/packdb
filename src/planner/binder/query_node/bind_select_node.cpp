@@ -28,6 +28,8 @@
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/planner/expression_binder/select_binder.hpp"
 #include "duckdb/planner/expression_binder/where_binder.hpp"
+#include "duckdb/planner/expression_binder/decide_constraints_binder.hpp"
+#include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
@@ -458,7 +460,35 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 	}
 
     if (statement.HasDecideClause()) {
-        deb("OK");
+        case_insensitive_set_t decide_variable_names;
+        vector<string> var_names;
+        vector<LogicalType> var_types;
+        for (const auto& expr_ptr : statement.decide_variables) {
+            const auto& colref = expr_ptr->Cast<duckdb::ColumnRefExpression>();
+            const auto &name = colref.GetColumnName();
+            if (bind_context.GetMatchingBinding(name)) {
+                throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
+            }
+            if (decide_variable_names.count(name)) {
+                throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
+            }
+            decide_variable_names.insert(name);
+            var_names.push_back(colref.GetColumnName());
+            var_types.push_back(LogicalType::DOUBLE);
+        }
+        bind_context.AddDummyBinding("decide_variables", var_names, var_types);
+        // Isolate inside brackets to avoid multiple active binders.
+        {
+            DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
+            unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
+            result->decide_constraints = decide_constraints_binder.Bind(constraints);
+        }
+        {
+            DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
+            unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
+            result->decide_objective = decide_objective_binder.Bind(objective);
+            result->decide_sense = statement.decide_sense;
+        }
     }
 
 	// now bind all the result modifiers; including DISTINCT and ORDER BY targets

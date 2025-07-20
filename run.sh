@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+clear
 set -o pipefail
 
 CONFIG_FILE="config.txt"
@@ -44,9 +45,13 @@ else
 fi
 
 cd "$BUILD_DIR"
-$BUILD_COMMAND
-
-# Unittest
-test/unittest [packdb]
-# Quicktest
-./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"
+# Build the project and check if it was successful
+if $BUILD_COMMAND; then
+  # Unittest
+  test/unittest [packdb]
+  # Quicktest
+  ./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"
+else
+  echo "Build failed. Skipping tests." >&2
+  exit 1
+fi

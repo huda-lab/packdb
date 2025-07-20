@@ -27,6 +27,9 @@ class ReadStream;
 using std::move;
 #endif
 
+//! PackDB's constants
+extern const std::vector<std::string> DECIDE_VARIABLE_TYPES;
+
 // NOTE: there is a copy of this in the Postgres' parser grammar (gram.y)
 #define DEFAULT_SCHEMA  "main"
 #define INVALID_SCHEMA  ""

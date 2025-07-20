@@ -220,9 +220,9 @@ void Parser::ParseQuery(const string &query) {
 				// if it succeeded, we transform the Postgres parse tree into a list of
 				// SQLStatements
 				transformer.TransformParseTree(parser.parse_tree, statements);
-                for (auto& stm : statements){
-                    deb(stm->ToString());
-                }
+                // for (auto& stm : statements){
+                //     deb(stm->ToString());
+                // }
 				parsing_succeed = true;
 			} else {
 				parser_error = parser.error_message;

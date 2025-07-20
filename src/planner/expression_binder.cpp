@@ -8,6 +8,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/main/client_config.hpp"
+#include "duckdb/packdb/utility/debug.hpp"
 
 namespace duckdb {
 

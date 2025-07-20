@@ -22,6 +22,7 @@
 #include "duckdb/common/enums/cte_materialize.hpp"
 #include "duckdb/common/enums/date_part_specifier.hpp"
 #include "duckdb/common/enums/debug_initialize.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enums/destroy_buffer_upon.hpp"
 #include "duckdb/common/enums/explain_format.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
@@ -1071,6 +1072,43 @@ const char* EnumUtil::ToChars<DebugInitialize>(DebugInitialize value) {
 template<>
 DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value) {
 	return static_cast<DebugInitialize>(StringUtil::StringToEnum(GetDebugInitializeValues(), 3, "DebugInitialize", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideExpressionValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideExpression::INVALID), "INVALID" },
+		{ static_cast<uint32_t>(DecideExpression::VARIABLE), "VARIABLE" },
+		{ static_cast<uint32_t>(DecideExpression::SUM), "SUM" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value) {
+	return StringUtil::EnumToString(GetDecideExpressionValues(), 3, "DecideExpression", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
+	return static_cast<DecideExpression>(StringUtil::StringToEnum(GetDecideExpressionValues(), 3, "DecideExpression", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideSense::MAXIMIZE), "MAXIMIZE" },
+		{ static_cast<uint32_t>(DecideSense::MINIMIZE), "MINIMIZE" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideSense>(DecideSense value) {
+	return StringUtil::EnumToString(GetDecideSenseValues(), 2, "DecideSense", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideSense EnumUtil::FromString<DecideSense>(const char *value) {
+	return static_cast<DecideSense>(StringUtil::StringToEnum(GetDecideSenseValues(), 2, "DecideSense", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDefaultOrderByNullTypeValues() {

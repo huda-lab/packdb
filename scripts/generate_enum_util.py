@@ -75,56 +75,59 @@ enum_paths = []
 enum_path_set = set()
 
 for hpp_file in hpp_files:
-    with open(hpp_file, "r") as f:
-        text = f.read()
-        for res in re.finditer(r"enum class (\w*)\s*:\s*(\w*)\s*{((?:\s*[^}])*)}", text, re.MULTILINE):
-            file_path = remove_prefix(os.path.relpath(hpp_file, os.path.join("..", "src")), "include/")
-            enum_name = res.group(1)
-
-            if enum_name in blacklist:
-                print(f"Skipping {enum_name} because it is blacklisted")
-                continue
-
-            enum_type = res.group(2)
-
-            enum_members = []
-            # Capture All members: \w+(\s*\=\s*-?\w*)?
-            # group one is the member name
-            # group two is the member value
-            # First clean group from comments
-            s = res.group(3)
-            s = re.sub(r"\/\/.*", "", s)
-            s = re.sub(r"\/\*.*\*\/", "", s)
-
-            enum_values = {}
-            for member in re.finditer(r"(\w+)(\s*\=\s*-?\w*)?", s):
-                key = member.group(1)
-                strings = [key]
-                if enum_name in overrides and key in overrides[enum_name]:
-                    override = overrides[enum_name][key]
-                    if isinstance(override, list):
-                        print(f"Overriding {enum_name}::{key} to one of {override}")
-                        strings = override
+    if ".ipynb_checkpoints" not in hpp_file: # Jupyter checkpoint causes buggy code
+        with open(hpp_file, "r") as f:
+            text = f.read()
+            for res in re.finditer(r"enum class (\w*)\s*:\s*(\w*)\s*{((?:\s*[^}])*)}", text, re.MULTILINE):
+                file_path = remove_prefix(os.path.relpath(hpp_file, os.path.join("..", "src")), "include/")
+                enum_name = res.group(1)
+    
+                if enum_name in blacklist:
+                    print(f"Skipping {enum_name} because it is blacklisted")
+                    continue
+    
+                enum_type = res.group(2)
+    
+                enum_members = []
+                # Capture All members: \w+(\s*\=\s*-?\w*)?
+                # group one is the member name
+                # group two is the member value
+                # First clean group from comments
+                s = res.group(3)
+                s = re.sub(r"\/\/.*", "", s)
+                s = re.sub(r"\/\*.*\*\/", "", s)
+    
+                enum_values = {}
+                for member in re.finditer(r"(\w+)(\s*\=\s*-?\w*)?", s):
+                    key = member.group(1)
+                    strings = [key]
+                    if enum_name in overrides and key in overrides[enum_name]:
+                        override = overrides[enum_name][key]
+                        if isinstance(override, list):
+                            print(f"Overriding {enum_name}::{key} to one of {override}")
+                            strings = override
+                        else:
+                            print(f"Overriding {enum_name}::{key} to {override}")
+                            strings = [override]
+    
+                    if member.group(2):
+                        # If the member has a value, make sure it isnt already covered by another member
+                        # If it is, we cant do anything else than ignore it
+                        value = remove_prefix(member.group(2).strip(), "=").strip()
+                        if value not in enum_values and value not in dict(enum_members):
+                            enum_members.append((key, strings))
+                        else:
+                            print(f"Skipping {enum_name}::{key} because it has a duplicate value {value}")
                     else:
-                        print(f"Overriding {enum_name}::{key} to {override}")
-                        strings = [override]
-
-                if member.group(2):
-                    # If the member has a value, make sure it isnt already covered by another member
-                    # If it is, we cant do anything else than ignore it
-                    value = remove_prefix(member.group(2).strip(), "=").strip()
-                    if value not in enum_values and value not in dict(enum_members):
                         enum_members.append((key, strings))
-                    else:
-                        print(f"Skipping {enum_name}::{key} because it has a duplicate value {value}")
-                else:
-                    enum_members.append((key, strings))
-
-            if not file_path in enum_path_set:
-                enum_path_set.add(file_path)
-                enum_paths.append(file_path)
-
-            enums.append((enum_name, enum_type, enum_members))
+    
+                if not file_path in enum_path_set:
+                    enum_path_set.add(file_path)
+                    enum_paths.append(file_path)
+    
+                if "decide" in enum_name.lower():
+                    print(enum_name, hpp_file)
+                enums.append((enum_name, enum_type, enum_members))
 
 enum_paths.sort()
 enums.sort(key=lambda x: x[0])

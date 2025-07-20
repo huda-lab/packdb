@@ -120,6 +120,10 @@ enum class DatePartSpecifier : uint8_t;
 
 enum class DebugInitialize : uint8_t;
 
+enum class DecideExpression : uint8_t;
+
+enum class DecideSense : uint8_t;
+
 enum class DefaultOrderByNullType : uint8_t;
 
 enum class DependencyEntryType : uint8_t;
@@ -522,6 +526,12 @@ const char* EnumUtil::ToChars<DatePartSpecifier>(DatePartSpecifier value);
 
 template<>
 const char* EnumUtil::ToChars<DebugInitialize>(DebugInitialize value);
+
+template<>
+const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value);
+
+template<>
+const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
 
 template<>
 const char* EnumUtil::ToChars<DefaultOrderByNullType>(DefaultOrderByNullType value);
@@ -1060,6 +1070,12 @@ DatePartSpecifier EnumUtil::FromString<DatePartSpecifier>(const char *value);
 
 template<>
 DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value);
+
+template<>
+DecideExpression EnumUtil::FromString<DecideExpression>(const char *value);
+
+template<>
+DecideSense EnumUtil::FromString<DecideSense>(const char *value);
 
 template<>
 DefaultOrderByNullType EnumUtil::FromString<DefaultOrderByNullType>(const char *value);

@@ -8,14 +8,38 @@ ATTACH 'build/packdb.db' AS packdb;
 statement ok
 SET search_path = 'packdb,main';
 
-# decide_variables should not exist in the table
-statement error
-SELECT * FROM lineitem DECIDE l_quantity SUCH THAT x IS REAL AND x > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;
-----
-<REGEX>:Binder Error.*DECIDE variable '[a-zA-Z_][a-zA-Z0-9_]*' conflicts with an existing column name.*
+# Parse REAL
+statement ok
+SELECT * FROM lineitem DECIDE x SUCH THAT x IS REAL MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
-# unknown variables in constraints
+# Parse INTEGER
+statement ok
+SELECT * FROM lineitem DECIDE x SUCH THAT x IS INTEGER MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+
+# Parse BINARY
+statement ok
+SELECT * FROM lineitem DECIDE x SUCH THAT x IS BINARY MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+
+# No SUCH THAT
 statement error
-SELECT * FROM lineitem DECIDE y SUCH THAT x IS REAL AND x > 10 MAXIMIZE SUM(x*l_quantity) LIMIT 5;
+SELECT * FROM lineitem DECIDE x MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error.*Referenced column "[a-zA-Z_][a-zA-Z0-9_]*" not found in FROM clause!.*
+Parser Error: syntax error at or near "MAXIMIZE"
+
+# No DECIDE variable
+statement error
+SELECT * FROM lineitem DECIDE SUCH THAT x IS BINARY MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+----
+Parser Error: syntax error at or near "SUCH"
+
+# No objective
+statement error
+SELECT * FROM lineitem DECIDE x SUCH THAT x IS BINARY MAXIMIZE LIMIT 1;
+----
+Parser Error: syntax error at or near "LIMIT"
+
+# Unknown variable type
+statement error
+SELECT * FROM lineitem DECIDE x SUCH THAT x IS CONTINUOUS MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+----
+Parser Error: syntax error at or near "CONTINUOUS"

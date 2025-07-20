@@ -20,7 +20,10 @@ add_library_unity(
   select_bind_state.cpp
   table_function_binder.cpp
   update_binder.cpp
-  where_binder.cpp)
+  where_binder.cpp
+  decide_binder.cpp
+  decide_constraints_binder.cpp
+  decide_objective_binder.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_expression_binders>
     PARENT_SCOPE)
