@@ -1,42 +1,65 @@
 #ifndef DEBUG_HPP
 #define DEBUG_HPP
 
-#include <map>
 #include <iostream>
-#include <iterator>
-#include <chrono>
-#include <algorithm>
-#include <sstream>
 #include <vector>
+#include <string>
+#include <sstream>
+#include <chrono>
+#include <map>
+#include <memory>
+#include <algorithm>
+#include <type_traits>
+#include <tuple>
+#include "duckdb/common/unique_ptr.hpp"
 
-namespace packdb{
+namespace packdb {
+
 extern const char* RED;
 extern const char* GREEN;
 extern const char* RESET;
 
-template <typename T,typename U>                                                   
-std::pair<T,U> operator+(const std::pair<T,U> & l,const std::pair<T,U> & r) {   
-	return {l.first+r.first,l.second+r.second};                                    
+// Helper to check for a ToString() member function.
+template <typename T, typename = void>
+struct HasToString : std::false_type {};
+
+template <typename T>
+struct HasToString<T, std::void_t<decltype(std::declval<T>().ToString())>> : std::true_type {};
+
+template <typename T, typename U>
+std::pair<T, U> operator+(const std::pair<T, U>& l, const std::pair<T, U>& r) {
+    return {l.first + r.first, l.second + r.second};
 }
 
-class Profiler{
+class Profiler {
 private:
-	std::map<std::string, std::pair<double, int>> clocks;
-	std::map<std::string, std::chrono::time_point<std::chrono::high_resolution_clock>> timePoints;
+    std::map<std::string, std::pair<double, int>> clocks;
+    std::map<std::string, std::chrono::time_point<std::chrono::high_resolution_clock>> timePoints;
 public:
-	Profiler();
-	void clock(const std::string& label="");
-	void stop(const std::string& label="");
-	void add(const Profiler& pro);
-	void print() const;
+    Profiler();
+    void clock(const std::string& label = "");
+    void stop(const std::string& label = "");
+    void add(const Profiler& pro);
+    void print() const;
 };
+
+// --- GENERIC SMART POINTER TRAIT ---
+template <typename T, typename = void>
+struct IsPointerLike : std::false_type {};
+
+template <typename T>
+struct IsPointerLike<T, std::void_t<
+    typename T::element_type,
+    decltype(*std::declval<T>())
+>> : std::true_type {};
+
 
 // Type trait for checking if a type supports default output to std::cout
 template <class T, class = void>
 struct DefaultIO : std::false_type {};
 
 template <class T>
-struct DefaultIO<T, std::void_t<decltype(std::cout << std::declval<T &>())>> : std::true_type {};
+struct DefaultIO<T, std::void_t<decltype(std::cout << std::declval<T&>())>> : std::true_type {};
 
 // Type trait for checking if a type is a tuple
 template <class T, class = void>
@@ -52,41 +75,51 @@ struct Iterable : std::false_type {};
 template <class T>
 struct Iterable<T, std::void_t<decltype(std::begin(std::declval<T>()))>> : std::true_type {};
 
+
 // Function to determine spacing based on type traits
 template <class T>
-constexpr char Space(const T &) {
+constexpr char Space(const T&) {
     return (Iterable<T>::value || IsTuple<T>::value) ? ' ' : ' ';
-    // Note: Original code always returns ' ', which may be a bug. Kept as is for fidelity.
 }
 
 // Writer struct for formatted output
-template <auto &os>
+template <auto& os>
 struct Writer {
     template <class T>
-    void Impl(T const &t) const {
-        if constexpr (DefaultIO<T>::value) {
+    void Impl(T const& t) const {
+        // Check for smart pointer behavior first
+        if constexpr (IsPointerLike<T>::value) {
+            if (t) {
+                Impl(*t); // Recurse on the pointed-to object
+            } else {
+                os << "nullptr";
+            }
+        } else if constexpr (DefaultIO<T>::value && !HasToString<T>::value) {
             os << t;
+        } else if constexpr (HasToString<T>::value) {
+            os << t.ToString();
         } else if constexpr (Iterable<T>::value) {
             int i = 0;
             os << "[";
-            for (auto &&x : t) {
+            for (auto&& x : t) {
                 ((i++) ? (os << Space(x), Impl(x)) : Impl(x));
             }
             os << "]";
         } else if constexpr (IsTuple<T>::value) {
-            std::apply([this](auto const &... args) {
+            std::apply([this](auto const&... args) {
                 int i = 0;
                 os << "{";
                 (((i++) ? (os << ' ', Impl(args)) : Impl(args)), ...);
                 os << "}";
             }, t);
         } else {
-            static_assert(IsTuple<T>::value, "No matching type for print");
+            // This static_assert will fail with a more helpful message if no condition is met.
+            static_assert(IsPointerLike<T>::value || DefaultIO<T>::value || HasToString<T>::value || Iterable<T>::value || IsTuple<T>::value, "No matching type for print. Type must be a smart pointer, have a ToString() method, be iterable, be a tuple, or support ostream output.");
         }
     }
 
     template <class F, class... Ts>
-    auto &operator()(F const &f, Ts const &... ts) const {
+    auto& operator()(F const& f, Ts const&... ts) const {
         Impl(f);
         ((os << ' ', Impl(ts)), ...);
         os << '\n';
@@ -120,46 +153,21 @@ inline void assert_func(bool condition, const char* expr) {
 }
 
 #define SFINAE(x, ...)             \
-	template <class, class = void> \
-	struct x : std::false_type {}; \
-	template <class T>             \
-	struct x<T, std::void_t<__VA_ARGS__>> : std::true_type {}
+    template <class, class = void> \
+    struct x : std::false_type {}; \
+    template <class T>             \
+    struct x<T, std::void_t<__VA_ARGS__>> : std::true_type {}
 
-SFINAE(DefaultIO, decltype(std::cout << std::declval<T &>()));
+SFINAE(DefaultIO, decltype(std::cout << std::declval<T&>()));
 SFINAE(IsTuple, typename std::tuple_size<T>::type);
 SFINAE(Iterable, decltype(begin(std::declval<T>())));
 
 template <class T>
-constexpr char Space(const T &) {
-	return (Iterable<T>::value or IsTuple<T>::value) ? ' ' : ' ';
+constexpr char Space(const T&) {
+    return (Iterable<T>::value or IsTuple<T>::value) ? ' ' : ' ';
 }
-
-template <auto &os>
-struct Writer {
-	template <class T>
-	void Impl(T const &t) const {
-		if constexpr (DefaultIO<T>::value) os << t;
-		else if constexpr (Iterable<T>::value) {
-			int i = 0;
-			os << "[";
-			for (auto &&x : t) ((i++) ? (os << Space(x), Impl(x)) : Impl(x));
-			os << "]";
-		} else if constexpr (IsTuple<T>::value)
-			std::apply([this](auto const &... args) {
-				int i = 0;
-				os << "{";
-				(((i++) ? (os << ' ', Impl(args)) : Impl(args)), ...);
-				os << "}";
-			}, t);
-		else static_assert(IsTuple<T>::value, "No matching type for print");
-	}
-	template <class F, class... Ts>
-	auto &operator()(F const &f, Ts const &... ts) const {
-		return Impl(f), ((os << ' ', Impl(ts)), ...), os <<'\n', *this;
-	}
-};
 
 #define deb(...) packdb::debug(__FILE__, __LINE__, #__VA_ARGS__, __VA_ARGS__)
 #define ASSERT(expr) packdb::assert_func(expr, #expr)
 
-#endif
+#endif // DEBUG_HPP

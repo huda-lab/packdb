@@ -1,1 +1,1 @@
-SELECT l_quantity FROM lineitem DECIDE x SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT * FROM lineitem DECIDE x SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(x*l_quantity) LIMIT 1;

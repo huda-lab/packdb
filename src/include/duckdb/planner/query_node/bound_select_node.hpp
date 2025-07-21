@@ -65,8 +65,6 @@ public:
 	//! SAMPLE clause
 	unique_ptr<SampleOptions> sample_options;
 
-    //! The table index for storing decide_variables
-    idx_t decide_index;
 	//! The amount of columns in the final result
 	idx_t column_count;
 	//! The amount of bound columns in the select list
@@ -83,6 +81,9 @@ public:
 	idx_t aggregate_index;
 	//! Index used for GROUPINGS column references
 	idx_t groupings_index;
+    //! The table index for storing decide_variables
+    idx_t decide_index;
+
 	//! Aggregate functions to compute (only used if HasAggregation is true)
 	vector<unique_ptr<Expression>> aggregates;
 
