@@ -22,6 +22,8 @@ public:
                   unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
                   unique_ptr<Expression> decide_objective);
 
+    LogicalDecide();
+
     // The table index for the new columns
     idx_t decide_index;
 

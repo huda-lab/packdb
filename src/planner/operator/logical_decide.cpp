@@ -11,6 +11,9 @@ LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> 
       decide_sense(decide_sense), decide_objective(std::move(decide_objective)) {
 }
 
+LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE) {
+}
+
 vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
     // Start with the columns from the child operator
     auto child_bindings = children[0]->GetColumnBindings();

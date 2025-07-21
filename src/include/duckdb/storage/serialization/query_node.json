@@ -74,6 +74,26 @@
         "id": 208,
         "name": "qualify",
         "type": "ParsedExpression*"
+      },
+      {
+        "id": 209,
+        "name": "decide_variables",
+        "type": "vector<ParsedExpression*>"
+      },
+      {
+        "id": 210,
+        "name": "decide_constraints",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 211,
+        "name": "decide_sense",
+        "type": "DecideSense"
+      },
+      {
+        "id": 212,
+        "name": "decide_objective",
+        "type": "ParsedExpression*"
       }
     ]
   },

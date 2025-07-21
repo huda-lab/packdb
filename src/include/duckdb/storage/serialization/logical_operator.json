@@ -943,5 +943,41 @@
         "type": "bool"
       }
     ]
+  },
+  {
+    "class": "LogicalDecide",
+    "base": "LogicalOperator",
+    "enum": ["LOGICAL_DECIDE"],
+    "includes": [
+      "duckdb/planner/operator/logical_decide.hpp",
+      "duckdb/common/enums/decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 200,
+        "name": "decide_index",
+        "type": "idx_t"
+      },
+      {
+        "id": 201,
+        "name": "decide_variables",
+        "type": "vector<Expression*>"
+      },
+      {
+        "id": 202,
+        "name": "decide_constraints",
+        "type": "Expression*"
+      },
+      {
+        "id": 203,
+        "name": "decide_sense",
+        "type": "DecideSense"
+      },
+      {
+        "id": 204,
+        "name": "decide_objective",
+        "type": "Expression*"
+      }
+    ]
   }
 ]

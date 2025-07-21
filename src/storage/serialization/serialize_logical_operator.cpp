@@ -8,6 +8,8 @@
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/common/enums/decide.hpp"
 
 namespace duckdb {
 
@@ -75,6 +77,9 @@ unique_ptr<LogicalOperator> LogicalOperator::Deserialize(Deserializer &deseriali
 		break;
 	case LogicalOperatorType::LOGICAL_CTE_REF:
 		result = LogicalCTERef::Deserialize(deserializer);
+		break;
+	case LogicalOperatorType::LOGICAL_DECIDE:
+		result = LogicalDecide::Deserialize(deserializer);
 		break;
 	case LogicalOperatorType::LOGICAL_DELETE:
 		result = LogicalDelete::Deserialize(deserializer);
@@ -358,6 +363,25 @@ void LogicalCrossProduct::Serialize(Serializer &serializer) const {
 
 unique_ptr<LogicalOperator> LogicalCrossProduct::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<LogicalCrossProduct>(new LogicalCrossProduct());
+	return std::move(result);
+}
+
+void LogicalDecide::Serialize(Serializer &serializer) const {
+	LogicalOperator::Serialize(serializer);
+	serializer.WritePropertyWithDefault<idx_t>(200, "decide_index", decide_index);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", decide_variables);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", decide_constraints);
+	serializer.WriteProperty<DecideSense>(203, "decide_sense", decide_sense);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", decide_objective);
+}
+
+unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<LogicalDecide>(new LogicalDecide());
+	deserializer.ReadPropertyWithDefault<idx_t>(200, "decide_index", result->decide_index);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", result->decide_variables);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", result->decide_constraints);
+	deserializer.ReadProperty<DecideSense>(203, "decide_sense", result->decide_sense);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->decide_objective);
 	return std::move(result);
 }
 
