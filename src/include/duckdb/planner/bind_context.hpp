@@ -118,9 +118,6 @@ public:
 	//! We need this to correctly bind recursive CTEs with multiple references.
 	void AddCTEBinding(idx_t index, const string &alias, const vector<string> &names, const vector<LogicalType> &types);
 
-    //! PackDB needs to add binding context for variables
-	void AddDummyBinding(const string &alias, const vector<string> &names, const vector<LogicalType> &types);
-
 	//! Add an implicit join condition (e.g. USING (x))
 	void AddUsingBinding(const string &column_name, UsingColumnSet &set);
 

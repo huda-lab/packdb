@@ -690,11 +690,6 @@ void BindContext::AddCTEBinding(idx_t index, const string &alias, const vector<s
 	cte_references[alias] = make_shared_ptr<idx_t>(0);
 }
 
-void BindContext::AddDummyBinding(const string &alias, const vector<string> &names,
-                                  const vector<LogicalType> &types) {
-	AddBinding(make_uniq<DummyBinding>(types, names, alias));
-}
-
 void BindContext::AddContext(BindContext other) {
 	for (auto &binding : other.bindings_list) {
 		AddBinding(std::move(binding));

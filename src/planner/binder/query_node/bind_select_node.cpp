@@ -476,8 +476,9 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             var_names.push_back(colref.GetColumnName());
             var_types.push_back(LogicalType::DOUBLE);
         }
-        bind_context.AddDummyBinding("decide_variables", var_names, var_types);
-        // Isolate inside brackets to avoid multiple active binders.
+        result->decide_index = GenerateTableIndex();
+        bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types);
+        // Isolate with brackets to avoid multiple active binders.
         {
             DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
@@ -488,6 +489,14 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
             result->decide_sense = statement.decide_sense;
+        }
+        for (idx_t i = 0; i < var_names.size(); i++) {
+            auto bound_col_ref = make_uniq<BoundColumnRefExpression>(
+                var_names[i], 
+                var_types[i], 
+                ColumnBinding(result->decide_index, i)
+            );
+            result->decide_variables.push_back(std::move(bound_col_ref));
         }
     }
 

@@ -65,6 +65,8 @@ public:
 	//! SAMPLE clause
 	unique_ptr<SampleOptions> sample_options;
 
+    //! The table index for storing decide_variables
+    idx_t decide_index;
 	//! The amount of columns in the final result
 	idx_t column_count;
 	//! The amount of bound columns in the select list
