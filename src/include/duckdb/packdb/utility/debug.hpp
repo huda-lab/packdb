@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <type_traits>
 #include <tuple>
-#include "duckdb/common/unique_ptr.hpp"
 
 namespace packdb {
 

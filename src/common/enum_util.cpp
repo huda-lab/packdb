@@ -2160,6 +2160,7 @@ const StringUtil::EnumStringLiteral *GetLogicalOperatorTypeValues() {
 		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_SAMPLE), "LOGICAL_SAMPLE" },
 		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_PIVOT), "LOGICAL_PIVOT" },
 		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_COPY_DATABASE), "LOGICAL_COPY_DATABASE" },
+		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_DECIDE), "LOGICAL_DECIDE" },
 		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_GET), "LOGICAL_GET" },
 		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_CHUNK_GET), "LOGICAL_CHUNK_GET" },
 		{ static_cast<uint32_t>(LogicalOperatorType::LOGICAL_DELIM_GET), "LOGICAL_DELIM_GET" },
@@ -2213,12 +2214,12 @@ const StringUtil::EnumStringLiteral *GetLogicalOperatorTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<LogicalOperatorType>(LogicalOperatorType value) {
-	return StringUtil::EnumToString(GetLogicalOperatorTypeValues(), 61, "LogicalOperatorType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetLogicalOperatorTypeValues(), 62, "LogicalOperatorType", static_cast<uint32_t>(value));
 }
 
 template<>
 LogicalOperatorType EnumUtil::FromString<LogicalOperatorType>(const char *value) {
-	return static_cast<LogicalOperatorType>(StringUtil::StringToEnum(GetLogicalOperatorTypeValues(), 61, "LogicalOperatorType", value));
+	return static_cast<LogicalOperatorType>(StringUtil::StringToEnum(GetLogicalOperatorTypeValues(), 62, "LogicalOperatorType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetLogicalTypeIdValues() {
