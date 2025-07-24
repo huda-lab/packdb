@@ -469,7 +469,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 	// visit the select list and expand any "*" statements
 	vector<unique_ptr<ParsedExpression>> new_select_list;
 	ExpandStarExpressions(statement.select_list, new_select_list);
-    deb(new_select_list);
 
 	if (new_select_list.empty()) {
 		throw BinderException("SELECT list is empty after resolving * expressions!");

@@ -11,6 +11,8 @@
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/execution/operator/helper/physical_verify_vector.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 PhysicalPlanGenerator::PhysicalPlanGenerator(ClientContext &context) : context(context) {
@@ -58,6 +60,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalOperator &
 		break;
 	case LogicalOperatorType::LOGICAL_FILTER:
 		plan = CreatePlan(op.Cast<LogicalFilter>());
+		break;
+	case LogicalOperatorType::LOGICAL_DECIDE:
+		plan = CreatePlan(op.Cast<LogicalDecide>());
 		break;
 	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
 		plan = CreatePlan(op.Cast<LogicalAggregate>());

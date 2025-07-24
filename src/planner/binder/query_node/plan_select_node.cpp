@@ -4,6 +4,7 @@
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 namespace duckdb {
@@ -25,10 +26,23 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 	if (statement.sample_options) {
 		root = make_uniq<LogicalSample>(std::move(statement.sample_options), std::move(root));
 	}
-
 	if (statement.where_clause) {
 		root = PlanFilter(std::move(statement.where_clause), std::move(root));
 	}
+
+    if (statement.HasDecideClause()) {
+        PlanSubqueries(statement.decide_constraints, root);
+        PlanSubqueries(statement.decide_objective, root);
+        auto decide_op = make_uniq<LogicalDecide>(
+            statement.decide_index,
+            std::move(statement.decide_variables),
+            std::move(statement.decide_constraints),
+            statement.decide_sense,
+            std::move(statement.decide_objective)
+        );
+        decide_op->AddChild(std::move(root));
+        root = std::move(decide_op);
+    }
 
 	if (!statement.aggregates.empty() || !statement.groups.group_expressions.empty()) {
 		if (!statement.groups.group_expressions.empty()) {
