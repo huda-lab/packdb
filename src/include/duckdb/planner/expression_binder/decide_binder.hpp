@@ -16,16 +16,16 @@ namespace duckdb {
 
 bool IsScalarValue(ParsedExpression &expr);
 
-bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_set_t &variables);
+bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_set_t &variables);
+bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_set_t &variables, string &error_msg, bool top_argument);
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg, bool top_argument);
 
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {
 public:
-    DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_set_t &variables);
+    DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
 
 protected:
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth);
@@ -35,7 +35,7 @@ protected:
     }
 
     bool is_top_expression;
-    case_insensitive_set_t variables;
+    case_insensitive_map_t<idx_t> variables;
 };
 
 } // namespace duckdb

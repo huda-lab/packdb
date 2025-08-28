@@ -2,7 +2,7 @@
 
 namespace duckdb {
 
-DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_set_t &variables)
+DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables)
     : DecideBinder(binder, context, variables){
 }
 

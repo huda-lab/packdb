@@ -2,6 +2,8 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, 
@@ -74,7 +76,6 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
-
     //
     // --- THIS IS WHERE YOU SOLVE THE ILP ---
     //
@@ -93,11 +94,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // For this example, we'll just generate a dummy solution.
     // Let's say the solution is just the row number.
     
-    // gstate.ilp_solution.reserve(gstate.data.Count());
-    // for (idx_t i = 0; i < gstate.data.Count(); i++) {
-    //     // Replace this with the actual solution for row 'i'
-    //     gstate.ilp_solution.push_back(i % 100);
-    // }
+    gstate.ilp_solution.reserve(gstate.data.Count());
+    for (idx_t i = 0; i < gstate.data.Count(); i++) {
+        // Replace this with the actual solution for row 'i'
+        gstate.ilp_solution.push_back(i % 100);
+    }
 
     return SinkFinalizeType::READY;
 }
@@ -136,14 +137,19 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
     
     idx_t child_column_count = children[0]->GetTypes().size();
     idx_t new_column_count = types.size() - child_column_count;
+    deb(new_column_count);
 
     for (idx_t i = 0; i < new_column_count; i++) {
         // The new column is the next available column in the output chunk
         auto &output_vector = chunk.data[child_column_count + i];
-        D_ASSERT(output_vector.GetType().id() == LogicalTypeId::DOUBLE);
+        // D_ASSERT(output_vector.GetType().id() == LogicalTypeId::DOUBLE);
 
-        // Set all values in this new column to a constant 0.0
-        output_vector.Reference(Value::DOUBLE(0.0));
+        // Set all values in this new column to a constant index
+        if (i == 0) output_vector.Reference(Value::INTEGER(i+10));
+        else output_vector.Reference(Value::DOUBLE(i+10));
+        // For now set the values to NULL
+        // output_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
+        // ConstantVector::SetNull(output_vector, true);
     }
     // The chunk's cardinality was already set by the Scan call.
     return SourceResultType::HAVE_MORE_OUTPUT;

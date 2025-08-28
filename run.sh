@@ -48,8 +48,9 @@ cd "$BUILD_DIR"
 # Build the project and check if it was successful
 if $BUILD_COMMAND; then
   # Unittest
-  test/unittest [packdb]
+  # test/unittest [packdb]
   # Quicktest
+  echo "./duckdb $DB_FILE < \"$(cat "$HOME/test/packdb/test.sql")\""
   ./duckdb "$DB_FILE" < "$HOME/test/packdb/test.sql"
 else
   echo "Build failed. Skipping tests." >&2

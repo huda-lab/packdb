@@ -34,7 +34,7 @@ bool IsScalarValue(ParsedExpression &expr) {
     return false;
 }
 
-bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_set_t &variables) {
+bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
     if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF){
         auto &colref = expr.Cast<ColumnRefExpression>();
         if (!colref.IsQualified()) {
@@ -44,7 +44,7 @@ bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_set_t &
     return false;
 }
 
-bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_set_t &variables) {
+bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
     // Base case: Check if the current expression itself is a variable.
     if (IsVariableExpression(expr, variables)) {
         return true;
@@ -92,7 +92,7 @@ bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_set_t 
     return has_variable;
 }
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_set_t &variables, string &error_msg, bool top_argument){
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg, bool top_argument){
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
         if (IsVariableExpression(expr, variables)){
@@ -145,7 +145,7 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_set_t &v
 	}
 }
 
-DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_set_t &variables) : ExpressionBinder(binder, context), variables(variables) {
+DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables) : ExpressionBinder(binder, context), variables(variables) {
     is_top_expression = true;        
 }
 

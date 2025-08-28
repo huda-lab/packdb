@@ -6,11 +6,14 @@
 
 namespace duckdb {
 
-const std::vector<std::string> DECIDE_VARIABLE_TYPES = {
+const std::vector<string> DECIDE_VARIABLE_TYPES = {
     "real_variable",
     "integer_variable",
     "binary_variable"
 };
+bool IsIntegerTypeVariable(string var_type) {
+    return (var_type == DECIDE_VARIABLE_TYPES[1]) || (var_type == DECIDE_VARIABLE_TYPES[2]);
+}
 
 constexpr const idx_t DConstants::INVALID_INDEX;
 const row_t MAX_ROW_ID = 36028797018960000ULL;       // 2^55

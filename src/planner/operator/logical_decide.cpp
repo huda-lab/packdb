@@ -1,6 +1,8 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/logical_decide.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,

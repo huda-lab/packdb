@@ -427,7 +427,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
     // Bind DECIDE clause before ExpandStarExpression
     if (statement.HasDecideClause()) {
-        case_insensitive_set_t decide_variable_names;
+        case_insensitive_map_t<idx_t> decide_variable_names;
         vector<string> var_names;
         vector<LogicalType> var_types;
         for (const auto& expr_ptr : statement.decide_variables) {
@@ -439,7 +439,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             if (decide_variable_names.count(name)) {
                 throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
             }
-            decide_variable_names.insert(name);
+            decide_variable_names.emplace(name, var_names.size());
             var_names.push_back(colref.GetColumnName());
             var_types.push_back(LogicalType::DOUBLE);
         }
@@ -449,6 +449,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
+            var_types = decide_constraints_binder.var_types;
         }
         {
             DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
@@ -456,6 +457,8 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             result->decide_objective = decide_objective_binder.Bind(objective);
             result->decide_sense = statement.decide_sense;
         }
+        // This is important since we can only know the right var type after constraint binding. So we change var types in bind context to reflect the output.
+        bind_context.GetBindingsList().back()->types = var_types;
         for (idx_t i = 0; i < var_names.size(); i++) {
             auto bound_col_ref = make_uniq<BoundColumnRefExpression>(
                 var_names[i], 

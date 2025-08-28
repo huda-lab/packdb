@@ -8,8 +8,8 @@
 
 namespace duckdb {
 
-DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_set_t &variables)
-    : DecideBinder(binder, context, variables){
+DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables)
+    : DecideBinder(binder, context, variables), var_types(variables.size(), LogicalType::DOUBLE){
 }
 
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -27,6 +27,10 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                     if (!const_expr.value.IsNull() && const_expr.value.type().id() == LogicalTypeId::VARCHAR){
                         string variable_type = const_expr.value.GetValue<string>();
                         if (std::find(DECIDE_VARIABLE_TYPES.begin(), DECIDE_VARIABLE_TYPES.end(), variable_type) != DECIDE_VARIABLE_TYPES.end()) {
+                            if (IsIntegerTypeVariable(variable_type)) {
+                                string var_name = comp.left->Cast<ColumnRefExpression>().GetColumnName(); 
+                                var_types[variables[var_name]] = LogicalType::INTEGER;
+                            }
                             is_top_expression = false;
                             return ExpressionBinder::BindExpression(expr_ptr, depth);
                         }
