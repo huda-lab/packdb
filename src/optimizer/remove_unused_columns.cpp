@@ -19,6 +19,7 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/planner/operator/logical_simple.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 
 namespace duckdb {
@@ -318,8 +319,17 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 		break;
 	}
 	case LogicalOperatorType::LOGICAL_DECIDE: {
-		everything_referenced = true;
-		break;
+        auto &decide = op.Cast<LogicalDecide>();
+        if (decide.decide_constraints) {
+            VisitExpression(&decide.decide_constraints);
+        }
+        if (decide.decide_objective) {
+            VisitExpression(&decide.decide_objective);
+        }
+        for (auto &var : decide.decide_variables) {
+            VisitExpression(reinterpret_cast<unique_ptr<Expression>*>(&var));
+        }
+        break;
 	}
 	default:
 		break;

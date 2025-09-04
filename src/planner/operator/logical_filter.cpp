@@ -1,6 +1,8 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 LogicalFilter::LogicalFilter(unique_ptr<Expression> expression) : LogicalOperator(LogicalOperatorType::LOGICAL_FILTER) {
@@ -13,6 +15,7 @@ LogicalFilter::LogicalFilter() : LogicalOperator(LogicalOperatorType::LOGICAL_FI
 
 void LogicalFilter::ResolveTypes() {
 	types = MapTypes(children[0]->types, projection_map);
+    deb(types);
 }
 
 vector<ColumnBinding> LogicalFilter::GetColumnBindings() {

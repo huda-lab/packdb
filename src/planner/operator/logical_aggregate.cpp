@@ -3,6 +3,8 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/config.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 LogicalAggregate::LogicalAggregate(idx_t group_index, idx_t aggregate_index, vector<unique_ptr<Expression>> select_list)
@@ -22,6 +24,7 @@ void LogicalAggregate::ResolveTypes() {
 	for (idx_t i = 0; i < grouping_functions.size(); i++) {
 		types.emplace_back(LogicalType::BIGINT);
 	}
+    deb(types);
 }
 
 vector<ColumnBinding> LogicalAggregate::GetColumnBindings() {
