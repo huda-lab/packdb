@@ -45,6 +45,10 @@ public:
     // The output columns are the child's columns plus the new decide variables
     vector<ColumnBinding> GetColumnBindings() override;
 
+    // Store which columns from child are actually needed in the final output
+    // vs those only used internally for constraints/objectives
+    vector<ColumnBinding> required_child_columns;
+
     // Resolve the output types
     void ResolveTypes() override;
 

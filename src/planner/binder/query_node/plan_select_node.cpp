@@ -6,6 +6,8 @@
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include <functional>
 
 namespace duckdb {
 
@@ -40,6 +42,36 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             statement.decide_sense,
             std::move(statement.decide_objective)
         );
+        
+        // Determine which columns from the child are needed in the final output
+        // by analyzing the SELECT expressions
+        auto child_bindings = root->GetColumnBindings();
+        vector<ColumnBinding> required_columns;
+        
+        // Collect all column references from the select list
+        for (const auto& expr : statement.select_list) {
+            // Find all column references in this expression
+            std::function<void(const Expression&)> collect_columns = [&](const Expression& e) {
+                if (e.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    const auto& col_ref = static_cast<const BoundColumnRefExpression&>(e);
+                    // Only add columns that come from the child (not from the decide operator itself)
+                    for (const auto& child_binding : child_bindings) {
+                        if (col_ref.binding == child_binding) {
+                            // Add to required columns if not already present
+                            if (std::find(required_columns.begin(), required_columns.end(), child_binding) == required_columns.end()) {
+                                required_columns.push_back(child_binding);
+                            }
+                            break;
+                        }
+                    }
+                }
+                // Recursively process child expressions
+                ExpressionIterator::EnumerateChildren(e, collect_columns);
+            };
+            collect_columns(*expr);
+        }
+        
+        decide_op->required_child_columns = std::move(required_columns);
         decide_op->AddChild(std::move(root));
         root = std::move(decide_op);
     }

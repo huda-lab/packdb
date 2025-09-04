@@ -135,12 +135,13 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
         return SourceResultType::FINISHED;
     }
     
-    idx_t child_column_count = children[0]->GetTypes().size();
-    idx_t new_column_count = types.size() - child_column_count;
+    // types is the output columns
+    // children[0]->GetTypes() is the input columns
+    deb(types, children[0]->GetTypes());
 
-    for (idx_t i = 0; i < new_column_count; i++) {
+    for (idx_t i = 0; i < decide_variables.size(); i++) {
         // The new column is the next available column in the output chunk
-        auto &output_vector = chunk.data[child_column_count + i];
+        auto &output_vector = chunk.data[types.size() - decide_variables.size() + i];
         // D_ASSERT(output_vector.GetType().id() == LogicalTypeId::DOUBLE);
 
         // Set all values in this new column to a constant index
