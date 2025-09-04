@@ -137,7 +137,6 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
     
     idx_t child_column_count = children[0]->GetTypes().size();
     idx_t new_column_count = types.size() - child_column_count;
-    deb(new_column_count);
 
     for (idx_t i = 0; i < new_column_count; i++) {
         // The new column is the next available column in the output chunk

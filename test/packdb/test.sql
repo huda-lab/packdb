@@ -1,1 +1,1 @@
-SELECT * FROM region DECIDE x, y SUCH THAT SUM(x) <= 3 AND x IS BINARY MAXIMIZE SUM(x) LIMIT 5;
+SELECT l_quantity, l_orderkey, x, y FROM lineitem WHERE l_extendedprice > 4 DECIDE x, y SUCH THAT SUM(x*l_tax) <= 3 AND x IS BINARY MAXIMIZE SUM(x*l_discount) LIMIT 5;
