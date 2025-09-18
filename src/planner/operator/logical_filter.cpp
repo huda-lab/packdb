@@ -15,7 +15,6 @@ LogicalFilter::LogicalFilter() : LogicalOperator(LogicalOperatorType::LOGICAL_FI
 
 void LogicalFilter::ResolveTypes() {
 	types = MapTypes(children[0]->types, projection_map);
-    deb(types);
 }
 
 vector<ColumnBinding> LogicalFilter::GetColumnBindings() {

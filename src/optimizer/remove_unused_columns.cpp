@@ -22,6 +22,8 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 
+#include "duckdb/packdb/utility/debug.hpp"
+
 namespace duckdb {
 
 void BaseColumnPruner::ReplaceBinding(ColumnBinding current_binding, ColumnBinding new_binding) {
@@ -320,15 +322,8 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 	}
 	case LogicalOperatorType::LOGICAL_DECIDE: {
         auto &decide = op.Cast<LogicalDecide>();
-        if (decide.decide_constraints) {
-            VisitExpression(&decide.decide_constraints);
-        }
-        if (decide.decide_objective) {
-            VisitExpression(&decide.decide_objective);
-        }
-        for (auto &var : decide.decide_variables) {
-            VisitExpression(reinterpret_cast<unique_ptr<Expression>*>(&var));
-        }
+        VisitExpression(&decide.decide_constraints);
+        VisitExpression(&decide.decide_objective);
         break;
 	}
 	default:

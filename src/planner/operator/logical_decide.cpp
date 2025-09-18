@@ -17,10 +17,10 @@ LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DE
 }
 
 vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
-    // Return only the required child columns plus the new decide variables
-    auto result = required_child_columns;
+    // Return all child columns plus the new decide variables
+    auto result = children[0]->GetColumnBindings();
     
-    // Add the new columns produced by this operator
+    // Add the new columns produced by this operator (the decide variables)
     for (idx_t i = 0; i < decide_variables.size(); i++) {
         result.emplace_back(decide_index, i);
     }
@@ -28,22 +28,8 @@ vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
 }
 
 void LogicalDecide::ResolveTypes() {
-    // Get types for only the required child columns
-    auto child_bindings = children[0]->GetColumnBindings();
-    auto child_types = children[0]->types;
-    
-    types.clear();
-    
-    // Add types for the required child columns only
-    for (const auto& required_binding : required_child_columns) {
-        // Find the index of this binding in the child's bindings
-        for (idx_t i = 0; i < child_bindings.size(); i++) {
-            if (child_bindings[i] == required_binding) {
-                types.push_back(child_types[i]);
-                break;
-            }
-        }
-    }
+    // Get all child types
+    types = children[0]->types;
     
     // Add the types of the new decide variables
     for (const auto& var : decide_variables) {

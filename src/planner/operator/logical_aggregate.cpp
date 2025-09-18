@@ -24,7 +24,6 @@ void LogicalAggregate::ResolveTypes() {
 	for (idx_t i = 0; i < grouping_functions.size(); i++) {
 		types.emplace_back(LogicalType::BIGINT);
 	}
-    deb(types);
 }
 
 vector<ColumnBinding> LogicalAggregate::GetColumnBindings() {

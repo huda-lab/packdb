@@ -1,6 +1,9 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
 
@@ -20,6 +23,14 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
     children.push_back(std::move(child));
 }
 
+
+
+struct LinearDeterministicConstraint {
+    idx_t variable_idx;
+    const Expression& lhs;
+    const Expression& rhs;
+};
+
 //===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
@@ -27,12 +38,14 @@ class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
         : data(context, op.children[0]->GetTypes()) {
-        // Here you would initialize your ILP solver's global state if needed
+        
     }
 
     mutex lock;
     // This collection will hold all the data from the child operator
     ColumnDataCollection data;
+
+
     // This will hold the solution from the ILP solver
     vector<int64_t> ilp_solution;
 };
@@ -86,7 +99,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //    You would iterate through gstate.data, e.g.:
     //    for (auto &chunk : gstate.data.Chunks()) {
     //        // Extract data from chunk.data[...].GetValue(row_idx)
-    //    }
+    //    } 
 
     // 2. Solve the ILP
     //    e.g., auto solution_vector = MyILPSolver.Solve(ilp_model);
@@ -137,7 +150,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
     
     // types is the output columns
     // children[0]->GetTypes() is the input columns
-    deb(types, children[0]->GetTypes());
+    // deb(types, children[0]->GetTypes());
 
     for (idx_t i = 0; i < decide_variables.size(); i++) {
         // The new column is the next available column in the output chunk

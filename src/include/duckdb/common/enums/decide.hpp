@@ -21,4 +21,10 @@ enum class DecideExpression : uint8_t {
     SUM
 };
 
+enum class DeterministicConstraintSense : uint8_t {
+    GTEQ,
+    LTEQ,
+    EQ
+};
+
 } // namespace duckdb
