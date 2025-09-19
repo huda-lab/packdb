@@ -1188,6 +1188,25 @@ DestroyBufferUpon EnumUtil::FromString<DestroyBufferUpon>(const char *value) {
 	return static_cast<DestroyBufferUpon>(StringUtil::StringToEnum(GetDestroyBufferUponValues(), 3, "DestroyBufferUpon", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDeterministicConstraintSenseValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DeterministicConstraintSense::GTEQ), "GTEQ" },
+		{ static_cast<uint32_t>(DeterministicConstraintSense::LTEQ), "LTEQ" },
+		{ static_cast<uint32_t>(DeterministicConstraintSense::EQ), "EQ" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DeterministicConstraintSense>(DeterministicConstraintSense value) {
+	return StringUtil::EnumToString(GetDeterministicConstraintSenseValues(), 3, "DeterministicConstraintSense", static_cast<uint32_t>(value));
+}
+
+template<>
+DeterministicConstraintSense EnumUtil::FromString<DeterministicConstraintSense>(const char *value) {
+	return static_cast<DeterministicConstraintSense>(StringUtil::StringToEnum(GetDeterministicConstraintSenseValues(), 3, "DeterministicConstraintSense", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDistinctTypeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DistinctType::DISTINCT), "DISTINCT" },
@@ -2899,6 +2918,7 @@ const StringUtil::EnumStringLiteral *GetPhysicalOperatorTypeValues() {
 		{ static_cast<uint32_t>(PhysicalOperatorType::STREAMING_WINDOW), "STREAMING_WINDOW" },
 		{ static_cast<uint32_t>(PhysicalOperatorType::PIVOT), "PIVOT" },
 		{ static_cast<uint32_t>(PhysicalOperatorType::COPY_DATABASE), "COPY_DATABASE" },
+		{ static_cast<uint32_t>(PhysicalOperatorType::DECIDE), "DECIDE" },
 		{ static_cast<uint32_t>(PhysicalOperatorType::TABLE_SCAN), "TABLE_SCAN" },
 		{ static_cast<uint32_t>(PhysicalOperatorType::DUMMY_SCAN), "DUMMY_SCAN" },
 		{ static_cast<uint32_t>(PhysicalOperatorType::COLUMN_DATA_SCAN), "COLUMN_DATA_SCAN" },
@@ -2963,12 +2983,12 @@ const StringUtil::EnumStringLiteral *GetPhysicalOperatorTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<PhysicalOperatorType>(PhysicalOperatorType value) {
-	return StringUtil::EnumToString(GetPhysicalOperatorTypeValues(), 79, "PhysicalOperatorType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetPhysicalOperatorTypeValues(), 80, "PhysicalOperatorType", static_cast<uint32_t>(value));
 }
 
 template<>
 PhysicalOperatorType EnumUtil::FromString<PhysicalOperatorType>(const char *value) {
-	return static_cast<PhysicalOperatorType>(StringUtil::StringToEnum(GetPhysicalOperatorTypeValues(), 79, "PhysicalOperatorType", value));
+	return static_cast<PhysicalOperatorType>(StringUtil::StringToEnum(GetPhysicalOperatorTypeValues(), 80, "PhysicalOperatorType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetPhysicalTypeValues() {

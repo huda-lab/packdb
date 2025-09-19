@@ -12,6 +12,8 @@
 #include <type_traits>
 #include <tuple>
 
+#include "duckdb/common/enum_util.hpp"
+
 namespace packdb {
 
 extern const char* RED;
@@ -74,6 +76,8 @@ struct Iterable : std::false_type {};
 template <class T>
 struct Iterable<T, std::void_t<decltype(std::begin(std::declval<T>()))>> : std::true_type {};
 
+template <class T>
+struct IsEnum : std::integral_constant<bool, std::is_enum_v<T>> {};
 
 // Function to determine spacing based on type traits
 template <class T>
@@ -111,7 +115,10 @@ struct Writer {
                 (((i++) ? (os << ' ', Impl(args)) : Impl(args)), ...);
                 os << "}";
             }, t);
-        } else {
+        } else if constexpr (IsEnum<T>::value) {
+            os << duckdb::EnumUtil::ToString(t);
+        }
+        else {
             // This static_assert will fail with a more helpful message if no condition is met.
             static_assert(IsPointerLike<T>::value || DefaultIO<T>::value || HasToString<T>::value || Iterable<T>::value || IsTuple<T>::value, "No matching type for print. Type must be a smart pointer, have a ToString() method, be iterable, be a tuple, or support ostream output.");
         }
