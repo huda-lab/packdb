@@ -1,5 +1,5 @@
 [packdb]
-build_dir = build
+build_mode = release
 db_file = packdb.db
 
 [tpch]

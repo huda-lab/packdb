@@ -101,7 +101,7 @@ public:
                 auto &comp = expr.Cast<BoundComparisonExpression>();
                 if (comp.left->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
                     auto arg = AnalyzeSumArgument(comp.left);
-                    assert(arg.first >= 0);
+                    D_ASSERT(arg.first >= 0);
                     switch (comp.type) {
                         case ExpressionType::COMPARE_EQUAL: {
                             auto constraint = make_uniq<DeterministicConstraint>(arg.first, DeterministicConstraintSense::EQ, *arg.second, *comp.right);
