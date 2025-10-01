@@ -33,6 +33,7 @@
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
+#include "symbolicc++.h"
 
 namespace duckdb {
 
@@ -427,6 +428,33 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
     // Bind DECIDE clause before ExpandStarExpression
     if (statement.HasDecideClause()) {
+        Symbolic a("a"), b("b"), c("c");
+        c = (a-b)^3;
+        deb(c); // auto expand
+        // Access each term in the expanded sum
+        if (c.type() == typeid(Sum)) {
+            CastPtr<const Sum> sum(c);
+
+            for (auto& term : sum->summands) {
+                cout << "Term: " << term << endl;
+
+                // If the term is a product, access its factors
+                if (term.type() == typeid(Power)) {
+                    // Handle a^2 or b^2
+                    CastPtr<const Power> power(term);
+                    cout << "  Power: base=" << power->parameters.front()
+                        << ", exp=" << power->parameters.back() << endl;
+                } else if (term.type() == typeid(Product)) {
+                    CastPtr<const Product> prod(term);
+                    cout << "  Factors: ";
+                    for (auto& factor : prod->factors) {
+                        cout << factor << " ";
+                    }
+                    cout << endl;
+                }
+            }
+        }
+
         case_insensitive_map_t<idx_t> decide_variable_names;
         vector<string> var_names;
         vector<LogicalType> var_types;
