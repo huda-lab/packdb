@@ -459,6 +459,7 @@ static long long ReduceIntegerGCDInSum(Symbolic &expr) {
     for (auto &term : sum->summands) {
         double coeff_accumulator = 1.0;
         bool coeff_is_integer = true;
+        bool overflow_detected = false;
         long long coeff_integer = 1;
         list<Symbolic> rest_factors;
         if (term.type() == typeid(Product)) {
@@ -467,15 +468,19 @@ static long long ReduceIntegerGCDInSum(Symbolic &expr) {
                 if (factor.type() == typeid(Numeric)) {
                     double val = double(factor);
                     coeff_accumulator *= val;
-                    if (coeff_is_integer) {
+                    if (coeff_is_integer && !overflow_detected) {
                         long long factor_int;
                         if (TryGetIntegerFromDouble(val, factor_int)) {
-                            __int128 candidate = static_cast<__int128>(coeff_integer) * factor_int;
-                            if (candidate < std::numeric_limits<long long>::min() ||
-                                candidate > std::numeric_limits<long long>::max()) {
-                                coeff_is_integer = false;
+                            if (factor_int != 0 && coeff_integer != 0) {
+                                long long limit = std::numeric_limits<long long>::max() / std::max<long long>(1, std::abs(factor_int));
+                                if (std::abs(coeff_integer) > limit) {
+                                    overflow_detected = true;
+                                    coeff_is_integer = false;
+                                } else {
+                                    coeff_integer *= factor_int;
+                                }
                             } else {
-                                coeff_integer = static_cast<long long>(candidate);
+                                coeff_integer = 0;
                             }
                         } else {
                             coeff_is_integer = false;
@@ -488,7 +493,7 @@ static long long ReduceIntegerGCDInSum(Symbolic &expr) {
         } else if (term.type() == typeid(Numeric)) {
             double val = double(term);
             coeff_accumulator = val;
-            if (coeff_is_integer) {
+            if (coeff_is_integer && !overflow_detected) {
                 long long val_int;
                 if (TryGetIntegerFromDouble(val, val_int)) {
                     coeff_integer = val_int;
