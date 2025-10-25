@@ -838,6 +838,80 @@ static unique_ptr<ParsedExpression> MakeDoubleConstant(double v) {
     return make_uniq<ConstantExpression>(Value::DOUBLE(v));
 }
 
+static bool ExtractSumFunctionAndConstant(const ParsedExpression &expr, const FunctionExpression *&sum_func, double &constant_out) {
+    switch (expr.GetExpressionClass()) {
+        case ExpressionClass::FUNCTION: {
+            auto &func = expr.Cast<FunctionExpression>();
+            string func_name_lower = StringUtil::Lower(func.function_name);
+            if (!func.is_operator && func_name_lower == "sum") {
+                if (!func.children.empty()) {
+                    if (sum_func) {
+                        return false;
+                    }
+                    sum_func = &func;
+                    constant_out = 0.0;
+                    return true;
+                }
+                return false;
+            }
+            if (func.is_operator && func.function_name == "+") {
+                const FunctionExpression *left_sum = nullptr;
+                const FunctionExpression *right_sum = nullptr;
+                double left_const = 0.0;
+                double right_const = 0.0;
+                if (!ExtractSumFunctionAndConstant(*func.children[0], left_sum, left_const)) {
+                    return false;
+                }
+                if (!ExtractSumFunctionAndConstant(*func.children[1], right_sum, right_const)) {
+                    return false;
+                }
+                if (left_sum && right_sum) {
+                    return false;
+                }
+                sum_func = left_sum ? left_sum : right_sum;
+                if (!sum_func) {
+                    return false;
+                }
+                constant_out = left_const + right_const;
+                return true;
+            }
+            if (func.is_operator && func.function_name == "-") {
+                const FunctionExpression *left_sum = nullptr;
+                const FunctionExpression *right_sum = nullptr;
+                double left_const = 0.0;
+                double right_const = 0.0;
+                if (!ExtractSumFunctionAndConstant(*func.children[0], left_sum, left_const)) {
+                    return false;
+                }
+                if (!ExtractSumFunctionAndConstant(*func.children[1], right_sum, right_const)) {
+                    return false;
+                }
+                if (left_sum && right_sum) {
+                    return false;
+                }
+                sum_func = left_sum ? left_sum : right_sum;
+                if (!sum_func) {
+                    return false;
+                }
+                constant_out = left_const - right_const;
+                return true;
+            }
+            return false;
+        }
+        case ExpressionClass::CONSTANT: {
+            double value = 0.0;
+            if (!IsNumericConstant(expr, value)) {
+                return false;
+            }
+            sum_func = nullptr;
+            constant_out = value;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 // Normalize comparator between LHS and numeric RHS by factoring numeric scalars
 // from within SUM products on the LHS: k*SUM(x*row) op c  => SUM(x*row) op c/k
 static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpression &cmp,
@@ -852,18 +926,19 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
         return cmp.Copy();
     }
 
-    // Look for SUM(...) pattern on LHS
-    if (cmp.left->GetExpressionClass() != ExpressionClass::FUNCTION) {
+    // Convert LHS to Symbolic and extract SUM(inner) plus constants
+    const FunctionExpression *sum_func = nullptr;
+    double extracted_constant = 0.0;
+    if (!ExtractSumFunctionAndConstant(*cmp.left, sum_func, extracted_constant)) {
         return cmp.Copy();
     }
-    auto &f = cmp.left->Cast<FunctionExpression>();
-    if (StringUtil::Lower(f.function_name) != "sum" || f.children.empty()) {
+    if (!sum_func || sum_func->children.empty()) {
         return cmp.Copy();
     }
 
-    // Convert inner to Symbolic and simplify
-   SymbolicTranslationContext ctx(decide_variables);
-    Symbolic inner_sym = ToSymbolicObj(*f.children[0], ctx).expand().simplify();
+    double new_rhs = rhs_num - extracted_constant;
+    SymbolicTranslationContext ctx(decide_variables);
+    Symbolic inner_sym = ToSymbolicObj(*sum_func->children[0], ctx).expand().simplify();
 
     // Expect product; factor numeric constants if present
     double scalar_factor = 1.0;
@@ -884,7 +959,6 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     const double tol = 1e-12;
     bool can_extract_scalar = has_numeric_factor && fabs(scalar_factor) > tol && fabs(scalar_factor - 1.0) > tol;
     Symbolic normalized_inner = inner_sym;
-    double new_rhs = rhs_num;
     ExpressionType new_type = cmp.type;
 
     if (can_extract_scalar) {
@@ -915,7 +989,7 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     if (sum_gcd > 1) {
         new_rhs /= static_cast<double>(sum_gcd);
     }
-    // Rebuild SUM(normalized_inner) on the LHS
+
     vector<unique_ptr<ParsedExpression>> sum_args;
     sum_args.push_back(BuildFactoredSumExpression(normalized_inner, ctx));
     auto new_sum = make_uniq<FunctionExpression>("sum", std::move(sum_args));
