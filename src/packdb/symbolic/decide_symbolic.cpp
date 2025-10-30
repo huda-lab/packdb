@@ -59,21 +59,6 @@ static Symbolic ApplySymbolicPower(const Symbolic &base, const Symbolic &exponen
     return pow(base, exponent);
 }
 
-static bool TryGetIntegerFromDouble(double value, long long &out_integer) {
-    if (!std::isfinite(value)) {
-        return false;
-    }
-    double rounded = std::round(value);
-    if (fabs(value - rounded) > 1e-9) {
-        return false;
-    }
-    if (fabs(rounded) > static_cast<double>(std::numeric_limits<long long>::max())) {
-        return false;
-    }
-    out_integer = static_cast<long long>(rounded);
-    return true;
-}
-
 static bool SymbolicContainsDecideVariable(const Symbolic &s, const case_insensitive_map_t<idx_t> &decide_variables) {
     if (s.type() == typeid(Symbol)) {
         auto name = CastPtr<const Symbol>(s)->name;
@@ -431,133 +416,26 @@ static unique_ptr<ParsedExpression> BuildProductExpression(const vector<const Sy
     return acc;
 }
 
-static Symbolic CombineCoefficientWithRest(double coeff, const Symbolic &rest) {
-    if (rest.type() == typeid(Numeric)) {
-        double value = double(rest);
-        if (fabs(value - 1.0) < 1e-12) {
-            return Symbolic(coeff);
+static void CollectAdditiveTerms(const Symbolic &expr, vector<Symbolic> &terms) {
+    if (expr.type() == typeid(Sum)) {
+        CastPtr<const Sum> sum(expr);
+        for (auto &term : sum->summands) {
+            CollectAdditiveTerms(term, terms);
         }
+        return;
     }
-    return Symbolic(coeff) * rest;
+    terms.push_back(expr);
 }
 
-struct IntegerCoefficientTerm {
-    Symbolic rest;
-    bool coeff_is_integer;
-    long long coeff_integer;
-};
-
-static long long ReduceIntegerGCDInSum(Symbolic &expr) {
-    if (expr.type() != typeid(Sum)) {
-        return 0;
+static Symbolic SumSymbolicTerms(const vector<Symbolic> &terms) {
+    if (terms.empty()) {
+        return Symbolic(0.0);
     }
-    CastPtr<const Sum> sum(expr);
-    vector<IntegerCoefficientTerm> terms;
-    terms.reserve(sum->summands.size());
-    bool all_integer_coeffs = true;
-    long long integer_gcd = 0;
-    for (auto &term : sum->summands) {
-        double coeff_accumulator = 1.0;
-        bool coeff_is_integer = true;
-        bool overflow_detected = false;
-        long long coeff_integer = 1;
-        list<Symbolic> rest_factors;
-        if (term.type() == typeid(Product)) {
-            CastPtr<const Product> product(term);
-            for (auto &factor : product->factors) {
-                if (factor.type() == typeid(Numeric)) {
-                    double val = double(factor);
-                    coeff_accumulator *= val;
-                    if (coeff_is_integer && !overflow_detected) {
-                        long long factor_int;
-                        if (TryGetIntegerFromDouble(val, factor_int)) {
-                            if (factor_int != 0 && coeff_integer != 0) {
-                                long long limit = std::numeric_limits<long long>::max() / std::max<long long>(1, std::abs(factor_int));
-                                if (std::abs(coeff_integer) > limit) {
-                                    overflow_detected = true;
-                                    coeff_is_integer = false;
-                                } else {
-                                    coeff_integer *= factor_int;
-                                }
-                            } else {
-                                coeff_integer = 0;
-                            }
-                        } else {
-                            coeff_is_integer = false;
-                        }
-                    }
-                } else {
-                    rest_factors.push_back(factor);
-                }
-            }
-        } else if (term.type() == typeid(Numeric)) {
-            double val = double(term);
-            coeff_accumulator = val;
-            if (coeff_is_integer && !overflow_detected) {
-                long long val_int;
-                if (TryGetIntegerFromDouble(val, val_int)) {
-                    coeff_integer = val_int;
-                } else {
-                    coeff_is_integer = false;
-                }
-            }
-        } else {
-            rest_factors.push_back(term);
-        }
-
-        Symbolic rest_expr;
-        if (rest_factors.empty()) {
-            rest_expr = Symbolic(1.0);
-        } else {
-            auto it = rest_factors.begin();
-            rest_expr = *it++;
-            for (; it != rest_factors.end(); ++it) {
-                rest_expr = rest_expr * (*it);
-            }
-        }
-
-        IntegerCoefficientTerm term_data;
-        term_data.rest = rest_expr;
-        term_data.coeff_is_integer = coeff_is_integer;
-        term_data.coeff_integer = coeff_is_integer ? coeff_integer : 0;
-        terms.push_back(std::move(term_data));
-
-        if (!coeff_is_integer) {
-            all_integer_coeffs = false;
-        } else {
-            long long abs_coeff = std::llabs(coeff_integer);
-            if (abs_coeff != 0) {
-                if (integer_gcd == 0) {
-                    integer_gcd = abs_coeff;
-                } else {
-                    integer_gcd = std::gcd(integer_gcd, abs_coeff);
-                }
-            }
-        }
+    Symbolic result = terms[0];
+    for (idx_t i = 1; i < terms.size(); i++) {
+        result = result + terms[i];
     }
-
-    if (!all_integer_coeffs || integer_gcd <= 1) {
-        return 0;
-    }
-
-    Symbolic new_sum;
-    bool first_term = true;
-    for (auto &term : terms) {
-        double new_coeff = static_cast<double>(term.coeff_integer) / static_cast<double>(integer_gcd);
-        Symbolic term_symbolic = CombineCoefficientWithRest(new_coeff, term.rest);
-        if (first_term) {
-            new_sum = term_symbolic;
-            first_term = false;
-        } else {
-            new_sum = new_sum + term_symbolic;
-        }
-    }
-    if (first_term) {
-        expr = Symbolic(0.0);
-    } else {
-        expr = new_sum;
-    }
-    return integer_gcd;
+    return result;
 }
 
 static Symbolic MultiplySymbolicFactors(const vector<Symbolic> &factors) {
@@ -587,6 +465,7 @@ static bool SymbolicIsOne(const Symbolic &s) {
 }
 
 static bool SymbolicContainsDecideVariable(const Symbolic &s, const case_insensitive_map_t<idx_t> &decide_variables);
+static bool IsSumMarker(const Symbolic &s);
 
 static void CollectDecideFactors(const Symbolic &node, vector<Symbolic> &decide_factors,
                                  vector<Symbolic> &other_factors, const case_insensitive_map_t<idx_t> &decide_variables) {
@@ -630,6 +509,30 @@ struct FactoredTerm {
     Symbolic decide_part;
     Symbolic coefficient;
 };
+
+static bool ExtractSumInner(const Symbolic &term, Symbolic &inner_out) {
+    if (term.type() == typeid(Product)) {
+        CastPtr<const Product> prod(term);
+        vector<Symbolic> remaining;
+        bool has_sum = false;
+        for (auto &factor : prod->factors) {
+            if (IsSumMarker(factor)) {
+                has_sum = true;
+            } else {
+                remaining.push_back(factor);
+            }
+        }
+        if (has_sum) {
+            inner_out = MultiplySymbolicFactors(remaining);
+            return true;
+        }
+    }
+    if (IsSumMarker(term)) {
+        inner_out = Symbolic(1.0);
+        return true;
+    }
+    return false;
+}
 
 static vector<FactoredTerm> CollectFactoredTerms(const Symbolic &expr, const case_insensitive_map_t<idx_t> &decide_variables) {
     vector<FactoredTerm> result;
@@ -843,82 +746,7 @@ static unique_ptr<ParsedExpression> MakeDoubleConstant(double v) {
     return make_uniq<ConstantExpression>(Value::DOUBLE(v));
 }
 
-static bool ExtractSumFunctionAndConstant(const ParsedExpression &expr, const FunctionExpression *&sum_func, double &constant_out) {
-    switch (expr.GetExpressionClass()) {
-        case ExpressionClass::FUNCTION: {
-            auto &func = expr.Cast<FunctionExpression>();
-            string func_name_lower = StringUtil::Lower(func.function_name);
-            if (!func.is_operator && func_name_lower == "sum") {
-                if (!func.children.empty()) {
-                    if (sum_func) {
-                        return false;
-                    }
-                    sum_func = &func;
-                    constant_out = 0.0;
-                    return true;
-                }
-                return false;
-            }
-            if (func.is_operator && func.function_name == "+") {
-                const FunctionExpression *left_sum = nullptr;
-                const FunctionExpression *right_sum = nullptr;
-                double left_const = 0.0;
-                double right_const = 0.0;
-                if (!ExtractSumFunctionAndConstant(*func.children[0], left_sum, left_const)) {
-                    return false;
-                }
-                if (!ExtractSumFunctionAndConstant(*func.children[1], right_sum, right_const)) {
-                    return false;
-                }
-                if (left_sum && right_sum) {
-                    return false;
-                }
-                sum_func = left_sum ? left_sum : right_sum;
-                if (!sum_func) {
-                    return false;
-                }
-                constant_out = left_const + right_const;
-                return true;
-            }
-            if (func.is_operator && func.function_name == "-") {
-                const FunctionExpression *left_sum = nullptr;
-                const FunctionExpression *right_sum = nullptr;
-                double left_const = 0.0;
-                double right_const = 0.0;
-                if (!ExtractSumFunctionAndConstant(*func.children[0], left_sum, left_const)) {
-                    return false;
-                }
-                if (!ExtractSumFunctionAndConstant(*func.children[1], right_sum, right_const)) {
-                    return false;
-                }
-                if (left_sum && right_sum) {
-                    return false;
-                }
-                sum_func = left_sum ? left_sum : right_sum;
-                if (!sum_func) {
-                    return false;
-                }
-                constant_out = left_const - right_const;
-                return true;
-            }
-            return false;
-        }
-        case ExpressionClass::CONSTANT: {
-            double value = 0.0;
-            if (!IsNumericConstant(expr, value)) {
-                return false;
-            }
-            sum_func = nullptr;
-            constant_out = value;
-            return true;
-        }
-        default:
-            return false;
-    }
-}
-
-// Normalize comparator between LHS and numeric RHS by factoring numeric scalars
-// from within SUM products on the LHS: k*SUM(x*row) op c  => SUM(x*row) op c/k
+// Normalize comparator between LHS and numeric RHS by isolating SUM terms containing DECIDE variables
 static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpression &cmp,
                                                             const case_insensitive_map_t<idx_t> &decide_variables) {
     // Only handle <=, <, >=, > with numeric RHS
@@ -931,76 +759,72 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
         return cmp.Copy();
     }
 
-    // Convert LHS to Symbolic and extract SUM(inner) plus constants
-    const FunctionExpression *sum_func = nullptr;
-    double extracted_constant = 0.0;
-    if (!ExtractSumFunctionAndConstant(*cmp.left, sum_func, extracted_constant)) {
-        return cmp.Copy();
-    }
-    if (!sum_func || sum_func->children.empty()) {
-        return cmp.Copy();
-    }
-
-    double new_rhs = rhs_num - extracted_constant;
     SymbolicTranslationContext ctx(decide_variables);
-    Symbolic inner_sym = ToSymbolicObj(*sum_func->children[0], ctx).expand().simplify();
+    Symbolic lhs_sym = ToSymbolicObj(*cmp.left, ctx).expand().simplify();
 
-    // Expect product; factor numeric constants if present
-    double scalar_factor = 1.0;
-    bool has_numeric_factor = false;
-    list<Symbolic> non_numeric_factors;
-    if (inner_sym.type() == typeid(Product)) {
-        CastPtr<const Product> prod(inner_sym);
-        for (auto &factor : prod->factors) {
-            if (factor.type() == typeid(Numeric)) {
-                has_numeric_factor = true;
-                scalar_factor *= double(factor);
-            } else {
-                non_numeric_factors.push_back(factor);
-            }
+    vector<Symbolic> additive_terms;
+    CollectAdditiveTerms(lhs_sym, additive_terms);
+
+    vector<Symbolic> decide_inners;
+    vector<Symbolic> rhs_inners;
+    double lhs_constant = 0.0;
+
+    decide_inners.reserve(additive_terms.size());
+    rhs_inners.reserve(additive_terms.size());
+
+    for (auto &term : additive_terms) {
+        if (term.type() == typeid(Numeric)) {
+            lhs_constant += double(term);
+            continue;
         }
-    }
-
-    const double tol = 1e-12;
-    bool can_extract_scalar = has_numeric_factor && fabs(scalar_factor) > tol && fabs(scalar_factor - 1.0) > tol;
-    Symbolic normalized_inner = inner_sym;
-    ExpressionType new_type = cmp.type;
-
-    if (can_extract_scalar) {
-        if (non_numeric_factors.empty()) {
-            normalized_inner = Symbolic(1.0);
+        Symbolic inner;
+        bool has_sum = ExtractSumInner(term, inner);
+        if (!has_sum) {
+            inner = term;
+        }
+        if (SymbolicContainsDecideVariable(inner, ctx.decide_variables)) {
+            decide_inners.push_back(inner);
         } else {
-            auto it = non_numeric_factors.begin();
-            normalized_inner = *it++;
-            for (; it != non_numeric_factors.end(); ++it) {
-                normalized_inner = normalized_inner * (*it);
-            }
+            rhs_inners.push_back(inner);
         }
-
-        if (scalar_factor < 0) {
-            switch (cmp.type) {
-                case ExpressionType::COMPARE_LESSTHAN: new_type = ExpressionType::COMPARE_GREATERTHAN; break;
-                case ExpressionType::COMPARE_LESSTHANOREQUALTO: new_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO; break;
-                case ExpressionType::COMPARE_GREATERTHAN: new_type = ExpressionType::COMPARE_LESSTHAN; break;
-                case ExpressionType::COMPARE_GREATERTHANOREQUALTO: new_type = ExpressionType::COMPARE_LESSTHANOREQUALTO; break;
-                default: break;
-            }
-        }
-        new_rhs = rhs_num / scalar_factor;
     }
 
-    normalized_inner = normalized_inner.expand().simplify();
-    long long sum_gcd = ReduceIntegerGCDInSum(normalized_inner);
-    if (sum_gcd > 1) {
-        new_rhs /= static_cast<double>(sum_gcd);
+    if (decide_inners.empty()) {
+        return cmp.Copy();
     }
 
-    vector<unique_ptr<ParsedExpression>> sum_args;
-    sum_args.push_back(BuildFactoredSumExpression(normalized_inner, ctx));
-    auto new_sum = make_uniq<FunctionExpression>("sum", std::move(sum_args));
+    Symbolic decide_inner_sum = SumSymbolicTerms(decide_inners).simplify();
+    auto lhs_inner_expr = BuildFactoredSumExpression(decide_inner_sum, ctx);
+    vector<unique_ptr<ParsedExpression>> lhs_sum_args;
+    lhs_sum_args.push_back(std::move(lhs_inner_expr));
+    auto lhs_sum = make_uniq<FunctionExpression>("sum", std::move(lhs_sum_args));
 
-    // Recreate comparison with adjusted RHS and rewritten SUM(inner)
-    return make_uniq<ComparisonExpression>(new_type, std::move(new_sum), MakeDoubleConstant(new_rhs));
+    double rhs_constant = rhs_num - lhs_constant;
+    unique_ptr<ParsedExpression> rhs_expr;
+    if (fabs(rhs_constant) > 1e-12 || rhs_inners.empty()) {
+        rhs_expr = MakeDoubleConstant(rhs_constant);
+    }
+
+    for (auto &inner : rhs_inners) {
+        Symbolic neg_inner = (Symbolic(-1.0) * inner).simplify();
+        if (SymbolicIsZero(neg_inner)) {
+            continue;
+        }
+        vector<unique_ptr<ParsedExpression>> rhs_args;
+        rhs_args.push_back(FromSymbolic(neg_inner, ctx));
+        auto rhs_sum = make_uniq<FunctionExpression>("sum", std::move(rhs_args));
+        if (!rhs_expr) {
+            rhs_expr = std::move(rhs_sum);
+        } else {
+            rhs_expr = MakeOp("+", std::move(rhs_expr), std::move(rhs_sum));
+        }
+    }
+
+    if (!rhs_expr) {
+        rhs_expr = MakeDoubleConstant(0.0);
+    }
+
+    return make_uniq<ComparisonExpression>(cmp.type, std::move(lhs_sum), std::move(rhs_expr));
 }
 
 static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedExpression &expr,
@@ -1047,8 +871,6 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
     SymbolicTranslationContext ctx(decide_variables);
     Symbolic inner_sym = ToSymbolicObj(*f.children[0], ctx).expand().simplify();
 
-    inner_sym = inner_sym.expand().simplify();
-
     auto factored_terms = CollectFactoredTerms(inner_sym, ctx.decide_variables);
     vector<FactoredTerm> decide_terms;
     decide_terms.reserve(factored_terms.size());
@@ -1077,7 +899,6 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
         combined_sym = Symbolic(0.0);
     }
 
-    ReduceIntegerGCDInSum(combined_sym);
     combined_sym = combined_sym.expand().simplify();
     auto new_inner = BuildFactoredSumExpression(combined_sym, ctx);
     vector<unique_ptr<ParsedExpression>> args;
