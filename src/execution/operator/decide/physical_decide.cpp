@@ -12,9 +12,153 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// Expression Analysis Helper Functions
+//===--------------------------------------------------------------------===//
+
+idx_t PhysicalDecide::FindDecideVariable(const Expression &expr) const {
+    // Base case: check if this is a column reference to a DECIDE variable
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+        auto &colref = expr.Cast<BoundColumnRefExpression>();
+        for (idx_t i = 0; i < decide_variables.size(); i++) {
+            auto &decide_var = decide_variables[i]->Cast<BoundColumnRefExpression>();
+            if (colref.binding == decide_var.binding) {
+                return i;
+            }
+        }
+    }
+
+    // Recursive case: search in children
+    idx_t result = DConstants::INVALID_INDEX;
+    ExpressionIterator::EnumerateChildren(const_cast<Expression&>(expr),
+        [&](unique_ptr<Expression> &child) {
+            if (result == DConstants::INVALID_INDEX && child) {
+                result = FindDecideVariable(*child);
+            }
+        });
+    return result;
+}
+
+bool PhysicalDecide::ContainsVariable(const Expression &expr, idx_t var_idx) const {
+    // Check if this expression is the variable we're looking for
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+        auto &colref = expr.Cast<BoundColumnRefExpression>();
+        auto &decide_var = decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
+        return colref.binding == decide_var.binding;
+    }
+
+    // Recursively check children
+    bool found = false;
+    ExpressionIterator::EnumerateChildren(const_cast<Expression&>(expr),
+        [&](unique_ptr<Expression> &child) {
+            if (!found && child && ContainsVariable(*child, var_idx)) {
+                found = true;
+            }
+        });
+    return found;
+}
+
+unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const {
+    // If this IS the variable itself, return constant 1
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+        auto &colref = expr.Cast<BoundColumnRefExpression>();
+        auto &decide_var = decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
+        if (colref.binding == decide_var.binding) {
+            return make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+        }
+    }
+
+    // If it's a multiplication, filter out children containing the variable
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+        auto &func = expr.Cast<BoundFunctionExpression>();
+        if (func.function.name == "*") {
+            vector<unique_ptr<Expression>> filtered_children;
+            for (auto &child : func.children) {
+                if (!ContainsVariable(*child, var_idx)) {
+                    filtered_children.push_back(child->Copy());
+                }
+            }
+
+            if (filtered_children.empty()) {
+                return make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+            }
+            if (filtered_children.size() == 1) {
+                return std::move(filtered_children[0]);
+            }
+
+            // Rebuild multiplication with remaining children
+            return make_uniq<BoundFunctionExpression>(func.return_type, func.function,
+                                                     std::move(filtered_children), nullptr);
+        }
+    }
+
+    // If it's a cast, recurse into child
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        auto &cast = expr.Cast<BoundCastExpression>();
+        return ExtractCoefficientWithoutVariable(*cast.child, var_idx);
+    }
+
+    // Otherwise, return a copy of the entire expression (no variable in it)
+    return expr.Copy();
+}
+
+void PhysicalDecide::ExtractLinearTerms(const Expression &expr, vector<LinearTerm> &out_terms) const {
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+        auto &func = expr.Cast<BoundFunctionExpression>();
+
+        // Addition: recursively process all children
+        if (func.function.name == "+") {
+            for (auto &child : func.children) {
+                ExtractLinearTerms(*child, out_terms);
+            }
+            return;
+        }
+
+        // Multiplication: extract variable and coefficient
+        if (func.function.name == "*") {
+            idx_t var_idx = FindDecideVariable(func);
+
+            if (var_idx == DConstants::INVALID_INDEX) {
+                // No variable found - this is a constant term
+                out_terms.push_back(LinearTerm{DConstants::INVALID_INDEX, func.Copy()});
+            } else {
+                // Variable found - extract coefficient
+                auto coef = ExtractCoefficientWithoutVariable(func, var_idx);
+                out_terms.push_back(LinearTerm{var_idx, std::move(coef)});
+            }
+            return;
+        }
+    }
+
+    // Handle casts
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        auto &cast = expr.Cast<BoundCastExpression>();
+        ExtractLinearTerms(*cast.child, out_terms);
+        return;
+    }
+
+    // Base case: constant or simple column reference
+    idx_t var_idx = FindDecideVariable(expr);
+    if (var_idx == DConstants::INVALID_INDEX) {
+        // Constant term
+        out_terms.push_back(LinearTerm{DConstants::INVALID_INDEX, expr.Copy()});
+    } else {
+        // Just a variable (coefficient = 1)
+        out_terms.push_back(LinearTerm{var_idx,
+            make_uniq<BoundConstantExpression>(Value::INTEGER(1))});
+    }
+}
+
+//===--------------------------------------------------------------------===//
+// Constructor
+//===--------------------------------------------------------------------===//
 
 PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, 
                     unique_ptr<PhysicalOperator> child, idx_t decide_index, 
@@ -30,21 +174,7 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
     children.push_back(std::move(child));
 }
 
-struct DeterministicConstraint {
-    idx_t variable_index;
-    DeterministicConstraintSense sense;
-    const Expression& coef;
-    const Expression& rhs;
-    DeterministicConstraint(idx_t var_idx, DeterministicConstraintSense s,
-    const Expression& c, const Expression& r)
-            : variable_index(var_idx), sense(s), coef(c), rhs(r) {}
-};
-
-struct DeterministicObjective {
-    idx_t variable_index;
-    const Expression& coef;
-    DeterministicObjective(idx_t var_idx, const Expression& c) : variable_index(var_idx), coef(c) {}
-};
+// OLD STRUCTS - REMOVED (now using LinearConstraint and LinearObjective from header)
 
 //===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
@@ -53,76 +183,80 @@ class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
         : data(context, op.children[0]->GetTypes()), op(op) {
+        // Analyze constraints and objective using new visitor-based approach
         AnalyzeConstraint(op.decide_constraints);
         AnalyzeObjective(op.decide_objective);
-    }
 
-    int AnalyzeVariable(const unique_ptr<Expression>& expr_ptr) {
-        auto &expr = *expr_ptr;
-        switch(expr.GetExpressionClass()) {
-            case ExpressionClass::BOUND_COLUMN_REF: {
-                auto &column_ref = expr.Cast<BoundColumnRefExpression>();
-                for (idx_t i = 0; i < op.decide_variables.size(); i++) {
-                    if (op.decide_variables[i]->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                        auto &var_ref = op.decide_variables[i]->Cast<BoundColumnRefExpression>();
-                        if (var_ref.binding.column_index == column_ref.binding.column_index) {
-                            return i;
-                        }
-                    }
+        // Debug output
+        deb("=== Constraint Analysis Complete ===");
+        deb("Extracted", constraints.size(), "constraints");
+        for (idx_t c = 0; c < constraints.size(); c++) {
+            deb("Constraint", c, "has", constraints[c]->lhs_terms.size(), "terms,",
+                "comparison:", EnumUtil::ToString(constraints[c]->comparison_type));
+            for (idx_t t = 0; t < constraints[c]->lhs_terms.size(); t++) {
+                auto &term = constraints[c]->lhs_terms[t];
+                if (term.variable_index == DConstants::INVALID_INDEX) {
+                    deb("  Term", t, ": CONSTANT, coef =", term.coefficient->ToString());
+                } else {
+                    deb("  Term", t, ": var", term.variable_index, ", coef =", term.coefficient->ToString());
                 }
-                return -1;
             }
-            default:
-                return -1;
+            deb("  RHS:", constraints[c]->rhs_expr->ToString());
         }
-    }
 
-    pair<int, const unique_ptr<Expression>&> AnalyzeSumArgument(const unique_ptr<Expression>& expr_ptr) {
-        auto &agg = expr_ptr->Cast<BoundAggregateExpression>();
-        auto &func = agg.children.front()->Cast<BoundFunctionExpression>();
-        int left_index = AnalyzeVariable(func.children.front());
-        int right_index = AnalyzeVariable(func.children.back());
-        if (left_index >= 0) return {left_index, func.children.back()};
-        if (right_index >= 0) return {right_index, func.children.front()};
-        return {-1, NULL};
+        if (objective) {
+            deb("=== Objective Analysis Complete ===");
+            deb("Objective has", objective->terms.size(), "terms");
+            for (idx_t t = 0; t < objective->terms.size(); t++) {
+                auto &term = objective->terms[t];
+                if (term.variable_index == DConstants::INVALID_INDEX) {
+                    deb("  Term", t, ": CONSTANT, coef =", term.coefficient->ToString());
+                } else {
+                    deb("  Term", t, ": var", term.variable_index, ", coef =", term.coefficient->ToString());
+                }
+            }
+        }
     }
 
     void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr) {
         auto &expr = *expr_ptr;
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
+                // Recursively analyze each conjunction child (AND expressions)
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
-                for (idx_t i = 0; i < conj.children.size(); i++) {
-                    AnalyzeConstraint(conj.children[i]);
+                for (auto &child : conj.children) {
+                    AnalyzeConstraint(child);
                 }
                 break;
             }
+
             case ExpressionClass::BOUND_COMPARISON: {
                 auto &comp = expr.Cast<BoundComparisonExpression>();
+
+                auto constraint = make_uniq<LinearConstraint>();
+                constraint->comparison_type = comp.type;
+                constraint->rhs_expr = comp.right->Copy();
+
+                // Extract terms from LHS
                 if (comp.left->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-                    auto arg = AnalyzeSumArgument(comp.left);
-                    D_ASSERT(arg.first >= 0);
-                    switch (comp.type) {
-                        case ExpressionType::COMPARE_EQUAL: {
-                            auto constraint = make_uniq<DeterministicConstraint>(arg.first, DeterministicConstraintSense::EQ, *arg.second, *comp.right);
-                            cons.push_back(std::move(constraint));
-                            break;
-                        }
-                        case ExpressionType::COMPARE_LESSTHANOREQUALTO: {
-                            auto constraint = make_uniq<DeterministicConstraint>(arg.first, DeterministicConstraintSense::LTEQ, *arg.second, *comp.right);
-                            cons.push_back(std::move(constraint));
-                            break;
-                        }
-                        case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
-                            auto constraint = make_uniq<DeterministicConstraint>(arg.first, DeterministicConstraintSense::GTEQ, *arg.second, *comp.right);
-                            cons.push_back(std::move(constraint));
-                            break;
-                        }
-                        default:
-                            break;
+                    // SUM(...) constraint
+                    auto &agg = comp.left->Cast<BoundAggregateExpression>();
+                    op.ExtractLinearTerms(*agg.children[0], constraint->lhs_terms);
+                } else {
+                    // Simple variable constraint (e.g., x <= 5)
+                    idx_t var_idx = op.FindDecideVariable(*comp.left);
+                    if (var_idx != DConstants::INVALID_INDEX) {
+                        constraint->lhs_terms.push_back(LinearTerm{
+                            var_idx,
+                            make_uniq<BoundConstantExpression>(Value::INTEGER(1))
+                        });
                     }
                 }
+
+                constraints.push_back(std::move(constraint));
+                break;
             }
+
             default:
                 break;
         }
@@ -130,8 +264,10 @@ public:
 
     void AnalyzeObjective(const unique_ptr<Expression>& expr_ptr) {
         if (expr_ptr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-            auto arg = AnalyzeSumArgument(expr_ptr);
-            obj = make_uniq<DeterministicObjective>(arg.first, *arg.second);
+            auto &agg = expr_ptr->Cast<BoundAggregateExpression>();
+
+            objective = make_uniq<LinearObjective>();
+            op.ExtractLinearTerms(*agg.children[0], objective->terms);
         }
     }
 
@@ -140,11 +276,29 @@ public:
     ColumnDataCollection data;
 
     const PhysicalDecide &op;
-    vector<unique_ptr<DeterministicConstraint>> cons;
-    unique_ptr<DeterministicObjective> obj;
+
+    // NEW: Using LinearConstraint and LinearObjective
+    vector<unique_ptr<LinearConstraint>> constraints;
+    unique_ptr<LinearObjective> objective;
+
+    //===--------------------------------------------------------------------===//
+    // Evaluated Coefficients (Phase 2)
+    //===--------------------------------------------------------------------===//
+
+    //! Stores evaluated numeric coefficients for a constraint
+    struct EvaluatedConstraint {
+        vector<idx_t> variable_indices;           // Which variable for each term
+        vector<vector<double>> row_coefficients;  // [term_idx][row_idx] = coefficient value
+        vector<double> rhs_values;                // [row_idx] = RHS value
+        ExpressionType comparison_type;
+    };
+
+    vector<EvaluatedConstraint> evaluated_constraints;
+    vector<vector<double>> evaluated_objective_coefficients;  // [term_idx][row_idx]
+    vector<idx_t> objective_variable_indices;
 
     // This will hold the solution from the ILP solver
-    vector<int64_t> ilp_solution;
+    vector<double> ilp_solution;  // Changed to double for HiGHS compatibility
 };
 
 class DecideLocalSinkState : public LocalSinkState {
@@ -194,28 +348,257 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
-    //
-    // --- THIS IS WHERE YOU SOLVE THE ILP ---
-    //
-    // At this point, gstate.data contains all the input rows.
-    // You can iterate over it to build your ILP model.
+    idx_t num_rows = gstate.data.Count();
 
-    // 1. Formulate the Integer Linear Program
-    //    You would iterate through gstate.data, e.g.:
-    //    for (auto &chunk : gstate.data.Chunks()) {
-    //        // Extract data from chunk.data[...].GetValue(row_idx)
-    //    } 
+    deb("=== Phase 2: Evaluating Coefficient Expressions ===");
+    deb("Number of rows:", num_rows);
+    deb("Number of constraints:", gstate.constraints.size());
 
-    // 2. Solve the ILP
-    //    e.g., auto solution_vector = MyILPSolver.Solve(ilp_model);
-    //
-    // For this example, we'll just generate a dummy solution.
-    // Let's say the solution is just the row number.
-    
-    gstate.ilp_solution.reserve(gstate.data.Count());
-    for (idx_t i = 0; i < gstate.data.Count(); i++) {
-        // Replace this with the actual solution for row 'i'
-        gstate.ilp_solution.push_back(i % 100);
+    //===--------------------------------------------------------------------===//
+    // PHASE 2: Evaluate Coefficient Expressions
+    //===--------------------------------------------------------------------===//
+
+    // 1. Evaluate constraints
+    for (idx_t c = 0; c < gstate.constraints.size(); c++) {
+        auto &constraint = gstate.constraints[c];
+
+        deb("Evaluating constraint", c, "with", constraint->lhs_terms.size(), "terms");
+
+        DecideGlobalSinkState::EvaluatedConstraint eval_const;
+        eval_const.comparison_type = constraint->comparison_type;
+
+        // Initialize result storage
+        eval_const.row_coefficients.resize(constraint->lhs_terms.size());
+
+        // Scan data and evaluate LHS coefficients
+        ColumnDataScanState scan_state;
+        gstate.data.InitializeScan(scan_state);
+
+        DataChunk chunk;
+        chunk.Initialize(context, gstate.data.Types());
+
+        // Store variable indices for all terms (before scanning data)
+        for (auto &term : constraint->lhs_terms) {
+            eval_const.variable_indices.push_back(term.variable_index);
+        }
+
+        while (gstate.data.Scan(scan_state, chunk)) {
+            // Evaluate each term separately for this chunk
+            for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+                auto &term = constraint->lhs_terms[term_idx];
+
+                // Transform BoundColumnRefExpression to BoundReferenceExpression
+                // The coefficient expressions contain BoundColumnRefExpression which reference
+                // columns by table binding, but ExpressionExecutor expects BoundReferenceExpression
+                // which reference columns by index in the chunk.
+                //
+                // The child operator's output is stored in gstate.data. We need to map
+                // BoundColumnRefExpression (binding.table_index, binding.column_index) to
+                // the corresponding index in gstate.data.
+                //
+                // Build a mapping: for each column in gstate.data, find its binding
+                // Actually, gstate.data.Types() gives us the types, and the columns are in the
+                // order they were appended. We stored the child operator's output directly.
+                //
+                // SIMPLE SOLUTION: The child operator's columns are indexed 0, 1, 2, ...
+                // When we stored them in gstate.data, they kept the same order.
+                // BoundColumnRefExpression has binding.column_index which should map directly.
+
+                // Transform the coefficient expression to replace BoundColumnRefExpression with BoundReferenceExpression
+                std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
+                TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
+                    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                        auto &colref = expr.Cast<BoundColumnRefExpression>();
+                        // Map to chunk column index - assume column_index maps directly
+                        return make_uniq<BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                    } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                        auto &func = expr.Cast<BoundFunctionExpression>();
+                        vector<unique_ptr<Expression>> new_children;
+                        for (auto &child : func.children) {
+                            new_children.push_back(TransformExpression(*child));
+                        }
+                        // Copy bind_info if it exists
+                        unique_ptr<FunctionData> new_bind_info;
+                        if (func.bind_info) {
+                            new_bind_info = func.bind_info->Copy();
+                        }
+                        return make_uniq<BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                    } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                        auto &cast = expr.Cast<BoundCastExpression>();
+                        // Transform the child and wrap in a new cast
+                        auto transformed_child = TransformExpression(*cast.child);
+                        return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+                    } else {
+                        // Constants and other expressions: just copy
+                        return expr.Copy();
+                    }
+                };
+
+                auto transformed_coef = TransformExpression(*term.coefficient);
+
+                // Create executor and evaluate this term
+                ExpressionExecutor term_executor(context);
+                term_executor.AddExpression(*transformed_coef);
+
+                // Execute on chunk
+                DataChunk term_result;
+                vector<LogicalType> result_types = {LogicalType::DOUBLE};
+                term_result.Initialize(context, result_types);
+                term_executor.Execute(chunk, term_result);
+
+                // Extract values
+                auto &vec = term_result.data[0];
+                for (idx_t row_in_chunk = 0; row_in_chunk < chunk.size(); row_in_chunk++) {
+                    double val = vec.GetValue(row_in_chunk).GetValue<double>();
+                    eval_const.row_coefficients[term_idx].push_back(val);
+                }
+            }
+        }
+
+        // Evaluate RHS
+        // The binder normalizes RHS to be either:
+        // 1. A constant value
+        // 2. An aggregate expression (which evaluates to a single scalar)
+        // 3. A combination of constants and aggregates
+        double rhs_constant = 0.0;
+        if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+            auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
+            rhs_constant = const_expr.value.GetValue<double>();
+        } else {
+            // RHS contains aggregates or expressions - evaluate it as a scalar
+            // Use EvaluateScalar which handles aggregate expressions
+            try {
+                Value result = ExpressionExecutor::EvaluateScalar(context, *constraint->rhs_expr);
+                rhs_constant = result.GetValue<double>();
+            } catch (...) {
+                // If evaluation fails, RHS might need the data context
+                // For aggregate RHS like "sum(-11.0)", we need to evaluate on the data
+                // Create a single-row chunk for scalar evaluation
+                DataChunk scalar_chunk;
+                vector<LogicalType> empty_types;
+                scalar_chunk.Initialize(context, empty_types);
+                scalar_chunk.SetCardinality(1);
+
+                ExpressionExecutor rhs_executor(context);
+                rhs_executor.AddExpression(*constraint->rhs_expr);
+
+                DataChunk rhs_result;
+                vector<LogicalType> result_types = {LogicalType::DOUBLE};
+                rhs_result.Initialize(context, result_types);
+                rhs_executor.Execute(scalar_chunk, rhs_result);
+
+                rhs_constant = rhs_result.data[0].GetValue(0).GetValue<double>();
+            }
+        }
+
+        // RHS is same for all rows after normalization
+        eval_const.rhs_values.resize(num_rows, rhs_constant);
+
+        // Debug: show sample coefficients
+        if (num_rows > 0) {
+            deb("  Sample coefficients for row 0:");
+            for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
+                if (eval_const.variable_indices[t] != DConstants::INVALID_INDEX) {
+                    deb("    Term", t, "(var", eval_const.variable_indices[t], "):",
+                        eval_const.row_coefficients[t][0]);
+                } else {
+                    deb("    Term", t, "(CONSTANT):", eval_const.row_coefficients[t][0]);
+                }
+            }
+            deb("  RHS[0]:", eval_const.rhs_values[0]);
+        }
+
+        gstate.evaluated_constraints.push_back(std::move(eval_const));
+    }
+
+    // 2. Evaluate objective
+    if (gstate.objective) {
+        deb("Evaluating objective with", gstate.objective->terms.size(), "terms");
+
+        // Transform expressions (same as for constraints)
+        std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
+        TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
+            if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                auto &colref = expr.Cast<BoundColumnRefExpression>();
+                return make_uniq<BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+            } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                auto &func = expr.Cast<BoundFunctionExpression>();
+                vector<unique_ptr<Expression>> new_children;
+                for (auto &child : func.children) {
+                    new_children.push_back(TransformExpression(*child));
+                }
+                unique_ptr<FunctionData> new_bind_info;
+                if (func.bind_info) {
+                    new_bind_info = func.bind_info->Copy();
+                }
+                return make_uniq<BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+            } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                auto &cast = expr.Cast<BoundCastExpression>();
+                auto transformed_child = TransformExpression(*cast.child);
+                return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+            } else {
+                return expr.Copy();
+            }
+        };
+
+        // Build transformed expressions
+        vector<unique_ptr<Expression>> transformed_coefficients;
+        for (auto &term : gstate.objective->terms) {
+            gstate.objective_variable_indices.push_back(term.variable_index);
+            transformed_coefficients.push_back(TransformExpression(*term.coefficient));
+        }
+
+        gstate.evaluated_objective_coefficients.resize(gstate.objective->terms.size());
+
+        // Scan and evaluate chunk by chunk
+        ColumnDataScanState obj_scan_state;
+        gstate.data.InitializeScan(obj_scan_state);
+
+        DataChunk obj_chunk;
+        obj_chunk.Initialize(context, gstate.data.Types());
+
+        while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
+            // Evaluate each term separately
+            for (idx_t term_idx = 0; term_idx < transformed_coefficients.size(); term_idx++) {
+                ExpressionExecutor term_executor(context);
+                term_executor.AddExpression(*transformed_coefficients[term_idx]);
+
+                DataChunk term_result;
+                vector<LogicalType> result_types = {LogicalType::DOUBLE};
+                term_result.Initialize(context, result_types);
+                term_executor.Execute(obj_chunk, term_result);
+
+                auto &vec = term_result.data[0];
+                for (idx_t row_in_chunk = 0; row_in_chunk < obj_chunk.size(); row_in_chunk++) {
+                    double val = vec.GetValue(row_in_chunk).GetValue<double>();
+                    gstate.evaluated_objective_coefficients[term_idx].push_back(val);
+                }
+            }
+        }
+
+        // Debug: show sample objective coefficients
+        if (num_rows > 0) {
+            deb("  Sample objective coefficients for row 0:");
+            for (idx_t t = 0; t < gstate.objective_variable_indices.size(); t++) {
+                if (gstate.objective_variable_indices[t] != DConstants::INVALID_INDEX) {
+                    deb("    Term", t, "(var", gstate.objective_variable_indices[t], "):",
+                        gstate.evaluated_objective_coefficients[t][0]);
+                }
+            }
+        }
+    }
+
+    deb("=== Phase 2 Complete: All coefficients evaluated ===");
+
+    //===--------------------------------------------------------------------===//
+    // PHASE 3: Build and Solve ILP (TODO - Next Phase)
+    //===--------------------------------------------------------------------===//
+
+    // For now, still generating dummy solution
+    idx_t total_vars = num_rows * decide_variables.size();
+    gstate.ilp_solution.resize(total_vars);
+    for (idx_t i = 0; i < total_vars; i++) {
+        gstate.ilp_solution[i] = static_cast<double>(i % 100);
     }
 
     return SinkFinalizeType::READY;

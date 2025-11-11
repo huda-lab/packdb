@@ -6,6 +6,40 @@
 
 namespace duckdb {
 
+//===--------------------------------------------------------------------===//
+// Data Structures for Linear Term Extraction
+//===--------------------------------------------------------------------===//
+
+//! Represents a single linear term: variable_index * coefficient_expression
+//! variable_index can be DConstants::INVALID_INDEX for constant terms
+struct LinearTerm {
+    idx_t variable_index;              // Which DECIDE variable (or INVALID_INDEX for constants)
+    unique_ptr<Expression> coefficient; // Row-varying expression to evaluate later
+
+    LinearTerm(idx_t var_idx, unique_ptr<Expression> coef)
+        : variable_index(var_idx), coefficient(std::move(coef)) {}
+};
+
+//! Represents a complete constraint after term extraction
+struct LinearConstraint {
+    vector<LinearTerm> lhs_terms;       // All additive terms from LHS
+    unique_ptr<Expression> rhs_expr;    // RHS expression (may contain aggregates)
+    ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
+
+    LinearConstraint() = default;
+};
+
+//! Represents the objective function after term extraction
+struct LinearObjective {
+    vector<LinearTerm> terms;           // All objective terms
+
+    LinearObjective() = default;
+};
+
+//===--------------------------------------------------------------------===//
+// PhysicalDecide Operator
+//===--------------------------------------------------------------------===//
+
 //! PhysicalDecide represents a blocking operator that solves an ILP over its
 //! entire input before producing output.
 class PhysicalDecide : public PhysicalOperator {
@@ -57,6 +91,24 @@ public:
     bool ParallelSink() const override {
         return true;
     }
+
+public:
+    //! Helper methods for expression analysis (used by DecideGlobalSinkState)
+
+    //! Find a DECIDE variable in an expression tree
+    //! Returns variable index or DConstants::INVALID_INDEX if not found
+    idx_t FindDecideVariable(const Expression &expr) const;
+
+    //! Check if expression contains a specific DECIDE variable
+    bool ContainsVariable(const Expression &expr, idx_t var_idx) const;
+
+    //! Extract coefficient expression, removing the specified variable
+    //! For example: from "x * 5 * l_tax", removes x and returns "5 * l_tax"
+    unique_ptr<Expression> ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const;
+
+    //! Main visitor: extract all linear terms from a SUM argument
+    //! Handles + operators (recursively), * operators (extract var and coef), constants
+    void ExtractLinearTerms(const Expression &expr, vector<LinearTerm> &out_terms) const;
 };
 
 } // namespace duckdb
