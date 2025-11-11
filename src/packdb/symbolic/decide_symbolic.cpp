@@ -916,7 +916,7 @@ static void DotEscape(string &s) {
     }
 }
 
-static void ExpressionToDotImpl(const ParsedExpression &expr, std::stringstream &ss, idx_t &next_id, idx_t parent_id) {
+static void ExpressionToDotImpl(const ParsedExpression &expr, std::stringstream &ss, idx_t &next_id, idx_t parent_id, unsigned int depth) {
     idx_t my_id = next_id++;
     string label = EnumUtil::ToString(expr.GetExpressionClass());
     switch (expr.GetExpressionClass()) {
@@ -963,44 +963,47 @@ static void ExpressionToDotImpl(const ParsedExpression &expr, std::stringstream 
             break;
     }
     DotEscape(label);
-    ss << "  n" << my_id << " [label=\"" << label << "\"];\n";
-    if (parent_id != (idx_t)-1) {
-        ss << "  n" << parent_id << " -> n" << my_id << ";\n";
+    for (idx_t i = 0; i < depth; ++i) {
+        ss << "\t";
     }
+    ss << "  n" << my_id << " [label=\"" << label << "\"];\n";
+    // if (parent_id != (idx_t)-1) {
+    //     ss << "  n" << parent_id << " -> n" << my_id << ";\n";
+    // }
 
     switch (expr.GetExpressionClass()) {
         case ExpressionClass::FUNCTION: {
             auto &f = expr.Cast<FunctionExpression>();
-            for (auto &ch : f.children) ExpressionToDotImpl(*ch, ss, next_id, my_id);
-            if (f.filter) ExpressionToDotImpl(*f.filter, ss, next_id, my_id);
+            for (auto &ch : f.children) ExpressionToDotImpl(*ch, ss, next_id, my_id, depth+1);
+            if (f.filter) ExpressionToDotImpl(*f.filter, ss, next_id, my_id, depth+1);
             break;
         }
         case ExpressionClass::COMPARISON: {
             auto &c = expr.Cast<ComparisonExpression>();
-            ExpressionToDotImpl(*c.left, ss, next_id, my_id);
-            ExpressionToDotImpl(*c.right, ss, next_id, my_id);
+            ExpressionToDotImpl(*c.left, ss, next_id, my_id, depth+1);
+            ExpressionToDotImpl(*c.right, ss, next_id, my_id, depth+1);
             break;
         }
         case ExpressionClass::CONJUNCTION: {
             auto &c = expr.Cast<ConjunctionExpression>();
-            for (auto &ch : c.children) ExpressionToDotImpl(*ch, ss, next_id, my_id);
+            for (auto &ch : c.children) ExpressionToDotImpl(*ch, ss, next_id, my_id, depth+1);
             break;
         }
         case ExpressionClass::OPERATOR: {
             auto &o = expr.Cast<OperatorExpression>();
-            for (auto &ch : o.children) ExpressionToDotImpl(*ch, ss, next_id, my_id);
+            for (auto &ch : o.children) ExpressionToDotImpl(*ch, ss, next_id, my_id, depth+1);
             break;
         }
         case ExpressionClass::CAST: {
             auto &c = expr.Cast<CastExpression>();
-            ExpressionToDotImpl(*c.child, ss, next_id, my_id);
+            ExpressionToDotImpl(*c.child, ss, next_id, my_id, depth+1);
             break;
         }
         case ExpressionClass::BETWEEN: {
             auto &b = expr.Cast<BetweenExpression>();
-            ExpressionToDotImpl(*b.input, ss, next_id, my_id);
-            ExpressionToDotImpl(*b.lower, ss, next_id, my_id);
-            ExpressionToDotImpl(*b.upper, ss, next_id, my_id);
+            ExpressionToDotImpl(*b.input, ss, next_id, my_id, depth+1);
+            ExpressionToDotImpl(*b.lower, ss, next_id, my_id, depth+1);
+            ExpressionToDotImpl(*b.upper, ss, next_id, my_id, depth+1);
             break;
         }
         default:
@@ -1013,7 +1016,7 @@ string ExpressionToDot(const ParsedExpression &expr) {
     ss << "digraph ParsedExpression {\n";
     ss << "  node [shape=box, fontsize=10];\n";
     idx_t next_id = 0;
-    ExpressionToDotImpl(expr, ss, next_id, (idx_t)-1);
+    ExpressionToDotImpl(expr, ss, next_id, (idx_t)-1, 0);
     ss << "}\n";
     return ss.str();
 }
