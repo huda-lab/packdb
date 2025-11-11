@@ -1,6 +1,9 @@
 #include "duckdb/planner/expression_binder/decide_binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/operator_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/tableref/subqueryref.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
@@ -92,57 +95,103 @@ bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<
     return has_variable;
 }
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg, bool top_argument){
+static bool IsVariableExpressionConst(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+		return false;
+	}
+	const auto &colref = expr.Cast<const ColumnRefExpression>();
+	if (colref.IsQualified()) {
+		return false;
+	}
+	return variables.count(colref.GetColumnName()) > 0;
+}
+
+static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr,
+                                                    const case_insensitive_map_t<idx_t> &variables) {
+	idx_t count = 0;
+	if (IsVariableExpressionConst(expr, variables)) {
+		count++;
+	}
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		count += CountDecideVariableOccurrencesInternal(child, variables);
+	});
+	return count;
+}
+
+bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
+}
+
+static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
+                                        bool &has_decide_variable, string &error_msg) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
-        if (IsVariableExpression(expr, variables)){
-            if (!top_argument) {
-                error_msg = "More than one occurrence of DECIDE variables in a SUM function";
-    			return false;
-            }
-        } else {
-            if (top_argument) {
-                error_msg = "SUM function does not have DECIDE variables";
-    			return false;
-            }
+        if (IsVariableExpression(expr, variables)) {
+            has_decide_variable = true;
         }
         return true;
-	}
-	case ExpressionClass::CONSTANT:
+    }
+    case ExpressionClass::CONSTANT:
         return true;
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
-		if (top_argument){
-            if (func.function_name != "*") {
-    			error_msg = "Either SUM(x), SUM(f(a)*x) or SUM(x*f(a)) is allowed";
-    			return false;
-            }
-            auto &left = *func.children.front();
-            auto &right = *func.children.back();
-            if (IsVariableExpression(left, variables)) {
-                return ValidateSumArgument(right, variables, error_msg, false);
-            } else {
-                if (IsVariableExpression(right, variables)){
-                    return ValidateSumArgument(left, variables, error_msg, false);
-                } else {
-                    error_msg = "SUM function does not have DECIDE variables as linear factors";
-                    return false;
-                }
-            }
-		} else {
-            for (auto &child : func.children) {
-                if (!ValidateSumArgument(*child, variables, error_msg, false)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-	}
-	default:
-		// Any other expression type is invalid.
-		error_msg = StringUtil::Format("Unsupported expression of type ExpressionClass::%s inside SUM()", EnumUtil::ToString(expr.GetExpressionClass()));
+		string func_name_lower = StringUtil::Lower(func.function_name);
+		if (!func.is_operator) {
+			if (func_name_lower == "sum") {
+				error_msg = "Nested SUM() inside DECIDE SUM expression is not supported";
+			} else {
+				error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
+			}
+			return false;
+		}
+		if (func_name_lower == "*" || func_name_lower == "+") {
+			for (auto &child : func.children) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg)) {
+					return false;
+				}
+			}
+			if (func_name_lower == "*") {
+				idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
+				if (decide_count > 1) {
+					error_msg = StringUtil::Format("SUM expression must remain linear in DECIDE variables; found '%s'", expr.ToString());
+					return false;
+				}
+			}
+			return true;
+		}
+		if (func_name_lower == "-") {
+			error_msg = "DECIDE SUM expression should not contain '-' operators; rewrite using explicit negative factors";
+			return false;
+		}
+		error_msg = StringUtil::Format("Unsupported operator '%s' inside DECIDE SUM expression", func.function_name);
 		return false;
 	}
+	case ExpressionClass::OPERATOR: {
+		error_msg = StringUtil::Format("Unexpected operator expression inside DECIDE SUM expression: %s", expr.ToString());
+		return false;
+	}
+	case ExpressionClass::CAST: {
+		auto &cast = expr.Cast<CastExpression>();
+		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg);
+	}
+    default:
+        error_msg = StringUtil::Format("Unsupported expression of type ExpressionClass::%s inside DECIDE SUM expression",
+                                       EnumUtil::ToString(expr.GetExpressionClass()));
+        return false;
+    }
+}
+
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg) {
+	bool has_decide_variable = false;
+	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg)) {
+		return false;
+	}
+	if (!has_decide_variable) {
+		error_msg = "SUM expression must reference at least one DECIDE variable";
+		return false;
+	}
+	DebugPrintParsed("ValidateSumArgument.ok", expr);
+	return true;
 }
 
 DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables) : ExpressionBinder(binder, context), variables(variables) {

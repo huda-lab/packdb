@@ -4,7 +4,10 @@
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/between_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
+#include "duckdb/parser/expression/operator_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
@@ -12,45 +15,132 @@ DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &
     : DecideBinder(binder, context, variables), var_types(variables.size(), LogicalType::DOUBLE){
 }
 
+static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+
+static bool IsAllowedOperatorChildren(const vector<unique_ptr<ParsedExpression>> &children,
+                                      const case_insensitive_map_t<idx_t> &variables) {
+    for (auto &child : children) {
+        if (!IsAllowedConstraintRHS(*child, variables)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+    switch (expr.GetExpressionClass()) {
+        case ExpressionClass::CONSTANT:
+            return true;
+        case ExpressionClass::FUNCTION: {
+            auto &func = expr.Cast<FunctionExpression>();
+            if (func.is_operator) {
+                if (StringUtil::Lower(func.function_name) == "-") {
+                    return false;
+                }
+                if (!IsAllowedOperatorChildren(func.children, variables)) {
+                    return false;
+                }
+                if (func.filter && !IsAllowedConstraintRHS(*func.filter, variables)) {
+                    return false;
+                }
+                return true;
+            }
+            if (StringUtil::Lower(func.function_name) == "sum") {
+                if (func.children.empty()) {
+                    return false;
+                }
+                if (func.children.size() != 1) {
+                    return false;
+                }
+                if (func.filter && !IsAllowedConstraintRHS(*func.filter, variables)) {
+                    return false;
+                }
+                if (ExpressionContainsDecideVariable(*func.children[0], variables)) {
+                    return false;
+                }
+                return true;
+            }
+            for (auto &child : func.children) {
+                if (!IsAllowedConstraintRHS(*child, variables)) {
+                    return false;
+                }
+            }
+            if (func.filter && !IsAllowedConstraintRHS(*func.filter, variables)) {
+                return false;
+            }
+            return true;
+        }
+        case ExpressionClass::OPERATOR: {
+            auto &op = expr.Cast<OperatorExpression>();
+            return IsAllowedOperatorChildren(op.children, variables);
+        }
+        case ExpressionClass::CAST: {
+            auto &cast = expr.Cast<CastExpression>();
+            return IsAllowedConstraintRHS(*cast.child, variables);
+        }
+        default:
+            return false;
+    }
+}
+
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &comp = expr.Cast<ComparisonExpression>();
+    DebugPrintParsed("BindComparison.left", *comp.left);
+    DebugPrintParsed("BindComparison.right", *comp.right);
     string error_msg;
     auto left_type = GetExpressionType(*comp.left, error_msg);
+    auto SimplifyZeroAddition = [&](auto &&self, unique_ptr<ParsedExpression> &node) -> void {
+        if (!node) {
+            return;
+        }
+        switch (node->GetExpressionClass()) {
+        case ExpressionClass::FUNCTION: {
+            auto &func = node->Cast<FunctionExpression>();
+            for (auto &child : func.children) {
+                self(self, child);
+            }
+            if (func.is_operator && func.function_name == "+" && func.children.size() == 2) {
+                auto IsZeroConstant = [](const ParsedExpression &expr) {
+                    if (expr.GetExpressionClass() != ExpressionClass::CONSTANT) {
+                        return false;
+                    }
+                    auto &c = expr.Cast<const ConstantExpression>();
+                    if (!c.value.type().IsNumeric()) {
+                        return false;
+                    }
+                    return fabs(c.value.GetValue<double>()) < 1e-12;
+                };
+                auto &lhs = func.children[0];
+                auto &rhs = func.children[1];
+                if (IsZeroConstant(*lhs)) {
+                    node = std::move(rhs);
+                    self(self, node);
+                    return;
+                }
+                if (IsZeroConstant(*rhs)) {
+                    node = std::move(lhs);
+                    self(self, node);
+                    return;
+                }
+            }
+            break;
+        }
+        case ExpressionClass::CAST: {
+            auto &cast = node->Cast<CastExpression>();
+            self(self, cast.child);
+            break;
+        }
+        default:
+            break;
+        }
+    };
+    SimplifyZeroAddition(SimplifyZeroAddition, comp.right);
+    DebugPrintParsed("BindComparison.right (simplified)", *comp.right);
     auto &right = *comp.right;
     switch (comp.type) {
-    case ExpressionType::COMPARE_EQUAL: {
-        switch (left_type) {
-            case DecideExpression::VARIABLE: {
-                if (right.GetExpressionClass() == ExpressionClass::CONSTANT) {
-                    auto &const_expr = right.Cast<duckdb::ConstantExpression>();
-                    if (!const_expr.value.IsNull() && const_expr.value.type().id() == LogicalTypeId::VARCHAR){
-                        string variable_type = const_expr.value.GetValue<string>();
-                        if (std::find(DECIDE_VARIABLE_TYPES.begin(), DECIDE_VARIABLE_TYPES.end(), variable_type) != DECIDE_VARIABLE_TYPES.end()) {
-                            if (IsIntegerTypeVariable(variable_type)) {
-                                string var_name = comp.left->Cast<ColumnRefExpression>().GetColumnName(); 
-                                var_types[variables[var_name]] = LogicalType::INTEGER;
-                            }
-                            is_top_expression = false;
-                            return ExpressionBinder::BindExpression(expr_ptr, depth);
-                        }
-                    }
-                }
-                return BindResult(BinderException::Unsupported(expr, StringUtil::Format("DECIDE variables constraints can either with <=, >= or IS [REAL|INTEGER|BINARY], found '%s'", expr.ToString())));
-            }
-            case DecideExpression::SUM: {
-                if (!IsScalarValue(right) || HasVariableExpression(right, variables)) {
-                    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be equal to an expression that is not a scalar or contains DECIDE variables, found '%s'", expr.ToString())));
-                }
-                is_top_expression = false;
-                return ExpressionBinder::BindExpression(expr_ptr, depth);
-            }
-            case DecideExpression::INVALID:
-                return BindResult(BinderException::Unsupported(expr, error_msg));
-            default:
-                return BindResult(BinderException::Unsupported(expr, StringUtil::Format("Unsupported DecideExpression '%s'(%s)", comp.left->ToString(), EnumUtil::ToString(left_type))));
-        }
-    }
+    case ExpressionType::COMPARE_EQUAL:
+        return BindResult(BinderException::Unsupported(expr, "DECIDE equality constraints are not supported; use <= or >="));
     case ExpressionType::COMPARE_LESSTHANOREQUALTO:
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
         switch (left_type) {
@@ -61,8 +151,15 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                 break;
             }
             case DecideExpression::SUM: {
-                if (!IsScalarValue(right) || HasVariableExpression(right, variables)) {
-                    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared an expression that is not a scalar or contains DECIDE variables, found '%s'", expr.ToString())));
+                if (comp.left->GetExpressionClass() != ExpressionClass::FUNCTION) {
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...)"));
+                }
+                auto &lhs_func = comp.left->Cast<FunctionExpression>();
+                if (!lhs_func.is_operator && StringUtil::Lower(lhs_func.function_name) != "sum") {
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...)"));
+                }
+                if (!IsAllowedConstraintRHS(right, variables) || HasVariableExpression(right, variables)) {
+                    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
                 }
                 break;
             }
@@ -103,28 +200,7 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
 
 BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
-    auto &between = expr.Cast<BetweenExpression>();
-    string error_msg;
-    switch (auto type = GetExpressionType(*between.input, error_msg)) {
-        case DecideExpression::VARIABLE: {
-            if (HasVariableExpression(*between.lower, variables) || HasVariableExpression(*between.upper, variables)) {
-                return BindResult(BinderException::Unsupported(expr, StringUtil::Format("DECIDE variable cannot be between an expression with DECIDE variables, found '%s'", expr.ToString())));
-            }
-            break;
-        }
-        case DecideExpression::SUM: {
-            if (!IsScalarValue(*between.lower) || !IsScalarValue(*between.upper) || HasVariableExpression(*between.lower, variables) || HasVariableExpression(*between.upper, variables)) {
-                return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be between an expression that is not a scalar or contains DECIDE variables, found '%s'", expr.ToString())));
-            }
-            break;
-        }
-        case DecideExpression::INVALID:
-            return BindResult(BinderException::Unsupported(expr, error_msg));
-        default:
-            return BindResult(BinderException::Unsupported(expr, StringUtil::Format("Unsupported DecideExpression '%s'(%s)", between.input->ToString(), EnumUtil::ToString(type))));
-    }
-    is_top_expression = false;
-    return ExpressionBinder::BindExpression(expr_ptr, depth);
+    return BindResult(BinderException::Unsupported(expr, "DECIDE BETWEEN constraints are not supported"));
 }
 
 BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -195,7 +271,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		if (StringUtil::Lower(func.function_name) == "sum") {
-            if (!ValidateSumArgument(*func.children.front(), variables, error_msg, true)) {
+            if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }

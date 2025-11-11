@@ -11,6 +11,7 @@
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp" // Required for NotImplementedException
+#include "duckdb/packdb/utility/debug.hpp"
 
 namespace duckdb {
 
@@ -20,7 +21,17 @@ bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<i
 
 bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg, bool top_argument);
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg);
+
+bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+
+
+inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
+	deb("[BINDER] ", tag, ": ", expr.ToString());
+}
+inline void DebugPrintBound(const string &tag, const Expression &expr) {
+	deb("[BINDER] ", tag, ": ", expr.ToString());
+}
 
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {

@@ -8,21 +8,30 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
 	auto &expr = *expr_ptr;
+    DebugPrintParsed("BindObjective.input", expr);
     string error_msg;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
     case ExpressionClass::CONSTANT: {
         if (!is_top_expression) {
-            return ExpressionBinder::BindExpression(expr_ptr, depth);
-        }
-        break;
-    }
-    case ExpressionClass::FUNCTION: {
-        if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
-            return BindResult(BinderException::Unsupported(expr, error_msg));
-        }
-        is_top_expression = false;
-        return BindFunction(expr_ptr, depth);
+	        return ExpressionBinder::BindExpression(expr_ptr, depth);
+	    }
+	    break;
+	}
+	case ExpressionClass::FUNCTION: {
+	    DebugPrintParsed("BindObjective.input", expr);
+	        if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
+	            return BindResult(BinderException::Unsupported(expr, error_msg));
+	        }
+	        is_top_expression = false;
+	        auto result = BindFunction(expr_ptr, depth);
+            if (result.HasError()) {
+                return result;
+            }
+            if (result.expression) {
+                DebugPrintBound("BindObjective.bound", *result.expression);
+            }
+            return result;
 	}
 	default:
         break;
@@ -35,7 +44,7 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		if (StringUtil::Lower(func.function_name) == "sum") {
-            if (!ValidateSumArgument(*func.children.front(), variables, error_msg, true)) {
+            if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
