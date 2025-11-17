@@ -10,11 +10,11 @@
 
 
 
--- SELECT SUM(x) AS total_x
--- FROM lineitem
--- DECIDE x
--- SUCH THAT SUM(x*l_tax + 5) <= 10
--- MAXIMIZE SUM(x*l_extendedprice);
+SELECT SUM(x) AS total_x
+FROM lineitem
+DECIDE x
+SUCH THAT SUM(x*l_tax + 5) <= 10
+MAXIMIZE SUM(x*l_extendedprice);
 
 
 
@@ -76,8 +76,8 @@
 -- MAXIMIZE SUM(x*l_extendedprice - y*l_tax);
 
 
-SELECT SUM(x), SUM(y)
-FROM lineitem
-DECIDE x, y
-SUCH THAT SUM(5*x*(l_tax + l_discount) + y*(2*l_quantity - 3*l_extendedprice) + 11) >= -15
-MAXIMIZE SUM(6*x*l_extendedprice + 4*y*l_discount);
+-- SELECT SUM(x), SUM(y)
+-- FROM lineitem
+-- DECIDE x, y
+-- SUCH THAT SUM(5*x*(l_tax + l_discount) + y*(2*l_quantity - 3*l_extendedprice) + 11) >= -15
+-- MAXIMIZE SUM(6*x*l_extendedprice + 4*y*l_discount);

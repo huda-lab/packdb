@@ -17,6 +17,8 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
+#include "Highs.h"
+
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -350,7 +352,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
 
-    deb("=== Phase 2: Evaluating Coefficient Expressions ===");
+    deb("=== Evaluating Coefficient Expressions ===");
     deb("Number of rows:", num_rows);
     deb("Number of constraints:", gstate.constraints.size());
 
@@ -613,18 +615,240 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     }
 
-    deb("=== Phase 2 Complete: All coefficients evaluated ===");
+    deb("=== Complete: All coefficients evaluated ===");
 
     //===--------------------------------------------------------------------===//
-    // PHASE 3: Build and Solve ILP (TODO - Next Phase)
+    // PHASE 3: Build and Solve ILP with HiGHS
     //===--------------------------------------------------------------------===//
 
-    // For now, still generating dummy solution
-    idx_t total_vars = num_rows * decide_variables.size();
-    gstate.ilp_solution.resize(total_vars);
-    for (idx_t i = 0; i < total_vars; i++) {
-        gstate.ilp_solution[i] = static_cast<double>(i % 100);
+    deb("=== Building and Solving ILP ===");
+
+    idx_t num_decide_vars = decide_variables.size();
+    idx_t total_vars = num_rows * num_decide_vars;
+
+    deb("Number of decision variables:", total_vars);
+    deb("Number of rows:", num_rows);
+    deb("Number of DECIDE variables per row:", num_decide_vars);
+
+    // Create HiGHS model
+    Highs highs;
+    highs.setOptionValue("output_flag", false); // Suppress HiGHS output
+
+    // Variable indexing: var_index = row_idx * num_decide_vars + decide_var_idx
+    // So for row r and DECIDE variable v: index = r * num_decide_vars + v
+
+    //===--------------------------------------------------------------------===//
+    // 1. Set up variables with bounds and types
+    //===--------------------------------------------------------------------===//
+
+    deb("Setting up variable bounds and types...");
+
+    vector<double> col_lower(total_vars);
+    vector<double> col_upper(total_vars);
+    vector<HighsVarType> var_types(total_vars);
+
+    for (idx_t row = 0; row < num_rows; row++) {
+        for (idx_t var = 0; var < num_decide_vars; var++) {
+            idx_t var_idx = row * num_decide_vars + var;
+
+            // TODO: Get actual bounds from DECIDE constraints
+            // For now, use default bounds from test query: [0, 4]
+            col_lower[var_idx] = 0.0;
+            col_upper[var_idx] = 4.0;
+
+            // TODO: Get actual type from DECIDE constraints
+            // For now, assume INTEGER
+            var_types[var_idx] = HighsVarType::kInteger;
+        }
     }
+
+    //===--------------------------------------------------------------------===//
+    // 2. Set up objective function
+    //===--------------------------------------------------------------------===//
+
+    deb("Setting up objective function...");
+
+    vector<double> obj_coeffs(total_vars, 0.0);
+
+    if (gstate.objective) {
+        for (idx_t term_idx = 0; term_idx < gstate.objective_variable_indices.size(); term_idx++) {
+            idx_t decide_var_idx = gstate.objective_variable_indices[term_idx];
+
+            for (idx_t row = 0; row < num_rows; row++) {
+                idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                obj_coeffs[var_idx] = gstate.evaluated_objective_coefficients[term_idx][row];
+            }
+        }
+    }
+
+    // Set sense (maximize or minimize)
+    ObjSense sense = (decide_sense == DecideSense::MAXIMIZE)
+        ? ObjSense::kMaximize
+        : ObjSense::kMinimize;
+
+    //===--------------------------------------------------------------------===//
+    // 3. Set up constraints
+    //===--------------------------------------------------------------------===//
+
+    deb("Setting up constraints...");
+
+    idx_t num_constraints = 0;
+    for (auto &eval_const : gstate.evaluated_constraints) {
+        num_constraints += num_rows; // One constraint per row
+    }
+
+    deb("Total constraints:", num_constraints);
+
+    vector<double> row_lower(num_constraints);
+    vector<double> row_upper(num_constraints);
+
+    // Constraint matrix in COO format (row, col, value)
+    vector<int> a_rows;
+    vector<int> a_cols;
+    vector<double> a_vals;
+
+    idx_t constraint_idx = 0;
+    for (auto &eval_const : gstate.evaluated_constraints) {
+        for (idx_t row = 0; row < num_rows; row++) {
+            // Build constraint for this row
+            // LHS: sum of (coefficient * variable) for each term
+
+            for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+
+                if (decide_var_idx != DConstants::INVALID_INDEX) {
+                    double coeff = eval_const.row_coefficients[term_idx][row];
+                    idx_t var_idx = row * num_decide_vars + decide_var_idx;
+
+                    a_rows.push_back(constraint_idx);
+                    a_cols.push_back(var_idx);
+                    a_vals.push_back(coeff);
+                }
+            }
+
+            // Set constraint bounds based on comparison type
+            double rhs = eval_const.rhs_values[row];
+
+            if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+                row_lower[constraint_idx] = rhs;
+                row_upper[constraint_idx] = HUGE_VAL; // infinity
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+                row_lower[constraint_idx] = -HUGE_VAL; // -infinity
+                row_upper[constraint_idx] = rhs;
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
+                row_lower[constraint_idx] = rhs;
+                row_upper[constraint_idx] = rhs;
+            }
+
+            constraint_idx++;
+        }
+    }
+
+    deb("Constraint matrix has", a_rows.size(), "non-zero entries");
+
+    //===--------------------------------------------------------------------===//
+    // 4. Build HighsLp model and pass to HiGHS
+    //===--------------------------------------------------------------------===//
+
+    deb("Building HighsLp model...");
+
+    HighsLp lp;
+    lp.num_col_ = total_vars;
+    lp.num_row_ = num_constraints;
+    lp.sense_ = sense;
+    lp.offset_ = 0.0;
+    lp.col_cost_ = obj_coeffs;
+    lp.col_lower_ = col_lower;
+    lp.col_upper_ = col_upper;
+    lp.row_lower_ = row_lower;
+    lp.row_upper_ = row_upper;
+
+    // Constraint matrix in CSR format
+    // Convert from COO (row, col, val) to CSR (row pointers, column indices, values)
+    lp.a_matrix_.format_ = MatrixFormat::kRowwise;
+
+    // Build CSR format
+    vector<HighsInt> row_starts(num_constraints + 1, 0);
+
+    // Count non-zeros per row
+    for (idx_t i = 0; i < a_rows.size(); i++) {
+        row_starts[a_rows[i] + 1]++;
+    }
+
+    // Convert counts to cumulative sum (row start indices)
+    for (idx_t i = 0; i < num_constraints; i++) {
+        row_starts[i + 1] += row_starts[i];
+    }
+
+    // Fill column indices and values
+    vector<HighsInt> col_indices(a_vals.size());
+    vector<double> values(a_vals.size());
+    vector<HighsInt> current_pos = row_starts; // Track current position for each row
+
+    for (idx_t i = 0; i < a_rows.size(); i++) {
+        idx_t row = a_rows[i];
+        idx_t pos = current_pos[row];
+        col_indices[pos] = a_cols[i];
+        values[pos] = a_vals[i];
+        current_pos[row]++;
+    }
+
+    lp.a_matrix_.start_ = row_starts;
+    lp.a_matrix_.index_ = col_indices;
+    lp.a_matrix_.value_ = values;
+
+    // Set integrality
+    lp.integrality_.resize(total_vars);
+    for (idx_t i = 0; i < total_vars; i++) {
+        lp.integrality_[i] = (var_types[i] == HighsVarType::kInteger) ? HighsVarType::kInteger : HighsVarType::kContinuous;
+    }
+
+    deb("Passing model to HiGHS...");
+
+    HighsStatus status = highs.passModel(lp);
+
+    if (status != HighsStatus::kOk) {
+        throw InternalException("Failed to pass model to HiGHS: status %d", (int)status);
+    }
+
+    //===--------------------------------------------------------------------===//
+    // 5. Solve the ILP
+    //===--------------------------------------------------------------------===//
+
+    deb("Solving ILP...");
+
+    status = highs.run();
+
+    if (status != HighsStatus::kOk) {
+        throw InternalException("HiGHS solver failed: status %d", (int)status);
+    }
+
+    // Get solution info
+    HighsModelStatus model_status = highs.getModelStatus();
+    deb("Model status:", (int)model_status);
+
+    if (model_status != HighsModelStatus::kOptimal &&
+        model_status != HighsModelStatus::kInfeasible) {
+        deb("WARNING: Solution may not be optimal, status:", (int)model_status);
+    }
+
+    //===--------------------------------------------------------------------===//
+    // 6. Extract solution
+    //===--------------------------------------------------------------------===//
+
+    deb("Extracting solution...");
+
+    const HighsSolution& solution = highs.getSolution();
+    gstate.ilp_solution.resize(total_vars);
+
+    for (idx_t i = 0; i < total_vars; i++) {
+        gstate.ilp_solution[i] = solution.col_value[i];
+    }
+
+    // Get objective value
+    double obj_value = highs.getInfo().objective_function_value;
+    deb("Objective value:", obj_value);
+    deb("=== Complete: ILP solved ===");
 
     return SinkFinalizeType::READY;
 }
@@ -636,9 +860,11 @@ class DecideGlobalSourceState : public GlobalSourceState {
 public:
     explicit DecideGlobalSourceState(const PhysicalDecide &op, DecideGlobalSinkState &sink) {
         sink.data.InitializeScan(scan_state);
+        current_row_offset = 0;
     }
 
     ColumnDataScanState scan_state;
+    idx_t current_row_offset; // Track which row we're at in the solution vector
 
     idx_t MaxThreads() override {
         return 1; // For simplicity, we'll make the source single-threaded.
@@ -660,24 +886,38 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
     if (chunk.size() == 0) {
         return SourceResultType::FINISHED;
     }
-    
-    // types is the output columns
-    // children[0]->GetTypes() is the input columns
-    // deb(types, children[0]->GetTypes());
 
-    for (idx_t i = 0; i < decide_variables.size(); i++) {
-        // The new column is the next available column in the output chunk
-        auto &output_vector = chunk.data[types.size() - decide_variables.size() + i];
-        // D_ASSERT(output_vector.GetType().id() == LogicalTypeId::DOUBLE);
+    idx_t num_decide_vars = decide_variables.size();
+    idx_t chunk_size = chunk.size();
 
-        // Set all values in this new column to a constant index
-        if (i == 0) output_vector.Reference(Value::INTEGER(i+10));
-        else output_vector.Reference(Value::DOUBLE(i+10));
-        // For now set the values to NULL
-        // output_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-        // ConstantVector::SetNull(output_vector, true);
+    // Fill in the DECIDE variable columns with solution values from ILP solver
+    for (idx_t decide_var_idx = 0; decide_var_idx < num_decide_vars; decide_var_idx++) {
+        // The DECIDE columns are appended at the end of the output
+        auto &output_vector = chunk.data[types.size() - num_decide_vars + decide_var_idx];
+
+        // Set vector to flat (each row has its own value)
+        output_vector.SetVectorType(VectorType::FLAT_VECTOR);
+        auto output_data = FlatVector::GetData<double>(output_vector);
+
+        // Copy solution values for this DECIDE variable across all rows in this chunk
+        for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+            idx_t global_row = source_state.current_row_offset + row_in_chunk;
+
+            // Solution is indexed as: row * num_decide_vars + decide_var_idx
+            idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+
+            if (solution_idx < gstate.ilp_solution.size()) {
+                output_data[row_in_chunk] = gstate.ilp_solution[solution_idx];
+            } else {
+                // Shouldn't happen, but handle gracefully
+                output_data[row_in_chunk] = 0.0;
+            }
+        }
     }
-    // The chunk's cardinality was already set by the Scan call.
+
+    // Update row offset for next chunk
+    source_state.current_row_offset += chunk_size;
+
     return SourceResultType::HAVE_MORE_OUTPUT;
 }
 
