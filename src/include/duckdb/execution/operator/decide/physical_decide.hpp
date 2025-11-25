@@ -25,6 +25,7 @@ struct LinearConstraint {
     vector<LinearTerm> lhs_terms;       // All additive terms from LHS
     unique_ptr<Expression> rhs_expr;    // RHS expression (may contain aggregates)
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
+    bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
 
     LinearConstraint() = default;
 };

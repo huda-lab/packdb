@@ -471,7 +471,8 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             }
             decide_variable_names.emplace(name, var_names.size());
             var_names.push_back(colref.GetColumnName());
-            var_types.push_back(LogicalType::DOUBLE);
+            // DECIDE variables represent cardinalities and must be integral by default.
+            var_types.push_back(LogicalType::INTEGER);
         }
 
         // // --- TEST CODE START ---

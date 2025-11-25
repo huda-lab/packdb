@@ -12,7 +12,7 @@
 namespace duckdb {
 
 DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables)
-    : DecideBinder(binder, context, variables), var_types(variables.size(), LogicalType::DOUBLE){
+    : DecideBinder(binder, context, variables), var_types(variables.size(), LogicalType::INTEGER){
 }
 
 static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -139,8 +139,60 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     DebugPrintParsed("BindComparison.right (simplified)", *comp.right);
     auto &right = *comp.right;
     switch (comp.type) {
-    case ExpressionType::COMPARE_EQUAL:
-        return BindResult(BinderException::Unsupported(expr, "DECIDE equality constraints are not supported; use <= or >="));
+    case ExpressionType::COMPARE_EQUAL: {
+        // Check if this is a type declaration (x IS INTEGER/REAL/BINARY)
+        // The parser transforms "x IS INTEGER" into a comparison with a type marker constant
+        if (comp.right->GetExpressionClass() == ExpressionClass::CONSTANT) {
+            auto &const_expr = comp.right->Cast<ConstantExpression>();
+            if (const_expr.value.type() == LogicalType::VARCHAR) {
+                string type_marker = const_expr.value.ToString();
+
+                // Check if it's a type marker from the grammar
+                if (type_marker == "integer_variable" ||
+                    type_marker == "real_variable" ||
+                    type_marker == "binary_variable") {
+
+                    // This is a type declaration, not a constraint
+                    // Extract variable name from LHS
+                    if (comp.left->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+                        auto &col_ref = comp.left->Cast<ColumnRefExpression>();
+                        string var_name = col_ref.GetColumnName();
+
+                        // Find variable index and update type
+                        auto it = variables.find(var_name);
+                        if (it != variables.end()) {
+                            idx_t var_idx = it->second;
+
+                            // Update var_types vector based on type marker
+                            // DECIDE variables represent cardinality (count of tuples in package)
+                            // Therefore, they MUST be integers - REAL types are not allowed
+                            if (type_marker == "integer_variable") {
+                                var_types[var_idx] = LogicalType::INTEGER;
+                                deb("Type declaration: variable '", var_name, "' is INTEGER");
+                            } else if (type_marker == "real_variable") {
+                                // REJECT: DECIDE variables must be integers (they represent cardinality)
+                                throw BinderException(
+                                    "DECIDE variable '%s' cannot be REAL type. "
+                                    "DECIDE variables represent tuple cardinality (count) and must be INTEGER or BINARY.",
+                                    var_name);
+                            } else if (type_marker == "binary_variable") {
+                                var_types[var_idx] = LogicalType::BOOLEAN;
+                                deb("Type declaration: variable '", var_name, "' is BINARY");
+                            }
+
+                            // Don't bind this as a constraint - it's metadata
+                            // Return a dummy constant that will be filtered out
+                            return BindResult(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallthrough to standard validation for actual equality constraints (e.g., SUM(x) = 10)
+    }
+    case ExpressionType::COMPARE_LESSTHAN:
+    case ExpressionType::COMPARE_GREATERTHAN:
     case ExpressionType::COMPARE_LESSTHANOREQUALTO:
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
         switch (left_type) {
@@ -200,7 +252,20 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
 
 BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
-    return BindResult(BinderException::Unsupported(expr, "DECIDE BETWEEN constraints are not supported"));
+    auto &between = expr.Cast<BetweenExpression>();
+
+    // Transform BETWEEN into (input >= lower) AND (input <= upper)
+    auto input_copy = between.input->Copy();
+    
+    auto lower_comp = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(between.input), std::move(between.lower));
+    auto upper_comp = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(input_copy), std::move(between.upper));
+
+    auto conjunction = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_comp), std::move(upper_comp));
+    
+    // Bind the new conjunction
+    // We need to replace the current expression pointer with the new conjunction
+    expr_ptr = std::move(conjunction);
+    return BindConjunction(expr_ptr, depth);
 }
 
 BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {

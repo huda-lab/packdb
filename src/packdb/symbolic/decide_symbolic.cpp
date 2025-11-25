@@ -746,6 +746,43 @@ static unique_ptr<ParsedExpression> MakeDoubleConstant(double v) {
     return make_uniq<ConstantExpression>(Value::DOUBLE(v));
 }
 
+// Check if an expression tree contains a SUM() function anywhere
+static bool ContainsSumFunction(const ParsedExpression &expr) {
+    switch (expr.GetExpressionClass()) {
+        case ExpressionClass::FUNCTION: {
+            auto &func = expr.Cast<const FunctionExpression>();
+            if (!func.is_operator && StringUtil::Lower(func.function_name) == "sum") {
+                return true;
+            }
+            for (auto &child : func.children) {
+                if (ContainsSumFunction(*child)) return true;
+            }
+            if (func.filter && ContainsSumFunction(*func.filter)) return true;
+            return false;
+        }
+        case ExpressionClass::OPERATOR: {
+            auto &op = expr.Cast<const OperatorExpression>();
+            for (auto &child : op.children) {
+                if (ContainsSumFunction(*child)) return true;
+            }
+            return false;
+        }
+        case ExpressionClass::CAST: {
+            auto &cast = expr.Cast<const CastExpression>();
+            return ContainsSumFunction(*cast.child);
+        }
+        case ExpressionClass::CONJUNCTION: {
+            auto &conj = expr.Cast<const ConjunctionExpression>();
+            for (auto &child : conj.children) {
+                if (ContainsSumFunction(*child)) return true;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
 // Normalize comparator between LHS and numeric RHS by isolating SUM terms containing DECIDE variables
 static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpression &cmp,
                                                             const case_insensitive_map_t<idx_t> &decide_variables) {
@@ -756,6 +793,12 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     }
     double rhs_num;
     if (!IsNumericConstant(*cmp.right, rhs_num)) {
+        return cmp.Copy();
+    }
+
+    // Only normalize if the LHS contains a SUM() somewhere in the tree.
+    // For bare per-row constraints (e.g., "x < 6"), leave unchanged.
+    if (!ContainsSumFunction(*cmp.left)) {
         return cmp.Copy();
     }
 

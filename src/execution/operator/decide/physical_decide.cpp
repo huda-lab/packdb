@@ -189,35 +189,7 @@ public:
         AnalyzeConstraint(op.decide_constraints);
         AnalyzeObjective(op.decide_objective);
 
-        // Debug output
-        deb("=== Constraint Analysis Complete ===");
-        deb("Extracted", constraints.size(), "constraints");
-        for (idx_t c = 0; c < constraints.size(); c++) {
-            deb("Constraint", c, "has", constraints[c]->lhs_terms.size(), "terms,",
-                "comparison:", EnumUtil::ToString(constraints[c]->comparison_type));
-            for (idx_t t = 0; t < constraints[c]->lhs_terms.size(); t++) {
-                auto &term = constraints[c]->lhs_terms[t];
-                if (term.variable_index == DConstants::INVALID_INDEX) {
-                    deb("  Term", t, ": CONSTANT, coef =", term.coefficient->ToString());
-                } else {
-                    deb("  Term", t, ": var", term.variable_index, ", coef =", term.coefficient->ToString());
-                }
-            }
-            deb("  RHS:", constraints[c]->rhs_expr->ToString());
-        }
-
-        if (objective) {
-            deb("=== Objective Analysis Complete ===");
-            deb("Objective has", objective->terms.size(), "terms");
-            for (idx_t t = 0; t < objective->terms.size(); t++) {
-                auto &term = objective->terms[t];
-                if (term.variable_index == DConstants::INVALID_INDEX) {
-                    deb("  Term", t, ": CONSTANT, coef =", term.coefficient->ToString());
-                } else {
-                    deb("  Term", t, ": var", term.variable_index, ", coef =", term.coefficient->ToString());
-                }
-            }
-        }
+        // Minimal: keep constructor lean; detailed solver output comes from HiGHS
     }
 
     void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr) {
@@ -244,6 +216,7 @@ public:
                     // SUM(...) constraint
                     auto &agg = comp.left->Cast<BoundAggregateExpression>();
                     op.ExtractLinearTerms(*agg.children[0], constraint->lhs_terms);
+                constraint->lhs_is_aggregate = true;
                 } else {
                     // Simple variable constraint (e.g., x <= 5)
                     idx_t var_idx = op.FindDecideVariable(*comp.left);
@@ -253,6 +226,7 @@ public:
                             make_uniq<BoundConstantExpression>(Value::INTEGER(1))
                         });
                     }
+                constraint->lhs_is_aggregate = false;
                 }
 
                 constraints.push_back(std::move(constraint));
@@ -270,6 +244,81 @@ public:
 
             objective = make_uniq<LinearObjective>();
             op.ExtractLinearTerms(*agg.children[0], objective->terms);
+        }
+    }
+
+    //===--------------------------------------------------------------------===//
+    // Variable Bounds Extraction (Part 3)
+    //===--------------------------------------------------------------------===//
+
+    void ExtractVariableBounds(vector<double> &lower_bounds, vector<double> &upper_bounds) {
+        // Traverse decide_constraints to find variable-level bounds
+        TraverseBoundsConstraints(*op.decide_constraints, lower_bounds, upper_bounds);
+    }
+
+    void TraverseBoundsConstraints(const Expression &expr,
+                                   vector<double> &lower_bounds,
+                                   vector<double> &upper_bounds) {
+        switch (expr.GetExpressionClass()) {
+            case ExpressionClass::BOUND_CONJUNCTION: {
+                // AND expression - recurse on all children
+                auto &conj = expr.Cast<BoundConjunctionExpression>();
+                for (auto &child : conj.children) {
+                    TraverseBoundsConstraints(*child, lower_bounds, upper_bounds);
+                }
+                break;
+            }
+
+            case ExpressionClass::BOUND_COMPARISON: {
+                auto &comp = expr.Cast<BoundComparisonExpression>();
+
+                // Check if this is a variable-level constraint (not SUM)
+                if (comp.left->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+                    idx_t var_idx = op.FindDecideVariable(*comp.left);
+
+                    if (var_idx != DConstants::INVALID_INDEX) {
+                        // Extract bound value from RHS
+                        if (comp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                            auto &rhs = comp.right->Cast<BoundConstantExpression>();
+
+                            // Cast to double - handle both INTEGER and DOUBLE types
+                            double bound_value;
+                            if (rhs.value.type().id() == LogicalTypeId::INTEGER ||
+                                rhs.value.type().id() == LogicalTypeId::BIGINT) {
+                                bound_value = static_cast<double>(rhs.value.GetValue<int64_t>());
+                            } else if (rhs.value.type().id() == LogicalTypeId::DOUBLE ||
+                                       rhs.value.type().id() == LogicalTypeId::FLOAT) {
+                                bound_value = rhs.value.GetValue<double>();
+                            } else {
+                                // Try default cast
+                                bound_value = rhs.value.GetValue<double>();
+                            }
+
+                            // Apply bound based on comparison type
+                            if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+                                // x <= bound
+                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
+                            } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+                                // x >= bound
+                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
+                            } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
+                                // x = bound (if enabled in future)
+                                lower_bounds[var_idx] = bound_value;
+                                upper_bounds[var_idx] = bound_value;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+
+            case ExpressionClass::BOUND_CONSTANT: {
+                // Type declarations return dummy constants - skip them
+                break;
+            }
+
+            default:
+                break;
         }
     }
 
@@ -293,6 +342,7 @@ public:
         vector<vector<double>> row_coefficients;  // [term_idx][row_idx] = coefficient value
         vector<double> rhs_values;                // [row_idx] = RHS value
         ExpressionType comparison_type;
+        bool lhs_is_aggregate = false;            // True if original LHS was aggregate (e.g., SUM(...))
     };
 
     vector<EvaluatedConstraint> evaluated_constraints;
@@ -352,9 +402,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
 
-    deb("=== Evaluating Coefficient Expressions ===");
-    deb("Number of rows:", num_rows);
-    deb("Number of constraints:", gstate.constraints.size());
+    // Evaluate coefficients and build the model (solver provides verbose output)
 
     //===--------------------------------------------------------------------===//
     // PHASE 2: Evaluate Coefficient Expressions
@@ -364,10 +412,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     for (idx_t c = 0; c < gstate.constraints.size(); c++) {
         auto &constraint = gstate.constraints[c];
 
-        deb("Evaluating constraint", c, "with", constraint->lhs_terms.size(), "terms");
-
         DecideGlobalSinkState::EvaluatedConstraint eval_const;
         eval_const.comparison_type = constraint->comparison_type;
+        // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
+        eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
 
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
@@ -448,16 +496,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
 
                 // Execute on chunk
+                // Use the expression's actual return type, then cast to double when extracting
                 DataChunk term_result;
-                vector<LogicalType> result_types = {LogicalType::DOUBLE};
+                vector<LogicalType> result_types = {transformed_coef->return_type};
                 term_result.Initialize(context, result_types);
                 term_executor.Execute(chunk, term_result);
 
-                // Extract values
+                // Extract values and cast to double
                 auto &vec = term_result.data[0];
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk.size(); row_in_chunk++) {
-                    double val = vec.GetValue(row_in_chunk).GetValue<double>();
-                    eval_const.row_coefficients[term_idx].push_back(val);
+                    // Cast to double regardless of the actual type (could be INTEGER, DOUBLE, etc.)
+                    Value val = vec.GetValue(row_in_chunk);
+                    double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                    eval_const.row_coefficients[term_idx].push_back(double_val);
                 }
             }
         }
@@ -483,6 +534,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             EvaluateRHS = [&](const Expression &expr) -> double {
                 if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
                     return expr.Cast<BoundConstantExpression>().value.GetValue<double>();
+                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    // Handle casts by recursively evaluating the child
+                    auto &cast = expr.Cast<BoundCastExpression>();
+                    return EvaluateRHS(*cast.child);
                 } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
                     auto &func = expr.Cast<BoundFunctionExpression>();
                     if (func.function.name == "+") {
@@ -521,27 +576,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // RHS is same for all rows after normalization
         eval_const.rhs_values.resize(num_rows, rhs_constant);
 
-        // Debug: show sample coefficients
-        if (num_rows > 0) {
-            deb("  Sample coefficients for row 0:");
-            for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
-                if (eval_const.variable_indices[t] != DConstants::INVALID_INDEX) {
-                    deb("    Term", t, "(var", eval_const.variable_indices[t], "):",
-                        eval_const.row_coefficients[t][0]);
-                } else {
-                    deb("    Term", t, "(CONSTANT):", eval_const.row_coefficients[t][0]);
-                }
-            }
-            deb("  RHS[0]:", eval_const.rhs_values[0]);
-        }
-
         gstate.evaluated_constraints.push_back(std::move(eval_const));
     }
 
     // 2. Evaluate objective
     if (gstate.objective) {
-        deb("Evaluating objective with", gstate.objective->terms.size(), "terms");
-
         // Transform expressions (same as for constraints)
         std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
         TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
@@ -590,49 +629,37 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ExpressionExecutor term_executor(context);
                 term_executor.AddExpression(*transformed_coefficients[term_idx]);
 
+                // Use the expression's actual return type, then cast to double when extracting
                 DataChunk term_result;
-                vector<LogicalType> result_types = {LogicalType::DOUBLE};
+                vector<LogicalType> result_types = {transformed_coefficients[term_idx]->return_type};
                 term_result.Initialize(context, result_types);
                 term_executor.Execute(obj_chunk, term_result);
 
+                // Extract values and cast to double
                 auto &vec = term_result.data[0];
                 for (idx_t row_in_chunk = 0; row_in_chunk < obj_chunk.size(); row_in_chunk++) {
-                    double val = vec.GetValue(row_in_chunk).GetValue<double>();
-                    gstate.evaluated_objective_coefficients[term_idx].push_back(val);
+                    // Cast to double regardless of the actual type (could be INTEGER, DOUBLE, etc.)
+                    Value val = vec.GetValue(row_in_chunk);
+                    double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                    gstate.evaluated_objective_coefficients[term_idx].push_back(double_val);
                 }
             }
         }
 
-        // Debug: show sample objective coefficients
-        if (num_rows > 0) {
-            deb("  Sample objective coefficients for row 0:");
-            for (idx_t t = 0; t < gstate.objective_variable_indices.size(); t++) {
-                if (gstate.objective_variable_indices[t] != DConstants::INVALID_INDEX) {
-                    deb("    Term", t, "(var", gstate.objective_variable_indices[t], "):",
-                        gstate.evaluated_objective_coefficients[t][0]);
-                }
-            }
-        }
+        // No extra debug here; solver output will show timings/objective
     }
-
-    deb("=== Complete: All coefficients evaluated ===");
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP with HiGHS
     //===--------------------------------------------------------------------===//
 
-    deb("=== Building and Solving ILP ===");
-
     idx_t num_decide_vars = decide_variables.size();
     idx_t total_vars = num_rows * num_decide_vars;
 
-    deb("Number of decision variables:", total_vars);
-    deb("Number of rows:", num_rows);
-    deb("Number of DECIDE variables per row:", num_decide_vars);
-
     // Create HiGHS model
     Highs highs;
-    highs.setOptionValue("output_flag", false); // Suppress HiGHS output
+    highs.setOptionValue("output_flag", true); // Show HiGHS output for debugging
+    highs.setOptionValue("log_to_console", true);
 
     // Variable indexing: var_index = row_idx * num_decide_vars + decide_var_idx
     // So for row r and DECIDE variable v: index = r * num_decide_vars + v
@@ -641,32 +668,60 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 1. Set up variables with bounds and types
     //===--------------------------------------------------------------------===//
 
-    deb("Setting up variable bounds and types...");
-
     vector<double> col_lower(total_vars);
     vector<double> col_upper(total_vars);
     vector<HighsVarType> var_types(total_vars);
 
+    // First, determine per-variable types and default bounds
+    vector<double> per_var_lower(num_decide_vars);
+    vector<double> per_var_upper(num_decide_vars);
+    vector<HighsVarType> per_var_types(num_decide_vars);
+
+    for (idx_t var = 0; var < num_decide_vars; var++) {
+        // Extract type from decide_variables
+        auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
+        auto logical_type = decide_var.return_type;
+
+        // DECIDE variables represent cardinality (count of tuples), so they MUST be integer types
+        // REAL/DOUBLE types are not allowed - this would have been caught in the binder
+        if (logical_type == LogicalType::DOUBLE || logical_type == LogicalType::FLOAT) {
+            throw InternalException(
+                "DECIDE variable has DOUBLE type, but DECIDE variables must be INTEGER "
+                "(they represent tuple cardinality). This should have been caught in the binder.");
+        } else if (logical_type == LogicalType::INTEGER || logical_type == LogicalType::BIGINT) {
+            // INTEGER variables: non-negative by default (cardinality >= 0)
+            per_var_types[var] = HighsVarType::kInteger;
+            per_var_lower[var] = 0.0;
+            per_var_upper[var] = 1e30;
+        } else if (logical_type == LogicalType::BOOLEAN) {
+            // BINARY variables: [0, 1] (either include or don't include)
+            per_var_types[var] = HighsVarType::kInteger;
+            per_var_lower[var] = 0.0;
+            per_var_upper[var] = 1.0;
+        } else {
+            // Default to INTEGER if type is not explicitly set
+            per_var_types[var] = HighsVarType::kInteger;
+            per_var_lower[var] = 0.0;
+            per_var_upper[var] = 1e30;
+        }
+    }
+
+    // Override with explicit bounds from constraints (Part 3)
+    gstate.ExtractVariableBounds(per_var_lower, per_var_upper);
+
+    // Apply per-variable bounds and types to all rows
     for (idx_t row = 0; row < num_rows; row++) {
         for (idx_t var = 0; var < num_decide_vars; var++) {
             idx_t var_idx = row * num_decide_vars + var;
-
-            // TODO: Get actual bounds from DECIDE constraints
-            // For now, use default bounds from test query: [0, 4]
-            col_lower[var_idx] = 0.0;
-            col_upper[var_idx] = 4.0;
-
-            // TODO: Get actual type from DECIDE constraints
-            // For now, assume INTEGER
-            var_types[var_idx] = HighsVarType::kInteger;
+            col_lower[var_idx] = per_var_lower[var];
+            col_upper[var_idx] = per_var_upper[var];
+            var_types[var_idx] = per_var_types[var];
         }
     }
 
     //===--------------------------------------------------------------------===//
     // 2. Set up objective function
     //===--------------------------------------------------------------------===//
-
-    deb("Setting up objective function...");
 
     vector<double> obj_coeffs(total_vars, 0.0);
 
@@ -690,67 +745,153 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3. Set up constraints
     //===--------------------------------------------------------------------===//
 
-    deb("Setting up constraints...");
-
-    idx_t num_constraints = 0;
-    for (auto &eval_const : gstate.evaluated_constraints) {
-        num_constraints += num_rows; // One constraint per row
-    }
-
-    deb("Total constraints:", num_constraints);
-
-    vector<double> row_lower(num_constraints);
-    vector<double> row_upper(num_constraints);
-
     // Constraint matrix in COO format (row, col, value)
     vector<int> a_rows;
     vector<int> a_cols;
     vector<double> a_vals;
+    vector<double> row_lower;
+    vector<double> row_upper;
 
     idx_t constraint_idx = 0;
     for (auto &eval_const : gstate.evaluated_constraints) {
-        for (idx_t row = 0; row < num_rows; row++) {
-            // Build constraint for this row
-            // LHS: sum of (coefficient * variable) for each term
+        // Use original provenance: aggregate if and only if LHS was an aggregate (e.g., SUM(...))
+        bool is_aggregate = eval_const.lhs_is_aggregate;
 
+        if (is_aggregate) {
+            // AGGREGATE CONSTRAINT: SUM(x) <= 10
+            // Create ONE constraint that sums across ALL rows
             for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                 idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
                 if (decide_var_idx != DConstants::INVALID_INDEX) {
-                    double coeff = eval_const.row_coefficients[term_idx][row];
-                    idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                    double coeff = eval_const.row_coefficients[term_idx][0]; // Same for all rows
 
-                    a_rows.push_back(constraint_idx);
-                    a_cols.push_back(var_idx);
-                    a_vals.push_back(coeff);
+                    // Add entry for each row's variable with same coefficient
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                        a_rows.push_back(constraint_idx);
+                        a_cols.push_back(var_idx);
+                        a_vals.push_back(coeff);
+                    }
                 }
             }
 
-            // Set constraint bounds based on comparison type
-            double rhs = eval_const.rhs_values[row];
+            // Set constraint bounds
+            double rhs = eval_const.rhs_values[0]; // Same for all rows
 
             if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                row_lower[constraint_idx] = rhs;
-                row_upper[constraint_idx] = HUGE_VAL; // infinity
+                row_lower.push_back(rhs);
+                row_upper.push_back(1e30);
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+                // Integer model: sum(x) > c  => sum(x) >= floor(c) + 1
+                double lb = std::floor(rhs) + 1.0;
+                row_lower.push_back(lb);
+                row_upper.push_back(1e30);
             } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                row_lower[constraint_idx] = -HUGE_VAL; // -infinity
-                row_upper[constraint_idx] = rhs;
+                row_lower.push_back(-1e30);
+                row_upper.push_back(rhs);
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+                // Integer model: sum(x) < c  => sum(x) <= ceil(c) - 1
+                double ub = std::ceil(rhs) - 1.0;
+                row_lower.push_back(-1e30);
+                row_upper.push_back(ub);
             } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                row_lower[constraint_idx] = rhs;
-                row_upper[constraint_idx] = rhs;
+                row_lower.push_back(rhs);
+                row_upper.push_back(rhs);
             }
 
             constraint_idx++;
+
+        } else {
+            // PER-ROW CONSTRAINT: Create separate constraint for each row
+
+            for (idx_t row = 0; row < num_rows; row++) {
+                // Build constraint for this row
+                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+
+                    if (decide_var_idx != DConstants::INVALID_INDEX) {
+                        double coeff = eval_const.row_coefficients[term_idx][row];
+                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
+
+                        a_rows.push_back(constraint_idx);
+                        a_cols.push_back(var_idx);
+                        a_vals.push_back(coeff);
+                    }
+                }
+
+                // Set constraint bounds based on comparison type
+                double rhs = eval_const.rhs_values[row];
+
+                if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+                    row_lower.push_back(rhs);
+                    row_upper.push_back(1e30);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+                    // Integer model: x > c  => x >= floor(c) + 1
+                    double lb = std::floor(rhs) + 1.0;
+                    row_lower.push_back(lb);
+                    row_upper.push_back(1e30);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+                    row_lower.push_back(-1e30);
+                    row_upper.push_back(rhs);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+                    // Integer model: x < c  => x <= ceil(c) - 1
+                    double ub = std::ceil(rhs) - 1.0;
+                    row_lower.push_back(-1e30);
+                    row_upper.push_back(ub);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
+                    row_lower.push_back(rhs);
+                    row_upper.push_back(rhs);
+                }
+
+                constraint_idx++;
+            }
         }
     }
-
-    deb("Constraint matrix has", a_rows.size(), "non-zero entries");
 
     //===--------------------------------------------------------------------===//
     // 4. Build HighsLp model and pass to HiGHS
     //===--------------------------------------------------------------------===//
 
-    deb("Building HighsLp model...");
+    idx_t num_constraints = constraint_idx; // Total number of constraints created
+
+    // Sanity checks before passing to solver
+    if (row_lower.size() != num_constraints || row_upper.size() != num_constraints) {
+        throw InternalException("Row bounds size mismatch: row_lower=%llu row_upper=%llu num_constraints=%llu",
+            (idx_t)row_lower.size(), (idx_t)row_upper.size(), num_constraints);
+    }
+    for (idx_t i = 0; i < num_constraints; i++) {
+        if (!(std::isfinite(row_lower[i]) || std::isinf(row_lower[i]))) {
+            throw InternalException("Row lower bound NaN at row %llu", i);
+        }
+        if (!(std::isfinite(row_upper[i]) || std::isinf(row_upper[i]))) {
+            throw InternalException("Row upper bound NaN at row %llu", i);
+        }
+        if (row_lower[i] > row_upper[i]) {
+            throw InternalException("Infeasible row bounds at row %llu: [%f, %f]", i, row_lower[i], row_upper[i]);
+        }
+    }
+    for (idx_t i = 0; i < a_rows.size(); i++) {
+        if ((idx_t)a_rows[i] >= num_constraints) {
+            throw InternalException("Constraint matrix row index out of range at nz %llu: row=%d >= %llu",
+                i, a_rows[i], num_constraints);
+        }
+        if ((idx_t)a_cols[i] >= total_vars) {
+            throw InternalException("Constraint matrix col index out of range at nz %llu: col=%d >= %llu",
+                i, a_cols[i], total_vars);
+        }
+        if (!std::isfinite(a_vals[i])) {
+            throw InternalException("Constraint matrix value not finite at nz %llu: %f", i, a_vals[i]);
+        }
+    }
+    for (idx_t i = 0; i < total_vars; i++) {
+        if (!std::isfinite(col_lower[i]) || !std::isfinite(col_upper[i]) || col_lower[i] > col_upper[i]) {
+            throw InternalException("Column bounds invalid at col %llu: [%f, %f]", i, col_lower[i], col_upper[i]);
+        }
+        if (!std::isfinite(obj_coeffs[i])) {
+            throw InternalException("Objective coefficient not finite at col %llu: %f", i, obj_coeffs[i]);
+        }
+    }
 
     HighsLp lp;
     lp.num_col_ = total_vars;
@@ -803,8 +944,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         lp.integrality_[i] = (var_types[i] == HighsVarType::kInteger) ? HighsVarType::kInteger : HighsVarType::kContinuous;
     }
 
-    deb("Passing model to HiGHS...");
-
     HighsStatus status = highs.passModel(lp);
 
     if (status != HighsStatus::kOk) {
@@ -815,28 +954,33 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 5. Solve the ILP
     //===--------------------------------------------------------------------===//
 
-    deb("Solving ILP...");
+    // Try writing model to a file for debugging if supported
+    highs.writeModel("highs_model.mps");
 
     status = highs.run();
 
     if (status != HighsStatus::kOk) {
-        throw InternalException("HiGHS solver failed: status %d", (int)status);
+        // Provide additional context if available
+        HighsModelStatus model_status = highs.getModelStatus();
+        throw InternalException("HiGHS solver failed: status %d, model_status %d", (int)status, (int)model_status);
     }
 
     // Get solution info
     HighsModelStatus model_status = highs.getModelStatus();
-    deb("Model status:", (int)model_status);
-
-    if (model_status != HighsModelStatus::kOptimal &&
-        model_status != HighsModelStatus::kInfeasible) {
-        deb("WARNING: Solution may not be optimal, status:", (int)model_status);
+    // Throw on non-optimal models with descriptive messages
+    if (model_status != HighsModelStatus::kOptimal) {
+        if (model_status == HighsModelStatus::kInfeasible) {
+            throw InternalException("DECIDE optimization infeasible: constraints cannot be satisfied (model_status=%d)", (int)model_status);
+        } else if (model_status == HighsModelStatus::kUnbounded) {
+            throw InternalException("DECIDE optimization unbounded: objective can grow without bound (model_status=%d)", (int)model_status);
+        } else {
+            throw InternalException("DECIDE optimization failed: model_status=%d", (int)model_status);
+        }
     }
 
     //===--------------------------------------------------------------------===//
     // 6. Extract solution
     //===--------------------------------------------------------------------===//
-
-    deb("Extracting solution...");
 
     const HighsSolution& solution = highs.getSolution();
     gstate.ilp_solution.resize(total_vars);
@@ -846,9 +990,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
 
     // Get objective value
-    double obj_value = highs.getInfo().objective_function_value;
-    deb("Objective value:", obj_value);
-    deb("=== Complete: ILP solved ===");
+    // Objective details are printed by HiGHS; no additional debug needed
 
     return SinkFinalizeType::READY;
 }
@@ -893,24 +1035,91 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
     // Fill in the DECIDE variable columns with solution values from ILP solver
     for (idx_t decide_var_idx = 0; decide_var_idx < num_decide_vars; decide_var_idx++) {
         // The DECIDE columns are appended at the end of the output
-        auto &output_vector = chunk.data[types.size() - num_decide_vars + decide_var_idx];
+        idx_t column_idx = types.size() - num_decide_vars + decide_var_idx;
+
+        auto &output_vector = chunk.data[column_idx];
 
         // Set vector to flat (each row has its own value)
         output_vector.SetVectorType(VectorType::FLAT_VECTOR);
-        auto output_data = FlatVector::GetData<double>(output_vector);
 
-        // Copy solution values for this DECIDE variable across all rows in this chunk
-        for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
-            idx_t global_row = source_state.current_row_offset + row_in_chunk;
+        // Get the logical type for this DECIDE variable
+        auto &decide_var = decide_variables[decide_var_idx]->Cast<BoundColumnRefExpression>();
+        auto var_type = decide_var.return_type;
 
-            // Solution is indexed as: row * num_decide_vars + decide_var_idx
-            idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+        // Get data pointer once based on type
+        if (var_type == LogicalType::INTEGER || var_type == LogicalType::BIGINT) {
+            // Use int32_t for INTEGER, int64_t for BIGINT
+            if (var_type == LogicalType::INTEGER) {
+                auto output_data = FlatVector::GetData<int32_t>(output_vector);
 
-            if (solution_idx < gstate.ilp_solution.size()) {
-                output_data[row_in_chunk] = gstate.ilp_solution[solution_idx];
-            } else {
-                // Shouldn't happen, but handle gracefully
-                output_data[row_in_chunk] = 0.0;
+                for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+                    idx_t global_row = source_state.current_row_offset + row_in_chunk;
+                    idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+
+                    double solution_value = 0.0;
+                    if (solution_idx < gstate.ilp_solution.size()) {
+                        solution_value = gstate.ilp_solution[solution_idx];
+                    }
+                    int32_t int_value = static_cast<int32_t>(std::round(solution_value));
+                    output_data[row_in_chunk] = int_value;
+                }
+            } else { // BIGINT
+                auto output_data = FlatVector::GetData<int64_t>(output_vector);
+
+                for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+                    idx_t global_row = source_state.current_row_offset + row_in_chunk;
+                    idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+
+                    double solution_value = 0.0;
+                    if (solution_idx < gstate.ilp_solution.size()) {
+                        solution_value = gstate.ilp_solution[solution_idx];
+                    }
+                    int64_t int_value = static_cast<int64_t>(std::round(solution_value));
+                    output_data[row_in_chunk] = int_value;
+                }
+            }
+
+        } else if (var_type == LogicalType::BOOLEAN) {
+            auto output_data = FlatVector::GetData<bool>(output_vector);
+
+            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+                idx_t global_row = source_state.current_row_offset + row_in_chunk;
+                idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+
+                double solution_value = 0.0;
+                if (solution_idx < gstate.ilp_solution.size()) {
+                    solution_value = gstate.ilp_solution[solution_idx];
+                }
+                output_data[row_in_chunk] = (solution_value >= 0.5);
+            }
+
+        } else if (var_type == LogicalType::DOUBLE) {
+            auto output_data = FlatVector::GetData<double>(output_vector);
+
+            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+                idx_t global_row = source_state.current_row_offset + row_in_chunk;
+                idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+
+                double solution_value = 0.0;
+                if (solution_idx < gstate.ilp_solution.size()) {
+                    solution_value = gstate.ilp_solution[solution_idx];
+                }
+                output_data[row_in_chunk] = solution_value;
+            }
+
+        } else {
+            // Default to INTEGER
+            auto output_data = FlatVector::GetData<int64_t>(output_vector);
+
+            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+                idx_t global_row = source_state.current_row_offset + row_in_chunk;
+                idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+
+                double solution_value = 0.0;
+                if (solution_idx < gstate.ilp_solution.size()) {
+                    solution_value = gstate.ilp_solution[solution_idx];
+                }
+                output_data[row_in_chunk] = static_cast<int64_t>(std::round(solution_value));
             }
         }
     }

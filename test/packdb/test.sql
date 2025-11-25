@@ -10,11 +10,20 @@
 
 
 
-SELECT SUM(x) AS total_x
+-- -- Test with smaller dataset (25 rows instead of 6M)
+-- -- Testing strict inequality operators: < and >
+-- -- Expected: x should be 3, 4, or 5 (integers in range 2 < x < 6)
+SELECT x,y, l_extendedprice, l_tax
 FROM lineitem
-DECIDE x
-SUCH THAT SUM(x*l_tax + 5) <= 10
-MAXIMIZE SUM(x*l_extendedprice);
+WHERE l_orderkey <= 100  -- Limit to ~25 rows
+DECIDE x, y
+SUCH THAT
+    SUM(x) <= 100
+    AND x > 2             -- Strict: > (so x >= 3)
+    AND x < 6             -- Strict: < (so x <= 5)
+    AND y < 10
+    AND y > 2
+MAXIMIZE SUM(x*l_extendedprice - y*l_tax);
 
 
 
@@ -76,8 +85,3 @@ MAXIMIZE SUM(x*l_extendedprice);
 -- MAXIMIZE SUM(x*l_extendedprice - y*l_tax);
 
 
--- SELECT SUM(x), SUM(y)
--- FROM lineitem
--- DECIDE x, y
--- SUCH THAT SUM(5*x*(l_tax + l_discount) + y*(2*l_quantity - 3*l_extendedprice) + 11) >= -15
--- MAXIMIZE SUM(6*x*l_extendedprice + 4*y*l_discount);
