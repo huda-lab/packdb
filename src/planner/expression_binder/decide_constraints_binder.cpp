@@ -8,6 +8,8 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/materialized_query_result.hpp"
 
 namespace duckdb {
 
@@ -77,6 +79,13 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
         case ExpressionClass::CAST: {
             auto &cast = expr.Cast<CastExpression>();
             return IsAllowedConstraintRHS(*cast.child, variables);
+        }
+        case ExpressionClass::SUBQUERY: {
+            auto &subquery = expr.Cast<SubqueryExpression>();
+            if (subquery.subquery_type != SubqueryType::SCALAR) {
+                return false;
+            }
+            return true;
         }
         default:
             return false;
@@ -296,8 +305,7 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
 	auto &expr = *expr_ptr;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
-    case ExpressionClass::CONSTANT: 
-    case ExpressionClass::SUBQUERY: {
+    case ExpressionClass::CONSTANT: {
         if (!is_top_expression) {
             return ExpressionBinder::BindExpression(expr_ptr, depth);
         }
@@ -318,6 +326,9 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
         return BindBetween(expr_ptr, depth);
     case ExpressionClass::CONJUNCTION:
         return BindConjunction(expr_ptr, depth);
+    case ExpressionClass::SUBQUERY: {
+        return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+    }
 	default:
         break;
 	}

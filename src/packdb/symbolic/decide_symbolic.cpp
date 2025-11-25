@@ -375,6 +375,12 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
             }
         }
         
+        case ExpressionClass::SUBQUERY: {
+            string placeholder = "__SUBQUERY_" + to_string(ctx.subquery_map.size()) + "__";
+            ctx.subquery_map[placeholder] = expr.Copy();
+            return Symbolic(placeholder);
+        }
+        
         default:
             throw InternalException("ToSymbolic: Unsupported expression class: %s", 
                 EnumUtil::ToString(expr.GetExpressionClass()));
@@ -685,6 +691,10 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
     }
     if (s.type() == typeid(Symbol)) {
         auto name = CastPtr<const Symbol>(s)->name;
+        // Check if it's a subquery placeholder
+        if (ctx.subquery_map.count(name)) {
+            return ctx.subquery_map[name]->Copy();
+        }
         // Treat any plain symbol as a column/variable reference
         return make_uniq<ColumnRefExpression>(name);
     }

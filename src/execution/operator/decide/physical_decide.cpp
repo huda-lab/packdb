@@ -212,13 +212,20 @@ public:
                 constraint->rhs_expr = comp.right->Copy();
 
                 // Extract terms from LHS
-                if (comp.left->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+                Expression *lhs = comp.left.get();
+                while (lhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    lhs = lhs->Cast<BoundCastExpression>().child.get();
+                }
+
+                if (lhs->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
                     // SUM(...) constraint
-                    auto &agg = comp.left->Cast<BoundAggregateExpression>();
+                    auto &agg = lhs->Cast<BoundAggregateExpression>();
                     op.ExtractLinearTerms(*agg.children[0], constraint->lhs_terms);
-                constraint->lhs_is_aggregate = true;
+                    constraint->lhs_is_aggregate = true;
                 } else {
                     // Simple variable constraint (e.g., x <= 5)
+                    // Note: We use the original comp.left here to find variables, 
+                    // but we should probably use the unwrapped lhs or handle casts in FindDecideVariable (which we do)
                     idx_t var_idx = op.FindDecideVariable(*comp.left);
                     if (var_idx != DConstants::INVALID_INDEX) {
                         constraint->lhs_terms.push_back(LinearTerm{
@@ -226,7 +233,7 @@ public:
                             make_uniq<BoundConstantExpression>(Value::INTEGER(1))
                         });
                     }
-                constraint->lhs_is_aggregate = false;
+                    constraint->lhs_is_aggregate = false;
                 }
 
                 constraints.push_back(std::move(constraint));
@@ -523,54 +530,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rhs_constant = const_expr.value.GetValue<double>();
         } else {
             // RHS is a complex expression like "(-15.0 + sum(-11.0))"
-            // For now, manually evaluate since EvaluateScalar has issues with aggregates
-            // After symbolic normalization, RHS should only contain:
-            // - Constants
-            // - Aggregates of constants (like sum(-11.0) which equals -11.0)
-            // We can evaluate this by hand for common cases
-
-            // Simple recursive evaluator for RHS
-            std::function<double(const Expression&)> EvaluateRHS;
-            EvaluateRHS = [&](const Expression &expr) -> double {
-                if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                    return expr.Cast<BoundConstantExpression>().value.GetValue<double>();
-                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    // Handle casts by recursively evaluating the child
-                    auto &cast = expr.Cast<BoundCastExpression>();
-                    return EvaluateRHS(*cast.child);
-                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                    auto &func = expr.Cast<BoundFunctionExpression>();
-                    if (func.function.name == "+") {
-                        double sum = 0;
-                        for (auto &child : func.children) {
-                            sum += EvaluateRHS(*child);
-                        }
-                        return sum;
-                    } else if (func.function.name == "-" || func.function.name == "subtract") {
-                        if (func.children.size() == 1) {
-                            return -EvaluateRHS(*func.children[0]);
-                        } else {
-                            return EvaluateRHS(*func.children[0]) - EvaluateRHS(*func.children[1]);
-                        }
-                    } else if (func.function.name == "*" || func.function.name == "multiply") {
-                        double product = 1;
-                        for (auto &child : func.children) {
-                            product *= EvaluateRHS(*child);
-                        }
-                        return product;
-                    }
-                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-                    // Aggregates like sum(-11.0) just return the constant value
-                    auto &agg = expr.Cast<BoundAggregateExpression>();
-                    if (agg.children.size() > 0) {
-                        return EvaluateRHS(*agg.children[0]);
-                    }
-                    return 0.0;
-                }
-                throw InternalException("Unsupported RHS expression type: %d", (int)expr.GetExpressionClass());
-            };
-
-            rhs_constant = EvaluateRHS(*constraint->rhs_expr);
+            // Use ExpressionExecutor to evaluate it. This handles constants, math functions,
+            // and potentially uncorrelated subqueries if supported by the executor.
+            try {
+                Value val = ExpressionExecutor::EvaluateScalar(context, *constraint->rhs_expr);
+                rhs_constant = val.GetValue<double>();
+            } catch (const Exception &e) {
+                // Fallback or rethrow with context
+                throw InternalException("Failed to evaluate DECIDE constraint RHS: %s", e.what());
+            }
         }
 
         // RHS is same for all rows after normalization
@@ -764,10 +732,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
                 if (decide_var_idx != DConstants::INVALID_INDEX) {
-                    double coeff = eval_const.row_coefficients[term_idx][0]; // Same for all rows
-
-                    // Add entry for each row's variable with same coefficient
+                    // Add entry for each row's variable with its specific coefficient
                     for (idx_t row = 0; row < num_rows; row++) {
+                        double coeff = eval_const.row_coefficients[term_idx][row];
+                        
                         idx_t var_idx = row * num_decide_vars + decide_var_idx;
                         a_rows.push_back(constraint_idx);
                         a_cols.push_back(var_idx);

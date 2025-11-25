@@ -11,6 +11,15 @@
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/materialized_query_result.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/planner/planner.hpp"
+#include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/execution/operator/helper/physical_materialized_collector.hpp"
+#include "duckdb/execution/executor.hpp"
+#include "duckdb/main/prepared_statement_data.hpp"
 
 namespace duckdb {
 
@@ -174,6 +183,18 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		auto &cast = expr.Cast<CastExpression>();
 		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg);
 	}
+    case ExpressionClass::SUBQUERY: {
+        auto &subquery = expr.Cast<SubqueryExpression>();
+        if (subquery.subquery_type != SubqueryType::SCALAR) {
+            error_msg = "Subquery in DECIDE SUM expression must be scalar";
+            return false;
+        }
+        if (ExpressionContainsDecideVariable(expr, variables)) {
+            error_msg = "Subquery in DECIDE SUM expression cannot contain DECIDE variables";
+            return false;
+        }
+        return true;
+    }
     default:
         error_msg = StringUtil::Format("Unsupported expression of type ExpressionClass::%s inside DECIDE SUM expression",
                                        EnumUtil::ToString(expr.GetExpressionClass()));
@@ -199,7 +220,6 @@ DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_in
 }
 
 BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) {
-	AggregateBinder aggregate_binder(binder, context);
 	ErrorData error;
 
 	// No Filter/Distinc allowed for Aggregate
@@ -211,11 +231,12 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	vector<unique_ptr<Expression>> children;
 	vector<LogicalType> child_types;
 	for (auto &child_expr : aggr.children) {
-		aggregate_binder.BindChild(child_expr, 0, error);
-		if (error.HasError()) {
-			return BindResult(std::move(error));
-		}
-        auto &bound_child = BoundExpression::GetExpression(*child_expr);
+        // Use this->BindExpression to ensure subqueries are handled (executed at bind time)
+        auto result = BindExpression(child_expr, depth);
+        if (result.HasError()) {
+            return result;
+        }
+        auto &bound_child = result.expression;
 		child_types.push_back(bound_child->return_type);
 		children.push_back(std::move(bound_child));
 	}
@@ -249,5 +270,78 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
     // It's a scalar function, bind it normally
     return ExpressionBinder::BindExpression(expr_ptr, depth);
 }
+
+BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+    auto &expr = *expr_ptr;
+    switch (expr.GetExpressionClass()) {
+    case ExpressionClass::FUNCTION:
+        return BindFunction(expr_ptr, depth);
+    case ExpressionClass::SUBQUERY: {
+        auto &subquery = expr.Cast<SubqueryExpression>();
+        if (subquery.subquery_type != SubqueryType::SCALAR) {
+             return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
+        }
+        
+        string subquery_sql = expr.ToString();
+        string sql = "SELECT " + subquery_sql;
+        
+        // Manual execution to avoid deadlock (context.Query acquires lock)
+        Parser parser;
+        parser.ParseQuery(sql);
+        if (parser.statements.empty()) {
+             return BindResult(BinderException::Unsupported(expr, "Failed to parse subquery SQL"));
+        }
+        
+        Planner planner(context);
+        planner.CreatePlan(std::move(parser.statements[0]));
+        
+        Optimizer optimizer(*planner.binder, context);
+        auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
+        
+        PhysicalPlanGenerator generator(context);
+        auto physical_plan = generator.CreatePlan(std::move(optimized_plan));
+        
+        // Wrap in result collector
+        PreparedStatementData data(StatementType::SELECT_STATEMENT);
+        data.types = physical_plan->GetTypes();
+        for(size_t i=0; i<data.types.size(); ++i) data.names.push_back("col" + to_string(i));
+        data.plan = std::move(physical_plan);
+        
+        auto collector = make_uniq<PhysicalMaterializedCollector>(data, false);
+        // collector->children.push_back(std::move(physical_plan)); // Do not add as child, it uses data.plan reference
+        
+        Executor executor(context);
+        executor.Initialize(std::move(collector));
+        
+        auto result = executor.ExecuteTask();
+        while (result != PendingExecutionResult::EXECUTION_FINISHED && result != PendingExecutionResult::EXECUTION_ERROR) {
+             result = executor.ExecuteTask();
+        }
+        
+        if (executor.HasError()) {
+             return BindResult(BinderException::Unsupported(expr, "Failed to execute subquery: " + executor.GetError().Message()));
+        }
+        
+        auto query_result = executor.GetResult();
+        if (query_result->type != QueryResultType::MATERIALIZED_RESULT) {
+             return BindResult(BinderException::Unsupported(expr, "Internal error: expected materialized result from subquery execution"));
+        }
+        
+        auto &mat_res = (MaterializedQueryResult&)*query_result;
+        Value val;
+        if (mat_res.RowCount() == 0) {
+             val = Value(LogicalType::SQLNULL);
+        } else {
+             val = mat_res.GetValue(0, 0);
+        }
+        
+        return BindResult(make_uniq<BoundConstantExpression>(val));
+    }
+    default:
+        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+    }
+}
+
+
 
 } // namespace duckdb

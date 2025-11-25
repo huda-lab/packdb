@@ -13,6 +13,7 @@ The `PhysicalDecide` operator first analyzes the bound constraints and objective
 - **`LinearTerm`**: Identifies terms as pairs of `{variable_index, coefficient_expression}`.
 - **`ExtractLinearTerms`**: Recursively extracts these terms from additive expressions.
 - **`AnalyzeConstraint` / `AnalyzeObjective`**: Converts complex bound expressions into a structured `LinearConstraint` or `LinearObjective` format, separating the decision variables from the row-varying coefficients.
+- **Implicit Casts**: Handles implicit casts (e.g., `CAST(SUM(...) AS DOUBLE)`) on the LHS of constraints to correctly identify aggregate constraints.
 
 ### Phase 2: Coefficient Evaluation
 Before solving, the operator must evaluate the row-varying coefficients (e.g., `price * tax`) for every row in the input dataset.

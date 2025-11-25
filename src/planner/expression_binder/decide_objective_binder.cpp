@@ -32,7 +32,10 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
                 DebugPrintBound("BindObjective.bound", *result.expression);
             }
             return result;
+	        return result;
 	}
+    case ExpressionClass::SUBQUERY:
+        return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
 	default:
         break;
 	}

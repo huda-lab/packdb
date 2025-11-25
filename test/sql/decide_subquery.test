@@ -1,0 +1,42 @@
+statement ok
+CREATE TABLE items (id INTEGER, weight INTEGER, value INTEGER);
+
+statement ok
+INSERT INTO items VALUES (1, 10, 60), (2, 20, 100), (3, 30, 120);
+
+statement ok
+CREATE TABLE limits (max_weight INTEGER);
+
+statement ok
+INSERT INTO limits VALUES (50);
+
+# Case 1: Subquery in RHS of constraint
+query I
+SELECT sum(x)
+FROM items
+DECIDE x SUCH THAT x IS BINARY AND sum(x * weight) <= (SELECT max_weight FROM limits)
+MAXIMIZE sum(x * value);
+----
+2
+
+# Case 2: Subquery in Objective (coefficient)
+# This might be tricky if the subquery is correlated or not properly bound
+query I
+SELECT sum(x)
+FROM items
+DECIDE x SUCH THAT x IS BINARY AND sum(x * weight) <= 50
+MAXIMIZE sum(x * (SELECT max(value) FROM items));
+----
+2
+
+# Case 3: Non-scalar subquery (should fail)
+statement error
+SELECT sum(x) FROM items DECIDE x SUCH THAT sum(x * weight) <= (SELECT weight FROM items) MAXIMIZE sum(x * value);
+----
+More than one row returned by a subquery used as an expression
+
+# Case 4: Subquery with DECIDE variable (should fail)
+statement error
+SELECT sum(x) FROM items DECIDE x SUCH THAT sum(x * (SELECT weight FROM items WHERE id = x)) <= 50 MAXIMIZE sum(x * value);
+----
+Referenced column "x" not found in FROM clause!

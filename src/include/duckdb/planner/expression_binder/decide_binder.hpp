@@ -41,6 +41,7 @@ public:
 protected:
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {
         throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
     }

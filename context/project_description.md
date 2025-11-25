@@ -33,17 +33,19 @@ PackDB extends DuckDB with package queries via a new DECIDE/SUCH THAT/[MAXIMIZE|
 - **Planner**
   - Inserts `LogicalDecide` above the regular plan carrying variables, constraints, sense, and objective.
 
-- **Execution (WIP)**
-  - `PhysicalDecide` collects child rows and analyzes constraints/objective; solver integration is stubbed, and DECIDE output columns are placeholders for now.
+- **Execution**
+  - `PhysicalDecide` collects child rows, analyzes constraints/objective, and integrates with the HiGHS solver to compute optimal solutions.
+  - Supports bind-time execution of uncorrelated scalar subqueries.
 
 - **Enums & operators**
   - New enums: `DecideSense`, `DecideExpression`, `DeterministicConstraintSense`.
   - Operators: `LogicalDecide`, `PhysicalDecide`.
 
 - **Tests**
-  - Parser tests for DECIDE clause, variable types, and errors; binder tests for conflicts/duplicates and allowed/disallowed forms.
+  - Comprehensive tests for Parser, Binder, and Execution layers, including subqueries, equality constraints, and BETWEEN constraints.
 
 ### Current status and next steps
 
-- Implemented: parsing, binding, logical planning, operator skeletons, and validation via tests.
-- Pending: integrate an ILP/MILP solver, compute real solutions, and populate DECIDE columns accordingly.
+- Implemented: Parsing, Binding, Logical Planning, Physical Execution, Solver Integration.
+- Features: Variable bounds, Equality constraints, BETWEEN constraints, Subquery support.
+- Pending: Advanced optimizations, correlated subquery support (future work).

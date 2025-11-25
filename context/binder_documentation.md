@@ -23,9 +23,14 @@ Binds the `SUCH THAT` clause.
 - **Constraint Shapes**:
     - **Variable Constraints**: `x <= c`, `x >= c`, `x IN (...)`.
     - **Sum Constraints**: `SUM(linear_expr) <= rhs`, `SUM(linear_expr) >= rhs`.
-- **RHS Validation**: The Right-Hand Side (RHS) must be a scalar or an aggregate expression that does **not** contain any DECIDE variables.
+- **RHS Validation**: The Right-Hand Side (RHS) must be a scalar expression. It can be a constant, a scalar subquery (uncorrelated), or an expression evaluating to a scalar. It must **not** contain any DECIDE variables.
 - **Type Refinement**: It detects type declarations like `x IS INTEGER` and updates the variable's type in the binding context.
-- **Limitations**: Currently, equality (`=`) and `BETWEEN` constraints are explicitly rejected with a "not supported" error, though the underlying logic could support them.
+- **Supported Constraints**:
+    - Inequalities: `<=`, `>=`
+    - Equality: `=`
+    - Range: `BETWEEN` (transformed into `>=` AND `<=`)
+    - Set membership: `IN` (transformed into ORs of equalities)
+- **Subqueries**: Uncorrelated scalar subqueries are executed at bind-time and replaced with their constant result.
 
 ### `DecideObjectiveBinder`
 Binds the `[MAXIMIZE|MINIMIZE]` clause.

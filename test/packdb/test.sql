@@ -15,10 +15,10 @@
 -- -- Expected: x should be 3, 4, or 5 (integers in range 2 < x < 6)
 SELECT x,y, l_extendedprice, l_tax
 FROM lineitem
-WHERE l_orderkey <= 100  -- Limit to ~25 rows
+WHERE l_orderkey <= 10  -- Limit to ~25 rows
 DECIDE x, y
 SUCH THAT
-    SUM(x) <= 100
+    SUM(x) <= 1000
     AND x > 2             -- Strict: > (so x >= 3)
     AND x < 6             -- Strict: < (so x <= 5)
     AND y < 10

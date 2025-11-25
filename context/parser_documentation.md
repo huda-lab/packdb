@@ -51,3 +51,4 @@ The Binder relies on this normalization. It expects:
 ## Limitations
 - **Non-Linearity**: The symbolic layer can represent non-linear terms (e.g., `x*x`), but the Binder will later reject them if they violate the linearity requirement of the solver.
 - **Functions**: Only basic arithmetic and `SUM` are fully supported for symbolic manipulation. Other functions are treated as opaque symbols or rejected.
+- **Subqueries**: Uncorrelated scalar subqueries are supported. They are preserved as placeholders during symbolic translation and executed at bind-time.

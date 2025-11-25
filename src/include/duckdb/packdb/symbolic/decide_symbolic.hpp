@@ -20,6 +20,8 @@
 #include "duckdb/parser/expression/between_expression.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 
+#include "duckdb/common/unordered_map.hpp"
+
 // Forward declare Symbolic from SymbolicC++ (global namespace)
 class Symbolic;
 
@@ -29,6 +31,9 @@ namespace duckdb {
 struct SymbolicTranslationContext {
     //! Map of DECIDE variable names to their indices
     const case_insensitive_map_t<idx_t> &decide_variables;
+    
+    //! Map of placeholder names to original subquery expressions
+    unordered_map<string, unique_ptr<ParsedExpression>> subquery_map;
     
     //! Constructor
     explicit SymbolicTranslationContext(const case_insensitive_map_t<idx_t> &vars) 
