@@ -13,7 +13,7 @@
 -- -- Test with smaller dataset (25 rows instead of 6M)
 -- -- Testing strict inequality operators: < and >
 -- -- Expected: x should be 3, 4, or 5 (integers in range 2 < x < 6)
-SELECT x,y, l_extendedprice, l_tax
+SELECT x,y, l_extendedprice, l_tax, l_orderkey, l_linenumber
 FROM lineitem
 WHERE l_orderkey <= 10  -- Limit to ~25 rows
 DECIDE x, y
