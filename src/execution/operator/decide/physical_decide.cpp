@@ -626,7 +626,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Create HiGHS model
     Highs highs;
-    highs.setOptionValue("output_flag", true); // Show HiGHS output for debugging
+    // highs.setOptionValue("output_flag", true); // Show HiGHS output for debugging
     highs.setOptionValue("log_to_console", true);
 
     // Variable indexing: var_index = row_idx * num_decide_vars + decide_var_idx
@@ -923,7 +923,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     // Try writing model to a file for debugging if supported
-    highs.writeModel("highs_model.mps");
+    // highs.writeModel("highs_model.mps");
 
     status = highs.run();
 

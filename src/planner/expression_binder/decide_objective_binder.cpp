@@ -8,7 +8,7 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
 	auto &expr = *expr_ptr;
-    DebugPrintParsed("BindObjective.input", expr);
+    // DebugPrintParsed("BindObjective.input", expr);
     string error_msg;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
@@ -19,7 +19,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	    break;
 	}
 	case ExpressionClass::FUNCTION: {
-	    DebugPrintParsed("BindObjective.input", expr);
+	    // DebugPrintParsed("BindObjective.input", expr);
 	        if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
 	            return BindResult(BinderException::Unsupported(expr, error_msg));
 	        }
@@ -28,11 +28,10 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
             if (result.HasError()) {
                 return result;
             }
-            if (result.expression) {
-                DebugPrintBound("BindObjective.bound", *result.expression);
-            }
+            // if (result.expression) {
+            //     DebugPrintBound("BindObjective.bound", *result.expression);
+            // }
             return result;
-	        return result;
 	}
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);

@@ -95,8 +95,8 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &comp = expr.Cast<ComparisonExpression>();
-    DebugPrintParsed("BindComparison.left", *comp.left);
-    DebugPrintParsed("BindComparison.right", *comp.right);
+    // DebugPrintParsed("BindComparison.left", *comp.left);
+    // DebugPrintParsed("BindComparison.right", *comp.right);
     string error_msg;
     auto left_type = GetExpressionType(*comp.left, error_msg);
     auto SimplifyZeroAddition = [&](auto &&self, unique_ptr<ParsedExpression> &node) -> void {
@@ -145,7 +145,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
         }
     };
     SimplifyZeroAddition(SimplifyZeroAddition, comp.right);
-    DebugPrintParsed("BindComparison.right (simplified)", *comp.right);
+    // DebugPrintParsed("BindComparison.right (simplified)", *comp.right);
     auto &right = *comp.right;
     switch (comp.type) {
     case ExpressionType::COMPARE_EQUAL: {
@@ -186,7 +186,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                                     var_name);
                             } else if (type_marker == "binary_variable") {
                                 var_types[var_idx] = LogicalType::BOOLEAN;
-                                deb("Type declaration: variable '", var_name, "' is BINARY");
+                                // deb("Type declaration: variable '", var_name, "' is BINARY");
                             }
 
                             // Don't bind this as a constraint - it's metadata

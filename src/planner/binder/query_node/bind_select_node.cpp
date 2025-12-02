@@ -428,32 +428,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
     // Bind DECIDE clause before ExpandStarExpression
     if (statement.HasDecideClause()) {
-        // Symbolic a("a"), b("b"), c("c");
-        // c = (a-b)^3;
-        // deb(c); // auto expand
-        // // Access each term in the expanded sum
-        // if (c.type() == typeid(Sum)) {
-        //     CastPtr<const Sum> sum(c);
-
-        //     for (auto& term : sum->summands) {
-        //         cout << "Term: " << term << endl;
-
-        //         // If the term is a product, access its factors
-        //         if (term.type() == typeid(Power)) {
-        //             // Handle a^2 or b^2
-        //             CastPtr<const Power> power(term);
-        //             cout << "  Power: base=" << power->parameters.front()
-        //                 << ", exp=" << power->parameters.back() << endl;
-        //         } else if (term.type() == typeid(Product)) {
-        //             CastPtr<const Product> prod(term);
-        //             cout << "  Factors: ";
-        //             for (auto& factor : prod->factors) {
-        //                 cout << factor << " ";
-        //             }
-        //             cout << endl;
-        //         }
-        //     }
-        // }
 
 		
 
@@ -475,59 +449,16 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             var_types.push_back(LogicalType::INTEGER);
         }
 
-        // // --- TEST CODE START ---
-        // deb("--- Testing ToSymbolic on DECIDE clauses ---");
-        // try {
-        //     SymbolicTranslationContext symbolic_ctx(decide_variable_names);
-        //     // Print DECIDE variable set
-        //     {
-        //         std::stringstream vars_ss;
-        //         for (idx_t i = 0; i < var_names.size(); i++) {
-        //             if (i > 0) vars_ss << ", ";
-        //             vars_ss << var_names[i];
-        //         }
-        //         deb("DECIDE variables:", vars_ss.str());
-        //     }
-        //     // SUCH THAT constraints symbolic (if present)
-        //     if (statement.decide_constraints) {
-        //         auto &constraints = *statement.decide_constraints;
-        //         auto sym_str = ToSymbolic(constraints, symbolic_ctx);
-        //         deb("Parsed SUCH THAT:", constraints.ToString());
-        //         deb("Symbolic SUCH THAT:", sym_str);
-        //     } else {
-        //         deb("No SUCH THAT clause.");
-        //     }
-        //     // Objective symbolic (if present)
-        //     if (statement.decide_objective) {
-        //         auto &objective = *statement.decide_objective;
-        //         auto sym_str = ToSymbolic(objective, symbolic_ctx);
-        //         deb("Parsed DECIDE objective:", objective.ToString());
-        //         deb("Symbolic objective:", sym_str);
-        //     } else {
-        //         deb("No DECIDE objective.");
-        //     }
-        // } catch (const std::exception &e) {
-        //     deb("Error during ToSymbolic test:", e.what());
-        // }
-        // deb("--- Testing ToSymbolic complete ---");
-        // // --- TEST CODE END ---
-        // // Normalize DECIDE clauses before binding
-        // if (statement.decide_constraints) {
-        //     statement.decide_constraints = NormalizeDecideConstraints(*statement.decide_constraints, decide_variable_names);
-        // }
-        // if (statement.decide_objective) {
-        //     statement.decide_objective = NormalizeDecideObjective(*statement.decide_objective, decide_variable_names);
-        // }
-        // DOT dumps for DECIDE clauses (before/after normalization)
+
         if (statement.decide_constraints) {
-            deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
+            // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
             statement.decide_constraints = NormalizeDecideConstraints(*statement.decide_constraints, decide_variable_names);
-            deb("-- Normalized SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
+            // deb("-- Normalized SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
         }
         if (statement.decide_objective) {
-            deb("-- Parsed OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
+            // deb("-- Parsed OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
             statement.decide_objective = NormalizeDecideObjective(*statement.decide_objective, decide_variable_names);
-            deb("-- Normalized OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
+            // deb("-- Normalized OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
         }
 
         bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types);

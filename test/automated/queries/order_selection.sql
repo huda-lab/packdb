@@ -1,5 +1,3 @@
-
-
 SELECT x, o_orderkey, o_totalprice
 FROM orders
 WHERE o_orderdate >= '1995-01-01' AND o_orderdate < '1995-02-01'

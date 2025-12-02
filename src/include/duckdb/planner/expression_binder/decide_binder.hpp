@@ -26,12 +26,12 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<id
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 
-inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
-	deb("[BINDER] ", tag, ": ", expr.ToString());
-}
-inline void DebugPrintBound(const string &tag, const Expression &expr) {
-	deb("[BINDER] ", tag, ": ", expr.ToString());
-}
+// inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
+// 	deb("[BINDER] ", tag, ": ", expr.ToString());
+// }
+// inline void DebugPrintBound(const string &tag, const Expression &expr) {
+// 	deb("[BINDER] ", tag, ": ", expr.ToString());
+// }
 
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {

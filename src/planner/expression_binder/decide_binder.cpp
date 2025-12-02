@@ -211,7 +211,7 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<id
 		error_msg = "SUM expression must reference at least one DECIDE variable";
 		return false;
 	}
-	DebugPrintParsed("ValidateSumArgument.ok", expr);
+	// DebugPrintParsed("ValidateSumArgument.ok", expr);
 	return true;
 }
 

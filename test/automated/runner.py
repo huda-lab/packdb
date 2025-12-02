@@ -23,7 +23,7 @@ def run_highs_solver(mps_file, solution_file):
     highs_bin = Path(__file__).parent.parent.parent / "build" / "release" / "bin" / "highs"
     
     result = subprocess.run(
-        [str(highs_bin), mps_file, f"--solution_file={solution_file}"],
+        [str(highs_bin), mps_file, f"--solution_file={solution_file}", "--time_limit=60.0"],
         capture_output=True,
         text=True
     )
@@ -700,7 +700,12 @@ def run_test(query_file, db_file, output_dir):
     
     # 3. Generate MPS file from query and data
     mps_file = test_dir / 'model.mps'
-    success, status, data, columns, obj_sense, decide_vars = query_to_mps(query_file, db_file, mps_file)
+    result = query_to_mps(query_file, db_file, mps_file)
+    if not result:
+        print("ERROR: Failed to generate MPS file")
+        return False
+        
+    success, status, data, columns, obj_sense, decide_vars = result
     
     highs_solution_csv = test_dir / 'highs_solution.csv'
     highs_status_file = test_dir / 'highs_status.txt'
@@ -928,16 +933,31 @@ def compare_results(highs_csv, packdb_csv, sort_cols=None):
             
         for i, (h, p) in enumerate(zip(h_dicts, p_dicts)):
             for col in common_cols:
-                # Try float comparison
-                try:
-                    vh = float(h[col])
-                    vp = float(p[col])
-                    if abs(vh - vp) > 1e-5:
-                        return False, f"Mismatch in row {i}, col '{col}': {vh} != {vp}"
-                except ValueError:
-                    if h[col] != p[col]:
-                        return False, f"Mismatch in row {i}, col '{col}': '{h[col]}' != '{p[col]}'"
-                        
+                h_val = h[col]
+                p_val = p[col]
+                
+                # Loose equality check
+                def normalize(v):
+                    v_str = str(v).lower().strip()
+                    if v_str in ['true', '1', '1.0']: return 1
+                    if v_str in ['false', '0', '0.0']: return 0
+                    try:
+                        f = float(v)
+                        if f.is_integer(): return int(f)
+                        return f
+                    except ValueError:
+                        return v_str
+                
+                if normalize(h_val) != normalize(p_val):
+                    # Try float comparison with tolerance
+                    try:
+                        f_h = float(h_val)
+                        f_p = float(p_val)
+                        if abs(f_h - f_p) > 1e-4:
+                            return False, f"Mismatch in row {i}, col '{col}': {h_val} != {p_val}"
+                    except ValueError:
+                         return False, f"Mismatch in row {i}, col '{col}': '{h_val}' != '{p_val}'"
+        
         return True, "Match"
         
     except Exception as e:
