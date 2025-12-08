@@ -1,6 +1,7 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include <cmath>
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
@@ -17,7 +18,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
-#include "Highs.h"
+#include "duckdb/packdb/naive/deterministic_naive.hpp"
 
 namespace duckdb {
 
@@ -246,8 +247,13 @@ public:
     }
 
     void AnalyzeObjective(const unique_ptr<Expression>& expr_ptr) {
-        if (expr_ptr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-            auto &agg = expr_ptr->Cast<BoundAggregateExpression>();
+        auto *expr = expr_ptr.get();
+        while (expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            expr = expr->Cast<BoundCastExpression>().child.get();
+        }
+
+        if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+            auto &agg = expr->Cast<BoundAggregateExpression>();
 
             objective = make_uniq<LinearObjective>();
             op.ExtractLinearTerms(*agg.children[0], objective->terms);
@@ -280,7 +286,13 @@ public:
                 auto &comp = expr.Cast<BoundComparisonExpression>();
 
                 // Check if this is a variable-level constraint (not SUM)
-                if (comp.left->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+                // Handle CASTs wrapping aggregates (e.g., CAST(SUM(x)) >= 10)
+                auto *lhs = comp.left.get();
+                while (lhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    lhs = lhs->Cast<BoundCastExpression>().child.get();
+                }
+
+                if (lhs->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
                     idx_t var_idx = op.FindDecideVariable(*comp.left);
 
                     if (var_idx != DConstants::INVALID_INDEX) {
@@ -343,15 +355,7 @@ public:
     // Evaluated Coefficients (Phase 2)
     //===--------------------------------------------------------------------===//
 
-    //! Stores evaluated numeric coefficients for a constraint
-    struct EvaluatedConstraint {
-        vector<idx_t> variable_indices;           // Which variable for each term
-        vector<vector<double>> row_coefficients;  // [term_idx][row_idx] = coefficient value
-        vector<double> rhs_values;                // [row_idx] = RHS value
-        ExpressionType comparison_type;
-        bool lhs_is_aggregate = false;            // True if original LHS was aggregate (e.g., SUM(...))
-    };
-
+    // Uses duckdb::EvaluatedConstraint from deterministic_naive.hpp
     vector<EvaluatedConstraint> evaluated_constraints;
     vector<vector<double>> evaluated_objective_coefficients;  // [term_idx][row_idx]
     vector<idx_t> objective_variable_indices;
@@ -419,7 +423,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     for (idx_t c = 0; c < gstate.constraints.size(); c++) {
         auto &constraint = gstate.constraints[c];
 
-        DecideGlobalSinkState::EvaluatedConstraint eval_const;
+        EvaluatedConstraint eval_const;
         eval_const.comparison_type = constraint->comparison_type;
         // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
@@ -521,28 +525,75 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
         // Evaluate RHS
-        // After symbolic normalization, RHS should be a scalar constant or aggregate expression
-        // The binder ensures RHS has no row-varying terms, only constants and aggregates
-        double rhs_constant = 0.0;
+        // RHS can be a constant, an aggregate (scalar), or a row-varying expression (for row-wise constraints)
+        
+        // Initialize RHS values vector
+        eval_const.rhs_values.reserve(num_rows);
 
         if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
             auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
-            rhs_constant = const_expr.value.GetValue<double>();
+            double rhs_constant = const_expr.value.GetValue<double>();
+            eval_const.rhs_values.assign(num_rows, rhs_constant);
         } else {
-            // RHS is a complex expression like "(-15.0 + sum(-11.0))"
-            // Use ExpressionExecutor to evaluate it. This handles constants, math functions,
-            // and potentially uncorrelated subqueries if supported by the executor.
-            try {
-                Value val = ExpressionExecutor::EvaluateScalar(context, *constraint->rhs_expr);
-                rhs_constant = val.GetValue<double>();
-            } catch (const Exception &e) {
-                // Fallback or rethrow with context
-                throw InternalException("Failed to evaluate DECIDE constraint RHS: %s", e.what());
+            // RHS is a complex expression. It might be row-varying (e.g., column ref) or scalar (aggregate).
+            // We evaluate it against the data chunks.
+            
+            // Transform expression to use BoundReferenceExpression (same as LHS)
+            std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
+            TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
+                if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    auto &colref = expr.Cast<BoundColumnRefExpression>();
+                    return make_uniq<BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                    auto &func = expr.Cast<BoundFunctionExpression>();
+                    vector<unique_ptr<Expression>> new_children;
+                    for (auto &child : func.children) {
+                        new_children.push_back(TransformExpression(*child));
+                    }
+                    unique_ptr<FunctionData> new_bind_info;
+                    if (func.bind_info) {
+                        new_bind_info = func.bind_info->Copy();
+                    }
+                    return make_uniq<BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    auto &cast = expr.Cast<BoundCastExpression>();
+                    auto transformed_child = TransformExpression(*cast.child);
+                    return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+                } else {
+                    return expr.Copy();
+                }
+            };
+
+            auto transformed_rhs = TransformExpression(*constraint->rhs_expr);
+            
+            // DEBUG
+            std::cout << "RHS Original: " << constraint->rhs_expr->ToString() << " Class: " << (int)constraint->rhs_expr->GetExpressionClass() << std::endl;
+            std::cout << "RHS Transformed: " << transformed_rhs->ToString() << " Class: " << (int)transformed_rhs->GetExpressionClass() << std::endl;
+
+            // Prepare executor
+            ExpressionExecutor rhs_executor(context);
+            rhs_executor.AddExpression(*transformed_rhs);
+
+            // Scan data and evaluate
+            ColumnDataScanState rhs_scan_state;
+            gstate.data.InitializeScan(rhs_scan_state);
+            DataChunk rhs_chunk;
+            rhs_chunk.Initialize(context, gstate.data.Types());
+
+            while (gstate.data.Scan(rhs_scan_state, rhs_chunk)) {
+                DataChunk rhs_result;
+                vector<LogicalType> result_types = {transformed_rhs->return_type};
+                rhs_result.Initialize(context, result_types);
+                rhs_executor.Execute(rhs_chunk, rhs_result);
+
+                auto &vec = rhs_result.data[0];
+                for (idx_t row_in_chunk = 0; row_in_chunk < rhs_chunk.size(); row_in_chunk++) {
+                    Value val = vec.GetValue(row_in_chunk);
+                    double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                    eval_const.rhs_values.push_back(double_val);
+                }
             }
         }
-
-        // RHS is same for all rows after normalization
-        eval_const.rhs_values.resize(num_rows, rhs_constant);
 
         gstate.evaluated_constraints.push_back(std::move(eval_const));
     }
@@ -621,345 +672,45 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // PHASE 3: Build and Solve ILP with HiGHS
     //===--------------------------------------------------------------------===//
 
+    //===--------------------------------------------------------------------===//
+    // PHASE 3: Build and Solve ILP with DeterministicNaive
+    //===--------------------------------------------------------------------===//
+
     idx_t num_decide_vars = decide_variables.size();
-    idx_t total_vars = num_rows * num_decide_vars;
-
-    // Create HiGHS model
-    Highs highs;
-    // highs.setOptionValue("output_flag", true); // Show HiGHS output for debugging
-    deb("Setting HiGHS log to console");
-    highs.setOptionValue("log_to_console", true);
-
-    // Variable indexing: var_index = row_idx * num_decide_vars + decide_var_idx
-    // So for row r and DECIDE variable v: index = r * num_decide_vars + v
-
-    //===--------------------------------------------------------------------===//
-    // 1. Set up variables with bounds and types
-    //===--------------------------------------------------------------------===//
-
-    vector<double> col_lower(total_vars);
-    vector<double> col_upper(total_vars);
-    vector<HighsVarType> var_types(total_vars);
-
-    // First, determine per-variable types and default bounds
-    vector<double> per_var_lower(num_decide_vars);
-    vector<double> per_var_upper(num_decide_vars);
-    vector<HighsVarType> per_var_types(num_decide_vars);
-
+    
+    // Construct SolverInput
+    SolverInput solver_input;
+    solver_input.num_rows = num_rows;
+    solver_input.num_decide_vars = num_decide_vars;
+    
+    // Variable types and bounds
+    solver_input.variable_types.resize(num_decide_vars);
+    solver_input.lower_bounds.assign(num_decide_vars, 0.0); // Default lower
+    solver_input.upper_bounds.assign(num_decide_vars, 1e30); // Default upper
+    
     for (idx_t var = 0; var < num_decide_vars; var++) {
-        // Extract type from decide_variables
         auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
-        auto logical_type = decide_var.return_type;
-
-        // DECIDE variables represent cardinality (count of tuples), so they MUST be integer types
-        // REAL/DOUBLE types are not allowed - this would have been caught in the binder
-        if (logical_type == LogicalType::DOUBLE || logical_type == LogicalType::FLOAT) {
-            throw InternalException(
-                "DECIDE variable has DOUBLE type, but DECIDE variables must be INTEGER "
-                "(they represent tuple cardinality). This should have been caught in the binder.");
-        } else if (logical_type == LogicalType::INTEGER || logical_type == LogicalType::BIGINT) {
-            // INTEGER variables: non-negative by default (cardinality >= 0)
-            per_var_types[var] = HighsVarType::kInteger;
-            per_var_lower[var] = 0.0;
-            per_var_upper[var] = 1e30;
-        } else if (logical_type == LogicalType::BOOLEAN) {
-            // BINARY variables: [0, 1] (either include or don't include)
-            per_var_types[var] = HighsVarType::kInteger;
-            per_var_lower[var] = 0.0;
-            per_var_upper[var] = 1.0;
-        } else {
-            // Default to INTEGER if type is not explicitly set
-            per_var_types[var] = HighsVarType::kInteger;
-            per_var_lower[var] = 0.0;
-            per_var_upper[var] = 1e30;
+        solver_input.variable_types[var] = decide_var.return_type;
+        
+        // Set default bounds based on type (same logic as in solver, but good to be explicit)
+        if (decide_var.return_type == LogicalType::BOOLEAN) {
+            solver_input.upper_bounds[var] = 1.0;
         }
     }
-
-    // Override with explicit bounds from constraints (Part 3)
-    gstate.ExtractVariableBounds(per_var_lower, per_var_upper);
-
-    // Apply per-variable bounds and types to all rows
-    for (idx_t row = 0; row < num_rows; row++) {
-        for (idx_t var = 0; var < num_decide_vars; var++) {
-            idx_t var_idx = row * num_decide_vars + var;
-            col_lower[var_idx] = per_var_lower[var];
-            col_upper[var_idx] = per_var_upper[var];
-            var_types[var_idx] = per_var_types[var];
-        }
-    }
-
-    //===--------------------------------------------------------------------===//
-    // 2. Set up objective function
-    //===--------------------------------------------------------------------===//
-
-    vector<double> obj_coeffs(total_vars, 0.0);
-
-    if (gstate.objective) {
-        for (idx_t term_idx = 0; term_idx < gstate.objective_variable_indices.size(); term_idx++) {
-            idx_t decide_var_idx = gstate.objective_variable_indices[term_idx];
-
-            for (idx_t row = 0; row < num_rows; row++) {
-                idx_t var_idx = row * num_decide_vars + decide_var_idx;
-                obj_coeffs[var_idx] = gstate.evaluated_objective_coefficients[term_idx][row];
-            }
-        }
-    }
-
-    // Set sense (maximize or minimize)
-    ObjSense sense = (decide_sense == DecideSense::MAXIMIZE)
-        ? ObjSense::kMaximize
-        : ObjSense::kMinimize;
-
-    //===--------------------------------------------------------------------===//
-    // 3. Set up constraints
-    //===--------------------------------------------------------------------===//
-
-    // Constraint matrix in COO format (row, col, value)
-    vector<int> a_rows;
-    vector<int> a_cols;
-    vector<double> a_vals;
-    vector<double> row_lower;
-    vector<double> row_upper;
-
-    idx_t constraint_idx = 0;
-    for (auto &eval_const : gstate.evaluated_constraints) {
-        // Use original provenance: aggregate if and only if LHS was an aggregate (e.g., SUM(...))
-        bool is_aggregate = eval_const.lhs_is_aggregate;
-
-        if (is_aggregate) {
-            // AGGREGATE CONSTRAINT: SUM(x) <= 10
-            // Create ONE constraint that sums across ALL rows
-            for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                if (decide_var_idx != DConstants::INVALID_INDEX) {
-                    // Add entry for each row's variable with its specific coefficient
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        double coeff = eval_const.row_coefficients[term_idx][row];
-                        
-                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
-                        a_rows.push_back(constraint_idx);
-                        a_cols.push_back(var_idx);
-                        a_vals.push_back(coeff);
-                    }
-                }
-            }
-
-            // Set constraint bounds
-            double rhs = eval_const.rhs_values[0]; // Same for all rows
-
-            if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                row_lower.push_back(rhs);
-                row_upper.push_back(1e30);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-                // Integer model: sum(x) > c  => sum(x) >= floor(c) + 1
-                double lb = std::floor(rhs) + 1.0;
-                row_lower.push_back(lb);
-                row_upper.push_back(1e30);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                row_lower.push_back(-1e30);
-                row_upper.push_back(rhs);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-                // Integer model: sum(x) < c  => sum(x) <= ceil(c) - 1
-                double ub = std::ceil(rhs) - 1.0;
-                row_lower.push_back(-1e30);
-                row_upper.push_back(ub);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                row_lower.push_back(rhs);
-                row_upper.push_back(rhs);
-            }
-
-            constraint_idx++;
-
-        } else {
-            // PER-ROW CONSTRAINT: Create separate constraint for each row
-
-            for (idx_t row = 0; row < num_rows; row++) {
-                // Build constraint for this row
-                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                    if (decide_var_idx != DConstants::INVALID_INDEX) {
-                        double coeff = eval_const.row_coefficients[term_idx][row];
-                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
-
-                        a_rows.push_back(constraint_idx);
-                        a_cols.push_back(var_idx);
-                        a_vals.push_back(coeff);
-                    }
-                }
-
-                // Set constraint bounds based on comparison type
-                double rhs = eval_const.rhs_values[row];
-
-                if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                    row_lower.push_back(rhs);
-                    row_upper.push_back(1e30);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-                    // Integer model: x > c  => x >= floor(c) + 1
-                    double lb = std::floor(rhs) + 1.0;
-                    row_lower.push_back(lb);
-                    row_upper.push_back(1e30);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                    row_lower.push_back(-1e30);
-                    row_upper.push_back(rhs);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-                    // Integer model: x < c  => x <= ceil(c) - 1
-                    double ub = std::ceil(rhs) - 1.0;
-                    row_lower.push_back(-1e30);
-                    row_upper.push_back(ub);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                    row_lower.push_back(rhs);
-                    row_upper.push_back(rhs);
-                }
-
-                constraint_idx++;
-            }
-        }
-    }
-
-    //===--------------------------------------------------------------------===//
-    // 4. Build HighsLp model and pass to HiGHS
-    //===--------------------------------------------------------------------===//
-
-    idx_t num_constraints = constraint_idx; // Total number of constraints created
-
-    // Sanity checks before passing to solver
-    if (row_lower.size() != num_constraints || row_upper.size() != num_constraints) {
-        throw InternalException("Row bounds size mismatch: row_lower=%llu row_upper=%llu num_constraints=%llu",
-            (idx_t)row_lower.size(), (idx_t)row_upper.size(), num_constraints);
-    }
-    for (idx_t i = 0; i < num_constraints; i++) {
-        if (!(std::isfinite(row_lower[i]) || std::isinf(row_lower[i]))) {
-            throw InternalException("Row lower bound NaN at row %llu", i);
-        }
-        if (!(std::isfinite(row_upper[i]) || std::isinf(row_upper[i]))) {
-            throw InternalException("Row upper bound NaN at row %llu", i);
-        }
-        if (row_lower[i] > row_upper[i]) {
-            throw InternalException("Infeasible row bounds at row %llu: [%f, %f]", i, row_lower[i], row_upper[i]);
-        }
-    }
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        if ((idx_t)a_rows[i] >= num_constraints) {
-            throw InternalException("Constraint matrix row index out of range at nz %llu: row=%d >= %llu",
-                i, a_rows[i], num_constraints);
-        }
-        if ((idx_t)a_cols[i] >= total_vars) {
-            throw InternalException("Constraint matrix col index out of range at nz %llu: col=%d >= %llu",
-                i, a_cols[i], total_vars);
-        }
-        if (!std::isfinite(a_vals[i])) {
-            throw InternalException("Constraint matrix value not finite at nz %llu: %f", i, a_vals[i]);
-        }
-    }
-    for (idx_t i = 0; i < total_vars; i++) {
-        if (!std::isfinite(col_lower[i]) || !std::isfinite(col_upper[i]) || col_lower[i] > col_upper[i]) {
-            throw InternalException("Column bounds invalid at col %llu: [%f, %f]", i, col_lower[i], col_upper[i]);
-        }
-        if (!std::isfinite(obj_coeffs[i])) {
-            throw InternalException("Objective coefficient not finite at col %llu: %f", i, obj_coeffs[i]);
-        }
-    }
-
-    HighsLp lp;
-    lp.num_col_ = total_vars;
-    lp.num_row_ = num_constraints;
-    lp.sense_ = sense;
-    lp.offset_ = 0.0;
-    lp.col_cost_ = obj_coeffs;
-    lp.col_lower_ = col_lower;
-    lp.col_upper_ = col_upper;
-    lp.row_lower_ = row_lower;
-    lp.row_upper_ = row_upper;
-
-    // Constraint matrix in CSR format
-    // Convert from COO (row, col, val) to CSR (row pointers, column indices, values)
-    lp.a_matrix_.format_ = MatrixFormat::kRowwise;
-
-    // Build CSR format
-    vector<HighsInt> row_starts(num_constraints + 1, 0);
-
-    // Count non-zeros per row
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        row_starts[a_rows[i] + 1]++;
-    }
-
-    // Convert counts to cumulative sum (row start indices)
-    for (idx_t i = 0; i < num_constraints; i++) {
-        row_starts[i + 1] += row_starts[i];
-    }
-
-    // Fill column indices and values
-    vector<HighsInt> col_indices(a_vals.size());
-    vector<double> values(a_vals.size());
-    vector<HighsInt> current_pos = row_starts; // Track current position for each row
-
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        idx_t row = a_rows[i];
-        idx_t pos = current_pos[row];
-        col_indices[pos] = a_cols[i];
-        values[pos] = a_vals[i];
-        current_pos[row]++;
-    }
-
-    lp.a_matrix_.start_ = row_starts;
-    lp.a_matrix_.index_ = col_indices;
-    lp.a_matrix_.value_ = values;
-
-    // Set integrality
-    lp.integrality_.resize(total_vars);
-    for (idx_t i = 0; i < total_vars; i++) {
-        lp.integrality_[i] = (var_types[i] == HighsVarType::kInteger) ? HighsVarType::kInteger : HighsVarType::kContinuous;
-    }
-
-    HighsStatus status = highs.passModel(lp);
-
-    if (status != HighsStatus::kOk) {
-        throw InternalException("Failed to pass model to HiGHS: status %d", (int)status);
-    }
-
-    //===--------------------------------------------------------------------===//
-    // 5. Solve the ILP
-    //===--------------------------------------------------------------------===//
-
-    // Try writing model to a file for debugging if supported
-    // highs.writeModel("highs_model.mps");
-
-    status = highs.run();
-
-    if (status != HighsStatus::kOk) {
-        // Provide additional context if available
-        HighsModelStatus model_status = highs.getModelStatus();
-        throw InternalException("HiGHS solver failed: status %d, model_status %d", (int)status, (int)model_status);
-    }
-
-    // Get solution info
-    HighsModelStatus model_status = highs.getModelStatus();
-    // Throw on non-optimal models with descriptive messages
-    if (model_status != HighsModelStatus::kOptimal) {
-        if (model_status == HighsModelStatus::kInfeasible) {
-            throw InternalException("DECIDE optimization infeasible: constraints cannot be satisfied (model_status=%d)", (int)model_status);
-        } else if (model_status == HighsModelStatus::kUnbounded) {
-            throw InternalException("DECIDE optimization unbounded: objective can grow without bound (model_status=%d)", (int)model_status);
-        } else {
-            throw InternalException("DECIDE optimization failed: model_status=%d", (int)model_status);
-        }
-    }
-
-    //===--------------------------------------------------------------------===//
-    // 6. Extract solution
-    //===--------------------------------------------------------------------===//
-
-    const HighsSolution& solution = highs.getSolution();
-    gstate.ilp_solution.resize(total_vars);
-
-    for (idx_t i = 0; i < total_vars; i++) {
-        gstate.ilp_solution[i] = solution.col_value[i];
-    }
-
-    // Get objective value
-    // Objective details are printed by HiGHS; no additional debug needed
+    
+    // Extract bounds from constraints
+    gstate.ExtractVariableBounds(solver_input.lower_bounds, solver_input.upper_bounds);
+    
+    // Constraints
+    solver_input.constraints = std::move(gstate.evaluated_constraints);
+    
+    // Objective
+    solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
+    solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
+    solver_input.sense = decide_sense;
+    
+    // Solve
+    gstate.ilp_solution = DeterministicNaive::Solve(solver_input);
 
     return SinkFinalizeType::READY;
 }

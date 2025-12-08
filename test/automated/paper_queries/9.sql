@@ -1,0 +1,11 @@
+DROP VIEW IF EXISTS Tpch;
+CREATE VIEW Tpch AS SELECT *, l_extendedprice AS revenue FROM lineitem LIMIT 100;
+
+SELECT *
+FROM Tpch R
+DECIDE x
+SUCH THAT x IS INTEGER AND
+    x BETWEEN 0 AND 1 AND
+    SUM(x) <= 2.667e-6 * (SELECT COUNT(*) FROM Tpch) AND
+    SUM(x) >= 1
+MAXIMIZE SUM(revenue*x);

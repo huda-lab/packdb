@@ -24,10 +24,12 @@ Before solving, the operator must evaluate the row-varying coefficients (e.g., `
 ### Phase 3: Solver Integration (HiGHS)
 The operator builds and solves the ILP model using the HiGHS library.
 - **Variables**: One solver variable is created for each combination of (row, decision_variable).
-- **Variable Types**: Variables are set to `INTEGER` or `BINARY` based on their type definition.
+- **Variable Types**: All variables are set to `INTEGER` in the solver.
+    - **Binary Variables**: Handled as `INTEGER` variables with bounds `[0, 1]`.
+    - **Integer Variables**: Default bounds `[0, infinity]`.
 - **Constraints**: Linear inequalities are added to the model based on the evaluated coefficients.
     - **Aggregate Constraints**: `SUM(...)` constraints sum over all rows.
-    - **Row-wise Constraints**: (If implemented) would constrain individual rows.
+    - **Row-wise Constraints**: Constraints that apply to individual rows (e.g., `x <= 5`).
 - **Objective**: The objective function coefficients are set for each variable.
 
 ### Phase 4: Solution Extraction

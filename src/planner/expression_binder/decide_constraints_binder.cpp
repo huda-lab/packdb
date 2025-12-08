@@ -185,8 +185,23 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                                     "DECIDE variables represent tuple cardinality (count) and must be INTEGER or BINARY.",
                                     var_name);
                             } else if (type_marker == "binary_variable") {
-                                var_types[var_idx] = LogicalType::BOOLEAN;
-                                // deb("Type declaration: variable '", var_name, "' is BINARY");
+                                var_types[var_idx] = LogicalType::INTEGER;
+                                // deb("Type declaration: variable '", var_name, "' is BINARY (treated as INTEGER with 0-1 bounds)");
+                                
+                                // Create implicit constraints: 0 <= x <= 1
+                                // We replace the "x IS BINARY" expression with "(x >= 0) AND (x <= 1)"
+                                auto x_ref = comp.left->Copy();
+                                auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
+                                auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
+                                
+                                auto lower_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, x_ref->Copy(), std::move(zero));
+                                auto upper_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(x_ref), std::move(one));
+                                
+                                auto bounds = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound), std::move(upper_bound));
+                                
+                                // Bind the new constraints
+                                unique_ptr<ParsedExpression> bounds_ptr = std::move(bounds);
+                                return BindExpression(bounds_ptr, depth);
                             }
 
                             // Don't bind this as a constraint - it's metadata

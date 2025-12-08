@@ -24,12 +24,14 @@ Binds the `SUCH THAT` clause.
     - **Variable Constraints**: `x <= c`, `x >= c`, `x IN (...)`.
     - **Sum Constraints**: `SUM(linear_expr) <= rhs`, `SUM(linear_expr) >= rhs`.
 - **RHS Validation**: The Right-Hand Side (RHS) must be a scalar expression. It can be a constant, a scalar subquery (uncorrelated), or an expression evaluating to a scalar. It must **not** contain any DECIDE variables.
-- **Type Refinement**: It detects type declarations like `x IS INTEGER` and updates the variable's type in the binding context.
+- **Type Refinement**: It detects type declarations like `x IS INTEGER` and `x IS BINARY`.
+    - `x IS BINARY`: Transformed into `x IS INTEGER` with added constraints `x >= 0` AND `x <= 1`.
+    - `x IS REAL`: Explicitly rejected (DECIDE variables must be integers representing cardinality).
 - **Supported Constraints**:
     - Inequalities: `<=`, `>=`
     - Equality: `=`
     - Range: `BETWEEN` (transformed into `>=` AND `<=`)
-    - Set membership: `IN` (transformed into ORs of equalities)
+    - Set membership: `IN` (validated to ensure LHS is a DECIDE variable and RHS contains no DECIDE variables)
 - **Subqueries**: Uncorrelated scalar subqueries are executed at bind-time and replaced with their constant result.
 
 ### `DecideObjectiveBinder`

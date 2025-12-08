@@ -9,6 +9,7 @@
 #include "duckdb/planner/operator/logical_create_index.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -133,6 +134,32 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 		ext_op.ResolveColumnBindings(*this, bindings);
 		return;
 	}
+	case LogicalOperatorType::LOGICAL_DECIDE: {
+		VisitOperatorChildren(op);
+		auto &decide_op = op.Cast<LogicalDecide>();
+		
+		// Add DECIDE variables to ignored bindings so they are not resolved to physical columns
+		for (auto &expr : decide_op.decide_variables) {
+			if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+				auto &colref = expr->Cast<BoundColumnRefExpression>();
+				ignored_bindings.push_back(colref.binding);
+			}
+			VisitExpression(&expr);
+		}
+		
+		if (decide_op.decide_constraints) {
+			VisitExpression(&decide_op.decide_constraints);
+		}
+		if (decide_op.decide_objective) {
+			VisitExpression(&decide_op.decide_objective);
+		}
+		
+		// Clear ignored bindings after visiting expressions
+		ignored_bindings.clear();
+		
+		bindings = op.GetColumnBindings();
+		return;
+	}
 	default:
 		break;
 	}
@@ -149,6 +176,12 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 unique_ptr<Expression> ColumnBindingResolver::VisitReplace(BoundColumnRefExpression &expr,
                                                            unique_ptr<Expression> *expr_ptr) {
 	D_ASSERT(expr.depth == 0);
+	// check if this binding should be ignored (e.g. DECIDE variables)
+	for (auto &ignored : ignored_bindings) {
+		if (expr.binding == ignored) {
+			return nullptr;
+		}
+	}
 	// check the current set of column bindings to see which index corresponds to the column reference
 	for (idx_t i = 0; i < bindings.size(); i++) {
 		if (expr.binding == bindings[i]) {

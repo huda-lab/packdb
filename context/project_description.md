@@ -41,11 +41,8 @@ PackDB extends DuckDB with package queries via a new DECIDE/SUCH THAT/[MAXIMIZE|
   - New enums: `DecideSense`, `DecideExpression`, `DeterministicConstraintSense`.
   - Operators: `LogicalDecide`, `PhysicalDecide`.
 
-- **Tests**
-  - Comprehensive tests for Parser, Binder, and Execution layers, including subqueries, equality constraints, and BETWEEN constraints.
 
 ### Current status and next steps
 
 - Implemented: Parsing, Binding, Logical Planning, Physical Execution, Solver Integration.
 - Features: Variable bounds, Equality constraints, BETWEEN constraints, Subquery support.
-- Pending: Advanced optimizations, correlated subquery support (future work).

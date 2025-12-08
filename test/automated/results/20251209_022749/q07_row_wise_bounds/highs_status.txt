@@ -1,0 +1,2 @@
+Status: OPTIMAL
+Objective: -967405.0
