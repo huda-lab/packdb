@@ -1,89 +1,34 @@
-# Testing Framework
+# Implementation Part 4: Evaluation & Testing
 
-This document describes the automated testing framework for PackDB's DECIDE clause and how to use it for debugging.
+## 1. Testing Methodology
+Optimizers are notoriously difficult to test because small bugs can lead to "slightly" sub-optimal solutions that are hard to detect manually. To ensure correctness, we implemented a **Differential Testing** framework (Oracle Testing).
 
-## Overview
+## 2. The Verification Pipeline
 
-The testing framework verifies the correctness of the DECIDE clause by comparing PackDB's results against a trusted Oracle.
-The Oracle is implemented in Python: it parses the SQL query, formulates an Integer Linear Program (ILP) in MPS format, and solves it using the HiGHS solver directly.
+The testing system (located in `test/automated/runner.py`) treats PackDB as a "System Under Test" (SUT) and compares it against a trusted "Oracle".
 
-## Location
+### 2.1 The Oracle Model
+The Oracle is an independent implementation of the `DECIDE` logic written in Python.
+1.  **Input**: Takes the pure SQL query.
+2.  **Solver Direct Access**: It parses the SQL to understand constraints, then fetches the raw data from DuckDB tables into Python arrays.
+3.  **Construction**: It bypasses PackDB's internal logic and builds an optimization model directly using the HiGHS Python API (or MPS format).
+4.  **Truth**: The solution found by this path is considered the "Ground Truth".
 
-*   **Test Runner:** `test/automated/runner.py`
-*   **Test Queries:** `test/automated/queries/`
-*   **Test Results:** `test/automated/results/`
+### 2.2 The Comparison
+For every test case:
+1.  **Run Oracle**: Generate `highs_solution.csv` (Optimal Objective & Variable settings).
+2.  **Run PackDB**: Execute the SQL in PackDB to get `packdb_solution.csv`.
+3.  **Verify**:
+    -   **Objective Value**: Must match within floating-point tolerance ($10^{-6}$).
+    -   **Decision Variables**: If the problem has a unique solution, variables must match exactly. If multiple solutions exist with the same objective value, the test verifies that PackDB's solution is feasible and achieves the optimal objective.
 
-## Usage
+## 3. Test Coverage
+The suite (`test/automated/queries/`) covers:
+-   **Basic Constraints**: Bounds (`0 <= x <= 1`), Binary variables.
+-   **Aggregations**: `SUM(x * price)`.
+-   **Complex Expressions**: `(x + y) / 2 <= 10`.
+-   **Subqueries**: Using scalar subqueries in bounds (e.g., `x <= (SELECT MAX(v) FROM T)`).
+-   **Infeasibility**: Verifying that impossible constraints return an empty result or error status.
 
-### Run All Tests
-To run all `.sql` queries found in `test/automated/queries/`:
-
-```bash
-python3 test/automated/runner.py
-```
-
-### Run a Single Test
-To run a specific query file (useful for debugging a new feature or regression):
-
-```bash
-python3 test/automated/runner.py path/to/your_query.sql
-```
-
-## How it Works
-
-The `runner.py` script performs the following steps for each test:
-
-1.  **Oracle Execution (HiGHS)**
-    *   **Parse:** The Python script parses the input SQL query to extract decision variables, constraints, and the objective. It handles `IS BINARY` (treated as 0-1 bounds) and `IS INTEGER` (default).
-    *   **Data Fetch:** It queries the actual `packdb.db` (using DuckDB) to fetch the table data required to build the optimization model.
-    *   **MPS Generation:** It constructs an MPS file (`model.mps`) representing the optimization problem.
-    *   **Solve:** It runs the `highs` binary on the MPS file.
-    *   **Output:** Saves the optimal solution to `highs_solution.csv` and status to `highs_status.txt`.
-
-2.  **System Under Test (PackDB)**
-    *   **Execute:** It runs the same SQL query against PackDB (using the `duckdb` binary).
-    *   **Output:** Captures the output, parses the CSV result, and saves it to `packdb_solution.csv` and status to `packdb_status.txt`.
-
-3.  **Verification**
-    *   **Compare:** It compares the decision variable values in `highs_solution.csv` and `packdb_solution.csv`.
-    *   **Result:** Reports `PASS` if values match (within tolerance), otherwise `FAIL`.
-
-## Debugging Guide
-
-When a test fails, a timestamped directory is created in `test/automated/results/` (e.g., `test/automated/results/20231027_100000/test_name/`). Use the files in this directory to debug:
-
-### 1. Check the Status Files
-*   **`highs_status.txt`**: Did the Oracle find a solution? Is it `OPTIMAL` or `INFEASIBLE`?
-*   **`packdb_status.txt`**: Did PackDB crash or return an error? If so, the error message will be here.
-
-### 2. Compare Solutions
-*   **`highs_solution.csv`**: The expected solution.
-*   **`packdb_solution.csv`**: The actual solution from PackDB.
-*   If PackDB returned a result but it differs from HiGHS, check if the objective values match. Sometimes multiple optimal solutions exist.
-
-### 3. Inspect the Model
-*   **`model.mps`**: This is the ground truth optimization problem generated by the Python parser.
-    *   If you suspect the Python Oracle is wrong, inspect this file.
-    *   You can manually run HiGHS on it: `build/release/bin/highs path/to/model.mps`.
-
-### 4. Reproduce PackDB Issue
-*   **`query.sql`**: The exact query used.
-*   You can manually run it against PackDB to reproduce crashes or errors:
-    ```bash
-    ./build/release/duckdb packdb.db < path/to/query.sql
-    ```
-
-### 5. Enable Logging
-*   PackDB has a logging mechanism that can be enabled by setting the `packdb_log_dir` configuration option.
-*   When running manually:
-    ```bash
-    ./build/release/duckdb packdb.db -c "SET packdb_log_dir='/tmp/packdb_logs/'" < path/to/query.sql
-    ```
-*   Check the specified directory for log files.
-
-## Database Setup
-
-The tests run against the persistent `packdb.db`.
-*   Ensure you have run `./run.sh` at least once to initialize the database.
-*   The runner automatically handles `CREATE TABLE` and `INSERT` statements found in the test query files before running the `DECIDE` query.
-
+## 4. Debugging
+When a discrepancy is found, the framework dumps the exact MPS file generated by the Oracle. This allows developers to load the problem into an external viewer or solver to diagnose whether the issue lies in the PackDB formulation or the Oracle itself.

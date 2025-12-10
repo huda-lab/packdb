@@ -1,44 +1,37 @@
-# Physical Layer Documentation
+# Implementation Part 3: Physical Execution & Optimization
 
-## Overview
-The Physical Layer executes the package query by integrating with the HiGHS solver. It transforms the bound expression trees into a linear programming (ILP) model, solves it, and produces the final result set.
+## 1. Overview
+The `PhysicalDecide` operator sits at the heart of PackDB's execution engine. It is a **blocking operator**, meaning it must consume its entire input before it can produce any output. This is necessary because the optimal value for any single decision variable depends on the entire dataset (global optimization).
 
-**Source File**: `src/execution/operator/decide/physical_decide.cpp`
+**Key Source File**: `src/execution/operator/decide/physical_decide.cpp`
 
-## Execution Pipeline
+## 2. Execution Pipeline
 
-### Phase 1: Expression Analysis
-The `PhysicalDecide` operator first analyzes the bound constraints and objective to understand their structure.
-- **Visitor Pattern**: It uses a visitor pattern to traverse expression trees.
-- **`LinearTerm`**: Identifies terms as pairs of `{variable_index, coefficient_expression}`.
-- **`ExtractLinearTerms`**: Recursively extracts these terms from additive expressions.
-- **`AnalyzeConstraint` / `AnalyzeObjective`**: Converts complex bound expressions into a structured `LinearConstraint` or `LinearObjective` format, separating the decision variables from the row-varying coefficients.
-- **Implicit Casts**: Handles implicit casts (e.g., `CAST(SUM(...) AS DOUBLE)`) on the LHS of constraints to correctly identify aggregate constraints.
+### 2.1 Phase 1: Materialization (The Sink)
+DuckDB executes the query plan up to the `PhysicalDecide` node. The operator acts as a "Sink", collecting every tuple that satisfies the `WHERE` clause.
+-   **Storage**: Tuples are stored in a `ColumnDataCollection` (DuckDB's efficient in-memory columnar format).
+-   **Memory Management**: If the dataset exceeds memory limits, DuckDB would normally spill to disk, but the current solver integration requires in-memory access to build the matrix.
 
-### Phase 2: Coefficient Evaluation
-Before solving, the operator must evaluate the row-varying coefficients (e.g., `price * tax`) for every row in the input dataset.
-- **`EvaluatedConstraint`**: Stores the evaluated numeric coefficients for each term across all rows.
-- **`ExpressionExecutor`**: Used to evaluate the coefficient expressions against the input `DataChunk`s.
-- **Result**: A matrix of coefficients (`[term_idx][row_idx]`) and a vector of RHS values.
+### 2.2 Phase 2: Model Formulation
+Once all data is collected, the operator transforms the data-centric view into a matrix-centric view for the solver.
+1.  **Variable Instantiation**: For every row $r$ in the buffered data and every decision variable $x$, a corresponding solver column $Col_{r,x}$ is created.
+2.  **Constraint Evaluation**:
+    -   The operator evaluates the expression trees for the constraint coefficients.
+    -   Example: If the constraint is `SUM(cost * x) <= 100`, the operator evaluates `cost` for every row to generate the vector coefficients $[c_1, c_2, ..., c_n]$.
+3.  **Matrix Construction**: These values are passed to the HiGHS API to build the Constraint Matrix (Sparse format).
 
-### Phase 3: Solver Integration (HiGHS)
-The operator builds and solves the ILP model using the HiGHS library.
-- **Variables**: One solver variable is created for each combination of (row, decision_variable).
-- **Variable Types**: All variables are set to `INTEGER` in the solver.
-    - **Binary Variables**: Handled as `INTEGER` variables with bounds `[0, 1]`.
-    - **Integer Variables**: Default bounds `[0, infinity]`.
-- **Constraints**: Linear inequalities are added to the model based on the evaluated coefficients.
-    - **Aggregate Constraints**: `SUM(...)` constraints sum over all rows.
-    - **Row-wise Constraints**: Constraints that apply to individual rows (e.g., `x <= 5`).
-- **Objective**: The objective function coefficients are set for each variable.
+### 2.3 Phase 3: Solving (Highs Integration)
+PackDB links directly to `libhighs`.
+-   **API**: We use the Highs C++ API.
+-   **Configuration**: The solver is configured with a time limit (default 60s) and a "Silent" logging profile to avoid polluting the database logs.
+-   **Outcome**: The solver returns a status (Optimal, Infeasible, Unbounded) and a solution vector.
 
-### Phase 4: Solution Extraction
-Once the solver returns an optimal solution:
-- **`GetData`**: The operator scans the input data again (buffered in `DecideGlobalSourceState`).
-- **Mapping**: It maps the flat solution vector from HiGHS back to the corresponding rows and decision variables.
-- **Output**: It appends the decision variable values to the output `DataChunk`s, effectively "deciding" the package.
+### 2.4 Phase 4: Result Projection (The Source)
+If the solver finds an optimal solution:
+1.  The operator iterates over the buffered rows again.
+2.  It uses the map created in Phase 2 to look up the solution value for each row.
+3.  These values are appended as new columns to the result chunk.
+4.  The augmented chunk is passed up to the next operator (usually a `Projection` or `Limit`).
 
-## Key Data Structures
-- **`DecideGlobalSinkState`**: Buffers all input data and holds the analysis/evaluation results.
-- **`LinearConstraint`**: Structural representation of a constraint (before evaluation).
-- **`EvaluatedConstraint`**: Numeric representation of a constraint (after evaluation).
+## 3. Data Consistency
+A critical design choice is that PackDB guarantees **read consistency**. The optimization is performed on the snapshot of data seen by the query. Any concurrent modifications to the tables do not affect the running optimization model, as it works on the materialized buffer.

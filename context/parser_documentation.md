@@ -1,54 +1,54 @@
-# Parser & Symbolic Layer Documentation
+# Implementation Part 1: Parser & Symbolic Layer
 
-## Overview
-The Parser and Symbolic layer is responsible for the initial processing and normalization of DECIDE clauses. It acts as a pre-processing step before the Binder, ensuring that complex algebraic expressions are rewritten into a canonical form that separates decision variables from row-varying terms.
+## 1. Overview
+The Parser and Symbolic Layer is the entry point for the `DECIDE` clause. Its primary responsibility is not just to build a parse tree, but to **normalize** the user's algebraic expressions into a canonical form that the system can optimize. This is a critical step because SQL allows flexible expression shapes (e.g., `x * 2 + 5`), whereas linear solvers require a strict `coeff * variable` structure.
 
-**Source File**: `src/packdb/symbolic/decide_symbolic.cpp`
+**Key Source File**: `src/packdb/symbolic/decide_symbolic.cpp`
 
-## Key Concepts
+## 2. Symbolic Translation
+PackDB integrates `SymbolicC++` to perform algebraic manipulations. The translation pipeline is as follows:
 
-### Symbolic Translation
-The core mechanism involves converting DuckDB's `ParsedExpression` tree into a symbolic representation (using `SymbolicC++`) and back. This allows for algebraic simplification and rearrangement.
+1.  **DuckDB to Symbolic**: The `ToSymbolicRecursive` function traverses the DuckDB `ParsedExpression` tree.
+    -   `ColumnRef` (decision variable) $\rightarrow$ `Symbolic Variable`
+    -   `ColumnRef` (normal column) $\rightarrow$ `Symbolic Constant` (treated as opaque for now)
+    -   `Operator` (+, -, *) $\rightarrow$ `Symbolic Operation`
 
-- **`ToSymbolicRecursive`**: Converts a `ParsedExpression` into a `Symbolic` object. It handles arithmetic operators, constants, and column references.
-- **`FromSymbolic`**: Converts a `Symbolic` object back into a `ParsedExpression`.
-- **`SymbolicTranslationContext`**: Carries the set of DECIDE variable names, allowing the translator to distinguish between decision variables (which become symbolic variables) and table columns (which are treated as constants or row-varying terms).
+2.  **Normalization**: The symbolic engine simplifies the expression. This involves:
+    -   Expanding parentheses: `2 * (x + 5)` $\rightarrow$ `2x + 10`
+    -   Collecting like terms: `x + x` $\rightarrow$ `2x`
+    -   Separating constants.
 
-### Normalization Logic
+3.  **Symbolic to DuckDB**: The `FromSymbolic` function converts the simplified symbolic expression back into a DuckDB `ParsedExpression`, structured specifically for the Binder.
 
-The goal of normalization is to produce a predictable structure for the Binder.
+## 3. Canonical Forms
 
-#### 1. Constraint Normalization
-For constraints (e.g., `SUM(x * price) <= 100`), the normalizer:
-1. Converts the LHS to symbolic form.
-2. Flattens the expression into additive terms.
-3. Separates terms into:
-    - **Decision Terms**: Contain at least one DECIDE variable.
-    - **Row Terms**: Contain NO DECIDE variables.
-    - **Constants**.
-4. Rebuilds the constraint as:
-   ```
-   SUM(decision_terms) [<=|>=] rhs_constant + SUM(-row_terms)
-   ```
-   - All decision variables stay on the LHS inside a single `SUM`.
-   - All row-varying terms are moved to the RHS (negated).
-   - Constants are accumulated on the RHS.
+The parser ensures that all constraints and objectives are rewritten into the following canonical forms before they reach the Binder.
 
-**Note**: Coefficients are preserved exactly as is; no GCD extraction or scaling is performed.
+### 3.1 Constraints
+All constraints are normalized to:
+$$ \sum (c_i \cdot x_i) \leq K - \sum (RowTerm_j) $$
+Where:
+-   $x_i$: Decision variables.
+-   $c_i$: Coefficients (can be expressions).
+-   $K$: A constant.
+-   $RowTerm_j$: Terms involving only table columns (no decision variables).
 
-#### 2. Objective Normalization
-Objectives (e.g., `MAXIMIZE SUM(x * profit)`) are normalized similarly:
-1. The inner expression of the `SUM` is converted to symbolic form.
-2. Terms containing DECIDE variables are kept.
-3. Terms without DECIDE variables are dropped (as they don't affect the optimization decision).
-4. The `SUM` is rebuilt with only the relevant terms.
+**Example Transformation**:
+Input SQL:
+```sql
+SUM(profit * x - cost) <= 500
+```
+Internal Steps:
+1.  Symbolic: $\sum (P \cdot x - C) \leq 500$
+2.  Split Sum: $\sum (P \cdot x) - \sum C \leq 500$
+3.  Rearrange: $\sum (P \cdot x) \leq 500 + \sum C$
 
-## Interaction with Binder
-The Binder relies on this normalization. It expects:
-- **Constraints**: LHS is a single `SUM(...)` containing only DECIDE variables. RHS is a scalar or aggregate expression without DECIDE variables.
-- **Objectives**: A single `SUM(...)` containing at least one DECIDE variable.
+The Parser rewrites the expression tree so that the LHS contains **only** decision-dependent terms, and the RHS contains **only** scalar terms.
 
-## Limitations
-- **Non-Linearity**: The symbolic layer can represent non-linear terms (e.g., `x*x`), but the Binder will later reject them if they violate the linearity requirement of the solver.
-- **Functions**: Only basic arithmetic and `SUM` are fully supported for symbolic manipulation. Other functions are treated as opaque symbols or rejected.
-- **Subqueries**: Uncorrelated scalar subqueries are supported. They are preserved as placeholders during symbolic translation and executed at bind-time.
+### 3.2 Objectives
+Objectives are similarly normalized to:
+$$ \text{MAX/MIN } \sum (c_i \cdot x_i) $$
+Constant offsets in the objective (e.g., `MAX SUM(x * p + 10)`) are dropped from the optimization problem as they do not affect the optimal choice of $x$, though they are technically preserved in the final projection if needed.
+
+## 4. Interaction with Binder
+The Binder receives this normalized tree. It no longer needs to perform algebraic rearrangement; it simply validates that the structure matches the expectation (linear sum on LHS, scalar on RHS) and binds the column references.

@@ -1,48 +1,41 @@
-This repo basically extends duckdb to handle package queries. We are adding the following sytax for it:
+# PackDB: Package Query Extension for DuckDB
 
-SELECT *
-FROM Recipes R
-WHERE R.gluten_free = ’TRUE’
-DECIDE x
-SUCH THAT x IS INTEGER AND
-    x BETWEEN 0 AND 4
-    SUM(x) = 7 AND
-    SUM(calories*x) BETWEEN 2000 AND 2500
-MAXIMIZE SUM(protein*x)
+## 1. Introduction
 
-Decide variables are the variables that are decided by the query. They represent the cardinality of each item in the final package.
+### 1.1 Problem Statement
+Standard Database Management Systems (DBMS) are excellent at retrieving and aggregating data but lack native support for combinatorial optimization problems. Users often need to select a subset of items (a "package") that satisfies various constraints while optimizing an objective function (e.g., "Select a meal plan with max protein but under 2000 calories" or "Choose a team of engineers within budget"). Typically, this requires extracting data to an external solver, which is inefficient and complex to maintain.
 
-### Project summary
+### 1.2 Solution: PackDB
+PackDB extends DuckDB with native support for **Package Queries**. It introduces a declarative `DECIDE` clause to SQL, allowing users to express these optimization problems directly within the query language. PackDB handles the translation of these high-level requirements into an Integer Linear Programming (ILP) model, solves it using an embedded solver (HiGHS), and returns the optimal package as standard relational tables.
 
-PackDB extends DuckDB with package queries via a new DECIDE/SUCH THAT/[MAXIMIZE|MINIMIZE] clause, enabling optimization over per-row decision variables.
+## 2. Project Goals
 
-- **Syntax**
-  - **DECIDE variables**: define one or more decision variables (e.g., `DECIDE x, y`). Types via `SUCH THAT x IS [REAL|INTEGER|BINARY]`.
-  - **Constraints (SUCH THAT)**: left-hand side must be a DECIDE variable or `SUM(...)` over a DECIDE variable. Supported forms: `x IN (...)`, `x BETWEEN a AND b`, `x <= c`, `x >= c`, `x = c`, and `SUM(x * expr) [=|<=|>=] scalar`. Right-hand sides must be scalar and contain no DECIDE variables.
-  - **Objective**: `[MAXIMIZE|MINIMIZE] SUM(x * expr)`; only `SUM` is allowed and must involve a DECIDE variable.
+1.  **Seamless Integration**: Extend SQL syntax naturally without breaking existing functionality.
+2.  **Performance**: Execute optimization queries efficiently by pushing constraints down and solving directly within the database engine.
+3.  **Usability**: Abstract away the complexities of mathematical modeling (ILP, solvers matrices) from the database user.
 
-- **Parser**
-  - `SelectNode` extended with `decide_variables`, `decide_constraints`, `decide_sense`, `decide_objective`.
-  - Transformer populates these from `DECIDE ... SUCH THAT ... [MAXIMIZE|MINIMIZE] ...`.
+## 3. The `DECIDE` Clause
 
-- **Binder**
-  - Validates variable names (no column conflicts, no duplicates) and creates a binding for decide variables.
-  - `DecideConstraintsBinder` enforces allowed constraint shapes and refines variable types (e.g., INTEGER).
-  - `DecideObjectiveBinder` restricts objective to `SUM(...)` over DECIDE variables and records sense.
+The core contribution is the new SQL syntax:
 
-- **Planner**
-  - Inserts `LogicalDecide` above the regular plan carrying variables, constraints, sense, and objective.
+```sql
+SELECT select_list
+FROM table_expression
+[WHERE ...]
+DECIDE variable_list
+SUCH THAT constraint_list
+[MAXIMIZE | MINIMIZE] objective_function
+```
 
-- **Execution**
-  - `PhysicalDecide` collects child rows, analyzes constraints/objective, and integrates with the HiGHS solver to compute optimal solutions.
-  - Supports bind-time execution of uncorrelated scalar subqueries.
+### 3.1 Key Components
+-   **Decision Variables**: `DECIDE x, y` defines variables representing the quantity or selection status of rows.
+-   **Variables Types**: `SUCH THAT x IS INTEGER` (or `BINARY`) enforces the domain.
+-   **Constraints**: `SUM(x * cost) <= Budget` or `x <= 1` defines the bounds.
+-   **Objective**: `MAXIMIZE SUM(x * utility)` defines the goal.
 
-- **Enums & operators**
-  - New enums: `DecideSense`, `DecideExpression`, `DeterministicConstraintSense`.
-  - Operators: `LogicalDecide`, `PhysicalDecide`.
-
-
-### Current status and next steps
-
-- Implemented: Parsing, Binding, Logical Planning, Physical Execution, Solver Integration.
-- Features: Variable bounds, Equality constraints, BETWEEN constraints, Subquery support.
+## 4. System Overview
+PackDB modifies the standard query processing pipeline:
+1.  **Parser**: Recognizes the new keywords and builds a symbolic representation.
+2.  **Binder**: Validates variable scopes, types, and mathematical properties (linearity).
+3.  **Planner**: Inserts a `LogicalDecide` operator into the query plan.
+4.  **Execution**: The `PhysicalDecide` operator materializes data, formulates the ILP model, invokes the HiGHS solver, and maps results back to the query output.

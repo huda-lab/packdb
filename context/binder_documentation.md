@@ -1,55 +1,38 @@
-# Binder Layer Documentation
+# Implementation Part 2: Binder & Validation
 
-## Overview
-The Binder Layer is responsible for validating the semantically normalized DECIDE clauses and converting them into bound expression trees that can be used by the Logical Planner. It ensures that constraints and objectives adhere to the rules of the package query system (e.g., linearity, variable scope).
+## 1. Overview
+After parsing, the `DECIDE` clause needs semantic validation. The Binder is responsible for ensuring that the user's query makes sense in the context of the database schema and the mathematical constraints of the solver.
 
-**Source Files**:
+**Key Source Files**: 
 - `src/planner/expression_binder/decide_binder.cpp`
 - `src/planner/expression_binder/decide_constraints_binder.cpp`
-- `src/planner/expression_binder/decide_objective_binder.cpp`
 
-## Architecture
+## 2. Variable Scope & Binding
+Unlike a standard `GROUP BY` or `SELECT` clause, the `DECIDE` clause introduces variables that do not exist in any physical table.
+-   **Decide Variables**: These are "virtual" columns representing the decision.
+-   **Binding Context**: The binder creates a special scope where these variables are valid. It verifies that variable names do not collide with existing table columns.
 
-### `DecideBinder` (Base Class)
-Extends DuckDB's `ExpressionBinder`. It manages the scope of DECIDE variables and provides shared validation logic.
-- **`ValidateSumArgument`**: A critical helper that enforces linearity. It ensures that:
-    - Arguments are linear combinations of DECIDE variables.
-    - No nested `SUM` functions are allowed.
-    - No non-linear terms (e.g., `x * x` or `x * y`) are present.
-    - At least one DECIDE variable is present in the expression.
+## 3. Constraint Validation
+The primary role of the `DecideConstraintsBinder` is to enforce the **Linearity Assumption** required by ILP solvers.
 
-### `DecideConstraintsBinder`
-Binds the `SUCH THAT` clause.
-- **Constraint Shapes**:
-    - **Variable Constraints**: `x <= c`, `x >= c`, `x IN (...)`.
-    - **Sum Constraints**: `SUM(linear_expr) <= rhs`, `SUM(linear_expr) >= rhs`.
-- **RHS Validation**: The Right-Hand Side (RHS) must be a scalar expression. It can be a constant, a scalar subquery (uncorrelated), or an expression evaluating to a scalar. It must **not** contain any DECIDE variables.
-- **Type Refinement**: It detects type declarations like `x IS INTEGER` and `x IS BINARY`.
-    - `x IS BINARY`: Transformed into `x IS INTEGER` with added constraints `x >= 0` AND `x <= 1`.
-    - `x IS REAL`: Explicitly rejected (DECIDE variables must be integers representing cardinality).
-- **Supported Constraints**:
-    - Inequalities: `<=`, `>=`
-    - Equality: `=`
-    - Range: `BETWEEN` (transformed into `>=` AND `<=`)
-    - Set membership: `IN` (validated to ensure LHS is a DECIDE variable and RHS contains no DECIDE variables)
-- **Subqueries**: Uncorrelated scalar subqueries are executed at bind-time and replaced with their constant result.
+### 3.1 Linearity Check
+Every term on the LHS of a constraint must optionally involve a Decide Variable, but never in a non-linear way.
+-   **Valid**: `2*x`, `x`, `price * x` (assuming `price` is a table column, constant for the decision).
+-   **Invalid**: `x * x` (Quadratic), `x * y` (Interaction), `SIN(x)`.
 
-### `DecideObjectiveBinder`
-Binds the `[MAXIMIZE|MINIMIZE]` clause.
-- **Validation**: Ensures the objective is a single `SUM(...)` expression containing at least one DECIDE variable.
-- **Sense**: Records whether the goal is to MAXIMIZE or MINIMIZE.
+The binder walks the expression tree and flags an error if it encounters a multiplication between two sub-trees that both contain decision variables.
 
-## Data Flow
-1. **Input**: `ParsedExpression` trees from the Parser (already normalized).
-2. **Processing**:
-    - Variables are registered in the binding context.
-    - Constraints are bound and validated.
-    - Variable types are refined based on constraints.
-    - Objective is bound.
-3. **Output**: `BoundSelectNode` containing:
-    - `decide_variables`: Vector of `BoundColumnRefExpression`.
-    - `decide_constraints`: Bound expression tree.
-    - `decide_objective`: Bound expression tree.
+### 3.2 Subquery Handling
+PackDB supports **uncorrelated scalar subqueries** in the bounds of constraints.
+-   Example: `SUM(x) <= (SELECT COUNT(*) FROM Drivers)`
+-   **Mechanism**: These subqueries are executed immediately during the Binding phase. The result is replaced by a constant value in the bound, ensuring the Solver receives a static problem definition.
 
-## Integration
-The output of the Binder is passed to the Logical Planner, which creates a `LogicalDecide` operator. This operator sits above the standard query plan, carrying the bound constraints and objective to the execution layer.
+## 4. Type Inference & Syntactic Sugar
+The binder translates user-friendly type declarations into loose integer constraints.
+
+| User Syntax | Internal Representation | Added Constraints |
+| :--- | :--- | :--- |
+| `x IS INTEGER` | `x` (Type: Integer) | `x >= 0` |
+| `x IS BINARY` | `x` (Type: Integer) | `x >= 0` AND `x <= 1` |
+
+Note: DuckDB's internal `LogicalType::INTEGER` is used for all decision variables. `IS BINARY` is strictly a domain constraint, not a storage type.
