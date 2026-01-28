@@ -14,9 +14,8 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
 
     // Create HiGHS model
     Highs highs;
-    // highs.setOptionValue("output_flag", true); // Show HiGHS output for debugging
-    deb("\nSetting HiGHS log to console");
-    highs.setOptionValue("log_to_console", true);
+    // Disable HiGHS console output for production
+    highs.setOptionValue("log_to_console", false);
 
     // Variable indexing: var_index = row_idx * num_decide_vars + decide_var_idx
     // So for row r and DECIDE variable v: index = r * num_decide_vars + v
@@ -351,11 +350,38 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     // Throw on non-optimal models with descriptive messages
     if (model_status != HighsModelStatus::kOptimal) {
         if (model_status == HighsModelStatus::kInfeasible) {
-            throw InternalException("DECIDE optimization infeasible: constraints cannot be satisfied (model_status=%d)", (int)model_status);
+            throw InvalidInputException(
+                "DECIDE optimization is infeasible: No valid solution exists that satisfies all constraints.\n\n"
+                "This means the SUCH THAT conditions cannot all be met simultaneously.\n\n"
+                "Common causes:\n"
+                "  • Contradictory bounds (e.g., x >= 10 AND x <= 5)\n"
+                "  • SUM constraints impossible to satisfy with available data\n"
+                "  • Variable types too restrictive (BINARY when INTEGER needed)\n\n"
+                "Suggestion: Try relaxing constraints or verify input data.");
         } else if (model_status == HighsModelStatus::kUnbounded) {
-            throw InternalException("DECIDE optimization unbounded: objective can grow without bound (model_status=%d)", (int)model_status);
+            throw InvalidInputException(
+                "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
+                "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
+                "You must add constraints to bound the decision variables.\n\n"
+                "Examples:\n"
+                "  • Add upper bounds: SUCH THAT x <= 100\n"
+                "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
+                "  • Use BINARY instead of INTEGER for selection problems");
+        } else if (model_status == HighsModelStatus::kTimeLimit) {
+            throw InvalidInputException(
+                "DECIDE optimization exceeded time limit.\n"
+                "The problem may be too complex to solve in reasonable time.\n"
+                "Try simplifying constraints or reducing data size.");
+        } else if (model_status == HighsModelStatus::kIterationLimit) {
+            throw InvalidInputException(
+                "DECIDE optimization exceeded iteration limit.\n"
+                "The problem may be too complex. Try simplifying constraints.");
         } else {
-            throw InternalException("DECIDE optimization failed: model_status=%d", (int)model_status);
+            throw InvalidInputException(
+                "DECIDE optimization failed with solver status %d.\n"
+                "The optimization could not find a solution.\n"
+                "This may indicate a problem with the constraints or objective.",
+                (int)model_status);
         }
     }
 
@@ -364,10 +390,27 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     //===--------------------------------------------------------------------===//
 
     const HighsSolution& solution = highs.getSolution();
+
+    // Validate solution completeness
+    if (solution.col_value.size() < total_vars) {
+        throw InternalException(
+            "HiGHS returned incomplete solution: expected %llu variables, got %llu",
+            total_vars, (idx_t)solution.col_value.size());
+    }
+
     vector<double> result(total_vars);
 
     for (idx_t i = 0; i < total_vars; i++) {
-        result[i] = solution.col_value[i];
+        double val = solution.col_value[i];
+
+        // Validate solution values are finite
+        if (!std::isfinite(val)) {
+            throw InternalException(
+                "HiGHS returned invalid solution value (NaN or Infinity) for variable %llu",
+                i);
+        }
+
+        result[i] = val;
     }
 
     return result;

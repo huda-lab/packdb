@@ -413,6 +413,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
 
+    // Validate input data
+    if (num_rows == 0) {
+        throw InvalidInputException(
+            "DECIDE optimization requires at least one input row. "
+            "The query before DECIDE returned no data. "
+            "Ensure the FROM/WHERE clauses return rows to optimize over.");
+    }
+
+    idx_t num_decide_vars = decide_variables.size();
+    if (num_decide_vars == 0) {
+        throw InternalException(
+            "DECIDE operator has no decision variables "
+            "(should have been caught during binding)");
+    }
+
     // Evaluate coefficients and build the model (solver provides verbose output)
 
     //===--------------------------------------------------------------------===//
@@ -518,7 +533,30 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk.size(); row_in_chunk++) {
                     // Cast to double regardless of the actual type (could be INTEGER, DOUBLE, etc.)
                     Value val = vec.GetValue(row_in_chunk);
+
+                    // Check for NULL values
+                    if (val.IsNull()) {
+                        throw InvalidInputException(
+                            "DECIDE constraint coefficient returned NULL at row %llu. "
+                            "NULL values are not allowed in optimization coefficients. "
+                            "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
+                            eval_const.row_coefficients[term_idx].size());
+                    }
+
                     double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+
+                    // Check for NaN or Infinity
+                    if (!std::isfinite(double_val)) {
+                        throw InvalidInputException(
+                            "DECIDE constraint coefficient contains invalid value (NaN or Infinity) at row %llu. "
+                            "Common causes:\n"
+                            "  • Division by zero in coefficient expression\n"
+                            "  • Arithmetic overflow in calculations\n"
+                            "  • NULL values that propagated through math operations\n"
+                            "Check your coefficient expressions and input data.",
+                            eval_const.row_coefficients[term_idx].size());
+                    }
+
                     eval_const.row_coefficients[term_idx].push_back(double_val);
                 }
             }
@@ -565,10 +603,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             };
 
             auto transformed_rhs = TransformExpression(*constraint->rhs_expr);
-            
-            // DEBUG
-            std::cout << "RHS Original: " << constraint->rhs_expr->ToString() << " Class: " << (int)constraint->rhs_expr->GetExpressionClass() << std::endl;
-            std::cout << "RHS Transformed: " << transformed_rhs->ToString() << " Class: " << (int)transformed_rhs->GetExpressionClass() << std::endl;
 
             // Prepare executor
             ExpressionExecutor rhs_executor(context);
@@ -589,7 +623,30 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 auto &vec = rhs_result.data[0];
                 for (idx_t row_in_chunk = 0; row_in_chunk < rhs_chunk.size(); row_in_chunk++) {
                     Value val = vec.GetValue(row_in_chunk);
+
+                    // Check for NULL values
+                    if (val.IsNull()) {
+                        throw InvalidInputException(
+                            "DECIDE constraint right-hand side returned NULL at row %llu. "
+                            "NULL values are not allowed in optimization constraints. "
+                            "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
+                            eval_const.rhs_values.size());
+                    }
+
                     double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+
+                    // Check for NaN or Infinity
+                    if (!std::isfinite(double_val)) {
+                        throw InvalidInputException(
+                            "DECIDE constraint right-hand side contains invalid value (NaN or Infinity) at row %llu. "
+                            "Common causes:\n"
+                            "  • Division by zero in RHS expression\n"
+                            "  • Arithmetic overflow in calculations\n"
+                            "  • NULL values that propagated through math operations\n"
+                            "Check your RHS expressions and input data.",
+                            eval_const.rhs_values.size());
+                    }
+
                     eval_const.rhs_values.push_back(double_val);
                 }
             }
@@ -659,7 +716,30 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 for (idx_t row_in_chunk = 0; row_in_chunk < obj_chunk.size(); row_in_chunk++) {
                     // Cast to double regardless of the actual type (could be INTEGER, DOUBLE, etc.)
                     Value val = vec.GetValue(row_in_chunk);
+
+                    // Check for NULL values
+                    if (val.IsNull()) {
+                        throw InvalidInputException(
+                            "DECIDE objective coefficient returned NULL at row %llu. "
+                            "NULL values are not allowed in optimization objective. "
+                            "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
+                            gstate.evaluated_objective_coefficients[term_idx].size());
+                    }
+
                     double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+
+                    // Check for NaN or Infinity
+                    if (!std::isfinite(double_val)) {
+                        throw InvalidInputException(
+                            "DECIDE objective coefficient contains invalid value (NaN or Infinity) at row %llu. "
+                            "Common causes:\n"
+                            "  • Division by zero in objective expression\n"
+                            "  • Arithmetic overflow in calculations\n"
+                            "  • NULL values that propagated through math operations\n"
+                            "Check your objective expressions and input data.",
+                            gstate.evaluated_objective_coefficients[term_idx].size());
+                    }
+
                     gstate.evaluated_objective_coefficients[term_idx].push_back(double_val);
                 }
             }
@@ -676,9 +756,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // PHASE 3: Build and Solve ILP with DeterministicNaive
     //===--------------------------------------------------------------------===//
 
-    idx_t num_decide_vars = decide_variables.size();
-    
-    // Construct SolverInput
+    // Construct SolverInput (num_decide_vars already declared above)
     SolverInput solver_input;
     solver_input.num_rows = num_rows;
     solver_input.num_decide_vars = num_decide_vars;

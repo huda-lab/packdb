@@ -34,11 +34,15 @@ void Profiler::add(const Profiler& pro){
 }
 
 void Profiler::print() const{
+    // Profiler output disabled for production
+    // Uncomment the following lines to enable debug profiling
+    /*
     for (const auto& cl : clocks){
         auto label = cl.first;
         if (!label.size()) label = "Ø";
         duckdb_fmt::printf("{}[count={} avg={}ms]\n", label, cl.second.second, cl.second.first/cl.second.second);
     }
+    */
 }
 
 }

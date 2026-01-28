@@ -177,7 +177,6 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                             // Therefore, they MUST be integers - REAL types are not allowed
                             if (type_marker == "integer_variable") {
                                 var_types[var_idx] = LogicalType::INTEGER;
-                                deb("Type declaration: variable '", var_name, "' is INTEGER");
                             } else if (type_marker == "real_variable") {
                                 // REJECT: DECIDE variables must be integers (they represent cardinality)
                                 throw BinderException(

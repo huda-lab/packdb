@@ -294,7 +294,16 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
         
         Planner planner(context);
         planner.CreatePlan(std::move(parser.statements[0]));
-        
+
+        // Check for correlated subquery - not supported in DECIDE clauses
+        if (!planner.binder->correlated_columns.empty()) {
+            return BindResult(BinderException::Unsupported(expr,
+                "Correlated subqueries are not supported in DECIDE clauses. "
+                "The subquery references columns from outer queries, which cannot be "
+                "evaluated at optimization time. Please use a constant value, "
+                "non-correlated subquery, or table column instead."));
+        }
+
         Optimizer optimizer(*planner.binder, context);
         auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
         
