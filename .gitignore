@@ -361,3 +361,9 @@ tools/pythonpkg/duckdb_build/
 
 # Claude
 CLAUDE.md
+
+# HiGHS solver logs
+HiGHS.log
+
+# PackDB test results
+test/automated/results/
