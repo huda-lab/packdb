@@ -88,13 +88,13 @@ def run_packdb_query(query_file, db_file):
     # For now, we'll define a placeholder for read_config to make the code syntactically correct.
     # In a real scenario, this would come from a configuration module.
     def read_config():
-        duckdb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "duckdb"
-        return duckdb_bin, None # Placeholder for other config value
+        packdb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "packdb"
+        return packdb_bin, None # Placeholder for other config value
 
-    duckdb_bin, _ = read_config()
-    
+    packdb_bin, _ = read_config()
+
     # Use -csv flag to ensure CSV output
-    cmd = [str(duckdb_bin), str(db_file), '-csv']
+    cmd = [str(packdb_bin), str(db_file), '-csv']
     
     # Read query content
     with open(query_file, 'r') as f:
@@ -215,7 +215,7 @@ def strip_comments(sql):
 
 def query_to_mps(query_file, db_file, mps_file):
     """Convert SQL query to MPS format by querying the real database"""
-    duckdb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "duckdb"
+    packdb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "packdb"
     
     # Read the query
     with open(query_file, 'r') as f:
@@ -321,7 +321,7 @@ def query_to_mps(query_file, db_file, mps_file):
             print(f"ℹ Resolving subquery: {subquery}")
             
             # Execute subquery
-            res = subprocess.run([str(duckdb_bin), str(db_file), '-csv', '-noheader'], input=subquery, capture_output=True, text=True)
+            res = subprocess.run([str(packdb_bin), str(db_file), '-csv', '-noheader'], input=subquery, capture_output=True, text=True)
             if res.returncode != 0:
                 print(f"Error executing subquery: {res.stderr}")
                 break 
@@ -433,10 +433,10 @@ def query_to_mps(query_file, db_file, mps_file):
         # Try to drop table if simple name
         if ' ' not in from_clause and ',' not in from_clause:
              drop_table_cmd = f"DROP TABLE IF EXISTS {from_clause};"
-             subprocess.run([str(duckdb_bin), str(db_file)], input=drop_table_cmd, capture_output=True, text=True)
+             subprocess.run([str(packdb_bin), str(db_file)], input=drop_table_cmd, capture_output=True, text=True)
              
         setup_commands = ';\n'.join(setup_sql) + ';'
-        result = subprocess.run([str(duckdb_bin), str(db_file)], input=setup_commands, capture_output=True, text=True)
+        result = subprocess.run([str(packdb_bin), str(db_file)], input=setup_commands, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"ERROR setting up tables: {result.stderr}")
             return False
@@ -451,7 +451,7 @@ def query_to_mps(query_file, db_file, mps_file):
     
     print(f"ℹ Fetching data with: {data_query}")
     
-    result = subprocess.run([str(duckdb_bin), str(db_file), '-csv'], input=data_query, capture_output=True, text=True)
+    result = subprocess.run([str(packdb_bin), str(db_file), '-csv'], input=data_query, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ERROR querying database: {result.stderr}")
         return False
@@ -960,11 +960,22 @@ def run_test(query_file, db_file, output_dir):
                 return False
             
     else:
-        print(f"✗ PackDB: FAILED")
-        print(packdb_err)
-        with open(packdb_status_file, 'w') as f:
-            f.write(f"Status: FAILED\nError: {packdb_err}\n")
-        return False
+        # Check if this is an expected infeasibility (both HiGHS and PackDB agree)
+        packdb_infeasible = 'infeasible' in packdb_err.lower()
+        highs_infeasible = (status == 'INFEASIBLE')
+        
+        if highs_infeasible and packdb_infeasible:
+            print(f"✓ PackDB: INFEASIBLE (matches HiGHS)")
+            with open(packdb_status_file, 'w') as f:
+                f.write(f"Status: INFEASIBLE\nError: {packdb_err}\n")
+            print(f"✓ Comparison: PASS (both agree problem is infeasible)")
+            return True
+        else:
+            print(f"✗ PackDB: FAILED")
+            print(packdb_err)
+            with open(packdb_status_file, 'w') as f:
+                f.write(f"Status: FAILED\nError: {packdb_err}\n")
+            return False
     
     return True
 
