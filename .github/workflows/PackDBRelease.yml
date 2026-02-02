@@ -1,0 +1,331 @@
+name: PackDB Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0-beta)'
+        required: true
+        type: string
+      platforms:
+        description: 'Platforms to build (comma-separated: linux, macos, windows)'
+        required: true
+        default: 'linux'
+        type: string
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  OVERRIDE_GIT_DESCRIBE: ${{ inputs.version }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  #############################################################################
+  # JOB 1: Linux x86-64 Build
+  #############################################################################
+  linux-x64:
+    if: contains(inputs.platforms, 'linux')
+    name: Linux x86-64 Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build with Docker (manylinux2014)
+        shell: bash
+        run: |
+          export PWD=$(pwd)
+          docker run \
+            -v$PWD:$PWD \
+            -e CMAKE_BUILD_PARALLEL_LEVEL=4 \
+            -e OVERRIDE_GIT_DESCRIBE=${{ inputs.version }} \
+            quay.io/pypa/manylinux2014_x86_64 \
+            bash -c "yum install -y perl-IPC-Cmd && \
+                     git config --global --add safe.directory $PWD && \
+                     cd $PWD && \
+                     make"
+
+      - name: Verify Build
+        shell: bash
+        run: |
+          ./build/release/packdb -c "PRAGMA platform;"
+          ./build/release/packdb --version
+
+      - name: Package Binaries
+        shell: bash
+        run: |
+          # Generate amalgamation for library package
+          python3 scripts/amalgamation.py
+
+          # Create CLI packages
+          zip -j packdb_cli-linux-amd64.zip build/release/packdb
+          gzip -9 -k -n -c build/release/packdb > packdb_cli-linux-amd64.gz
+
+          # Create library package
+          zip -j libpackdb-linux-amd64.zip \
+            build/release/src/libpackdb.so \
+            build/release/src/libpackdb_static.a \
+            src/amalgamation/duckdb.hpp \
+            src/include/duckdb.h
+
+          # Verify packages
+          ls -lh packdb_cli-linux-amd64.zip
+          ls -lh packdb_cli-linux-amd64.gz
+          ls -lh libpackdb-linux-amd64.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packdb-binaries-linux-amd64
+          path: |
+            packdb_cli-linux-amd64.zip
+            packdb_cli-linux-amd64.gz
+            libpackdb-linux-amd64.zip
+          retention-days: 7
+
+  #############################################################################
+  # JOB 2: macOS Universal Build (Intel + Apple Silicon)
+  #############################################################################
+  macos-universal:
+    if: contains(inputs.platforms, 'macos')
+    name: macOS Universal Build
+    runs-on: macos-14
+
+    env:
+      OSX_BUILD_UNIVERSAL: 1
+      GEN: ninja
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'huda-lab/packdb' }}
+
+      - name: Build
+        shell: bash
+        run: make
+
+      - name: Verify Build
+        shell: bash
+        run: |
+          ./build/release/packdb -c "PRAGMA platform;"
+          ./build/release/packdb --version
+          file build/release/packdb  # Should show universal binary
+
+      - name: Package Binaries
+        shell: bash
+        run: |
+          python3 scripts/amalgamation.py
+
+          zip -j packdb_cli-osx-universal.zip build/release/packdb
+          gzip -9 -k -n -c build/release/packdb > packdb_cli-osx-universal.gz
+
+          zip -j libpackdb-osx-universal.zip \
+            build/release/src/libpackdb.dylib \
+            src/amalgamation/duckdb.hpp \
+            src/include/duckdb.h
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packdb-binaries-osx-universal
+          path: |
+            packdb_cli-osx-universal.zip
+            packdb_cli-osx-universal.gz
+            libpackdb-osx-universal.zip
+          retention-days: 7
+
+  #############################################################################
+  # JOB 3: Windows x64 Build
+  #############################################################################
+  windows-x64:
+    if: contains(inputs.platforms, 'windows')
+    name: Windows x64 Build
+    runs-on: windows-2019
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'huda-lab/packdb' }}
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_GENERATOR_PLATFORM=x64 \
+                -DDISABLE_UNITY=1 \
+                -DOVERRIDE_GIT_DESCRIBE="${{ inputs.version }}"
+          cmake --build . --config Release --parallel
+
+      - name: Verify Build
+        shell: bash
+        run: |
+          Release/packdb.exe -c "PRAGMA platform;"
+          Release/packdb.exe --version
+
+      - name: Package Binaries
+        shell: bash
+        run: |
+          python scripts/amalgamation.py
+          choco install zip -y --force
+
+          zip -j packdb_cli-windows-amd64.zip Release/packdb.exe
+
+          zip -j libpackdb-windows-amd64.zip \
+            src/Release/packdb.dll \
+            src/Release/packdb.lib \
+            src/amalgamation/duckdb.hpp \
+            src/include/duckdb.h
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packdb-binaries-windows-amd64
+          path: |
+            packdb_cli-windows-amd64.zip
+            libpackdb-windows-amd64.zip
+          retention-days: 7
+
+  #############################################################################
+  # JOB 4: Create GitHub Release
+  #############################################################################
+  create-release:
+    name: Create GitHub Release
+    needs: [linux-x64, macos-universal, windows-x64]
+    if: always() && inputs.create_release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display Downloaded Artifacts
+        run: |
+          ls -R artifacts/
+
+      - name: Generate Release Notes
+        shell: bash
+        run: |
+          cat > release_notes.md << 'EOF'
+          # PackDB ${{ inputs.version }}
+
+          PackDB is a fork of DuckDB that adds package query optimization through a DECIDE clause.
+
+          ## Downloads
+
+          ### Command-Line Interface (CLI)
+
+          Choose the appropriate package for your platform:
+
+          - **Linux x86-64**: `packdb_cli-linux-amd64.zip` or `packdb_cli-linux-amd64.gz`
+          - **macOS (Universal - Intel & Apple Silicon)**: `packdb_cli-osx-universal.zip` or `packdb_cli-osx-universal.gz`
+          - **Windows x64**: `packdb_cli-windows-amd64.zip`
+
+          ### Libraries (for development)
+
+          If you're developing applications with PackDB:
+
+          - **Linux x86-64**: `libpackdb-linux-amd64.zip`
+          - **macOS (Universal)**: `libpackdb-osx-universal.zip`
+          - **Windows x64**: `libpackdb-windows-amd64.zip`
+
+          ## Quick Start
+
+          ### Linux/macOS
+
+          ```bash
+          # Download and extract (example for Linux)
+          unzip packdb_cli-linux-amd64.zip
+          ./packdb
+          ```
+
+          ### Windows
+
+          1. Download `packdb_cli-windows-amd64.zip`
+          2. Extract the zip file
+          3. Run `packdb.exe`
+
+          **Note**: Windows may show a SmartScreen warning because the binary is not signed. Click "More info" → "Run anyway".
+
+          ## What's New
+
+          This is a beta release of PackDB with package query optimization capabilities.
+
+          ## Package Optimization
+
+          PackDB extends DuckDB with a DECIDE clause for optimizing queries with packaging operations.
+
+          For documentation and examples, see: https://github.com/huda-lab/packdb
+
+          ## Important Notes
+
+          - These are **unsigned binaries** for beta testing
+          - If you require signed executables, please build from source
+          - Report issues at: https://github.com/huda-lab/packdb/issues
+
+          ## System Requirements
+
+          - **Linux**: CentOS 7+, Ubuntu 18.04+, Debian 10+ (glibc 2.17+)
+          - **macOS**: macOS 11.0 (Big Sur) or later
+          - **Windows**: Windows 10 or later, Visual C++ Redistributable 2019+
+          EOF
+
+          cat release_notes.md
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Create the release as DRAFT
+          gh release create ${{ inputs.version }} \
+            --repo ${{ github.repository }} \
+            --title "PackDB ${{ inputs.version }}" \
+            --notes-file release_notes.md \
+            --draft \
+            artifacts/**/*.zip artifacts/**/*.gz || true
+
+          echo "::notice::Release created at https://github.com/${{ github.repository }}/releases/tag/${{ inputs.version }}"
+          echo "::notice::Release is in DRAFT mode - review and publish manually at the URL above"
