@@ -65,24 +65,13 @@ jobs:
       - name: Package Binaries
         shell: bash
         run: |
-          # Generate amalgamation for library package
-          python3 scripts/amalgamation.py
-
-          # Create CLI packages
+          # Create CLI packages only (skip library package - build from source if needed)
           zip -j packdb_cli-linux-amd64.zip build/release/packdb
           gzip -9 -k -n -c build/release/packdb > packdb_cli-linux-amd64.gz
-
-          # Create library package (libraries still named libduckdb internally)
-          zip -j libpackdb-linux-amd64.zip \
-            build/release/src/libduckdb.so \
-            build/release/src/libduckdb_static.a \
-            src/amalgamation/duckdb.hpp \
-            src/include/duckdb.h
 
           # Verify packages
           ls -lh packdb_cli-linux-amd64.zip
           ls -lh packdb_cli-linux-amd64.gz
-          ls -lh libpackdb-linux-amd64.zip
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -91,7 +80,6 @@ jobs:
           path: |
             packdb_cli-linux-amd64.zip
             packdb_cli-linux-amd64.gz
-            libpackdb-linux-amd64.zip
           retention-days: 7
 
   #############################################################################
@@ -142,16 +130,13 @@ jobs:
       - name: Package Binaries
         shell: bash
         run: |
-          python3 scripts/amalgamation.py
-
+          # Create CLI packages only (skip library package - build from source if needed)
           zip -j packdb_cli-osx-universal.zip build/release/packdb
           gzip -9 -k -n -c build/release/packdb > packdb_cli-osx-universal.gz
 
-          # Libraries still named libduckdb internally
-          zip -j libpackdb-osx-universal.zip \
-            build/release/src/libduckdb.dylib \
-            src/amalgamation/duckdb.hpp \
-            src/include/duckdb.h
+          # Verify packages
+          ls -lh packdb_cli-osx-universal.zip
+          ls -lh packdb_cli-osx-universal.gz
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -160,7 +145,6 @@ jobs:
           path: |
             packdb_cli-osx-universal.zip
             packdb_cli-osx-universal.gz
-            libpackdb-osx-universal.zip
           retention-days: 7
 
   #############################################################################
@@ -206,17 +190,12 @@ jobs:
       - name: Package Binaries
         shell: bash
         run: |
-          python scripts/amalgamation.py
+          # Create CLI package only (skip library package - build from source if needed)
           choco install zip -y --force
-
           zip -j packdb_cli-windows-amd64.zip Release/packdb.exe
 
-          # Libraries still named duckdb internally
-          zip -j libpackdb-windows-amd64.zip \
-            src/Release/duckdb.dll \
-            src/Release/duckdb.lib \
-            src/amalgamation/duckdb.hpp \
-            src/include/duckdb.h
+          # Verify package
+          ls -lh packdb_cli-windows-amd64.zip
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -224,7 +203,6 @@ jobs:
           name: packdb-binaries-windows-amd64
           path: |
             packdb_cli-windows-amd64.zip
-            libpackdb-windows-amd64.zip
           retention-days: 7
 
   #############################################################################
@@ -259,21 +237,13 @@ jobs:
 
           ## Downloads
 
-          ### Command-Line Interface (CLI)
-
           Choose the appropriate package for your platform:
 
-          - **Linux x86-64**: `packdb_cli-linux-amd64.zip` or `packdb_cli-linux-amd64.gz`
-          - **macOS (Universal - Intel & Apple Silicon)**: `packdb_cli-osx-universal.zip` or `packdb_cli-osx-universal.gz`
-          - **Windows x64**: `packdb_cli-windows-amd64.zip`
-
-          ### Libraries (for development)
-
-          If you're developing applications with PackDB:
-
-          - **Linux x86-64**: `libpackdb-linux-amd64.zip`
-          - **macOS (Universal)**: `libpackdb-osx-universal.zip`
-          - **Windows x64**: `libpackdb-windows-amd64.zip`
+          | Platform | Download |
+          |----------|----------|
+          | **Linux x86-64** | `packdb_cli-linux-amd64.zip` or `.gz` |
+          | **macOS (Universal)** | `packdb_cli-osx-universal.zip` or `.gz` |
+          | **Windows x64** | `packdb_cli-windows-amd64.zip` |
 
           ## Quick Start
 
@@ -282,6 +252,7 @@ jobs:
           ```bash
           # Download and extract (example for Linux)
           unzip packdb_cli-linux-amd64.zip
+          chmod +x packdb
           ./packdb
           ```
 
@@ -291,29 +262,40 @@ jobs:
           2. Extract the zip file
           3. Run `packdb.exe`
 
-          **Note**: Windows may show a SmartScreen warning because the binary is not signed. Click "More info" → "Run anyway".
-
-          ## What's New
-
-          This is a beta release of PackDB with package query optimization capabilities.
+          **Note**: Windows/macOS may show security warnings because the binary is not signed. See below for instructions.
 
           ## Package Optimization
 
-          PackDB extends DuckDB with a DECIDE clause for optimizing queries with packaging operations.
+          PackDB extends DuckDB with a DECIDE clause for optimizing queries with packaging operations:
 
-          For documentation and examples, see: https://github.com/huda-lab/packdb
+          ```sql
+          SELECT x, item_name, item_price
+          FROM items
+          DECIDE x
+          SUCH THAT SUM(x * item_weight) <= 50
+          MAXIMIZE SUM(x * item_value);
+          ```
 
-          ## Important Notes
+          For documentation and examples, see: https://huda-lab.github.io/packdb
 
-          - These are **unsigned binaries** for beta testing
-          - If you require signed executables, please build from source
-          - Report issues at: https://github.com/huda-lab/packdb/issues
+          ## Security Warnings
+
+          These are **unsigned binaries** for beta testing:
+
+          - **macOS**: Right-click → Open → Open (first time only)
+          - **Windows**: Click "More info" → "Run anyway"
+
+          If you require signed executables, please [build from source](https://huda-lab.github.io/packdb/getting-started.html).
 
           ## System Requirements
 
           - **Linux**: CentOS 7+, Ubuntu 18.04+, Debian 10+ (glibc 2.17+)
           - **macOS**: macOS 11.0 (Big Sur) or later
-          - **Windows**: Windows 10 or later, Visual C++ Redistributable 2019+
+          - **Windows**: Windows 10 or later
+
+          ## Issues
+
+          Report issues at: https://github.com/huda-lab/packdb/issues
           EOF
 
           cat release_notes.md
