@@ -1304,7 +1304,11 @@ FetchContent_Declare(
     GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
     GIT_TAG        "v1.11.0"
 )
+# Build HiGHS as static library for portable binaries
+set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(highs)
+set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
 
 if (BUILD_MAIN_DUCKDB_LIBRARY)
   add_subdirectory(src)
