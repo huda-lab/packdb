@@ -72,10 +72,10 @@ jobs:
           zip -j packdb_cli-linux-amd64.zip build/release/packdb
           gzip -9 -k -n -c build/release/packdb > packdb_cli-linux-amd64.gz
 
-          # Create library package
+          # Create library package (libraries still named libduckdb internally)
           zip -j libpackdb-linux-amd64.zip \
-            build/release/src/libpackdb.so \
-            build/release/src/libpackdb_static.a \
+            build/release/src/libduckdb.so \
+            build/release/src/libduckdb_static.a \
             src/amalgamation/duckdb.hpp \
             src/include/duckdb.h
 
@@ -117,8 +117,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Ninja
-        run: brew install ninja
+      - name: Install Dependencies
+        run: brew install ninja libomp
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # main
@@ -128,7 +128,9 @@ jobs:
 
       - name: Build
         shell: bash
-        run: make
+        run: |
+          export EXTRA_CMAKE_VARIABLES="-DCMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include -DCMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include"
+          make
 
       - name: Verify Build
         shell: bash
@@ -145,8 +147,9 @@ jobs:
           zip -j packdb_cli-osx-universal.zip build/release/packdb
           gzip -9 -k -n -c build/release/packdb > packdb_cli-osx-universal.gz
 
+          # Libraries still named libduckdb internally
           zip -j libpackdb-osx-universal.zip \
-            build/release/src/libpackdb.dylib \
+            build/release/src/libduckdb.dylib \
             src/amalgamation/duckdb.hpp \
             src/include/duckdb.h
 
@@ -208,9 +211,10 @@ jobs:
 
           zip -j packdb_cli-windows-amd64.zip Release/packdb.exe
 
+          # Libraries still named duckdb internally
           zip -j libpackdb-windows-amd64.zip \
-            src/Release/packdb.dll \
-            src/Release/packdb.lib \
+            src/Release/duckdb.dll \
+            src/Release/duckdb.lib \
             src/amalgamation/duckdb.hpp \
             src/include/duckdb.h
 
