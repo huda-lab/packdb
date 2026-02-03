@@ -207,7 +207,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
 
                             // Don't bind this as a constraint - it's metadata
                             // Return a dummy constant that will be filtered out
-                            unique_ptr<Expression> bound_expr = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+                            unique_ptr<Expression> bound_expr = make_uniq_base<Expression, BoundConstantExpression>(Value::BOOLEAN(true));
                             return BindResult(std::move(bound_expr));
                         }
                     }

@@ -344,7 +344,7 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
              val = mat_res.GetValue(0, 0);
         }
         
-        unique_ptr<Expression> bound_expr = make_uniq<BoundConstantExpression>(val);
+        unique_ptr<Expression> bound_expr = make_uniq_base<Expression, BoundConstantExpression>(val);
         return BindResult(std::move(bound_expr));
     }
     default:
