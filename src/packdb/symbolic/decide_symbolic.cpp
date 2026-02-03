@@ -396,7 +396,7 @@ Symbolic ToSymbolicObj(const ParsedExpression &expr, SymbolicTranslationContext 
 //===--------------------------------------------------------------------===//
 
 static unique_ptr<ParsedExpression> FromSymbolicNumber(double v) {
-    return make_uniq<ConstantExpression>(Value::DOUBLE(v));
+    return make_uniq_base<ParsedExpression, ConstantExpression>(Value::DOUBLE(v));
 }
 
 static unique_ptr<ParsedExpression> MakeOp(const string &op, unique_ptr<ParsedExpression> lhs, unique_ptr<ParsedExpression> rhs) {
@@ -682,7 +682,7 @@ static unique_ptr<ParsedExpression> FromSymbolicAggregateProduct(const Product &
     for (; it != non_markers.end(); ++it) inner = inner * (*it);
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(FromSymbolic(inner, ctx));
-    return make_uniq<FunctionExpression>("sum", std::move(args));
+    return make_uniq_base<ParsedExpression, FunctionExpression>("sum", std::move(args));
 }
 
 unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslationContext &ctx) {
@@ -696,7 +696,7 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
             return ctx.subquery_map[name]->Copy();
         }
         // Treat any plain symbol as a column/variable reference
-        return make_uniq<ColumnRefExpression>(name);
+        return make_uniq_base<ParsedExpression, ColumnRefExpression>(name);
     }
     if (s.type() == typeid(Product)) {
         // Special-case aggregate marker
@@ -753,7 +753,7 @@ static bool IsNumericConstant(const ParsedExpression &expr, double &out) {
 }
 
 static unique_ptr<ParsedExpression> MakeDoubleConstant(double v) {
-    return make_uniq<ConstantExpression>(Value::DOUBLE(v));
+    return make_uniq_base<ParsedExpression, ConstantExpression>(Value::DOUBLE(v));
 }
 
 // Check if an expression tree contains a SUM() function anywhere
@@ -877,7 +877,7 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
         rhs_expr = MakeDoubleConstant(0.0);
     }
 
-    return make_uniq<ComparisonExpression>(cmp.type, std::move(lhs_sum), std::move(rhs_expr));
+    return make_uniq_base<ParsedExpression, ComparisonExpression>(cmp.type, std::move(lhs_sum), std::move(rhs_expr));
 }
 
 static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedExpression &expr,
@@ -956,7 +956,7 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
     auto new_inner = BuildFactoredSumExpression(combined_sym, ctx);
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(std::move(new_inner));
-    return make_uniq<FunctionExpression>("sum", std::move(args));
+    return make_uniq_base<ParsedExpression, FunctionExpression>("sum", std::move(args));
 }
 
 //===--------------------------------------------------------------------===//

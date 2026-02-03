@@ -1,4 +1,5 @@
 #include "duckdb/common/exception.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/default_expression.hpp"
 #include "duckdb/parser/transformer.hpp"
 
@@ -37,8 +38,7 @@ unique_ptr<ParsedExpression> Transformer::TransformExpression(duckdb_libpgquery:
     {
         auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
 		auto logical_type = TransformTypeName(type_name_node);
-		auto expr = make_uniq<ConstantExpression>(Value(logical_type.ToString()));
-		return std::move(expr);
+		return make_uniq_base<ParsedExpression, ConstantExpression>(Value(logical_type.ToString()));
     }
 	case duckdb_libpgquery::T_PGAConst:
 		return TransformConstant(PGCast<duckdb_libpgquery::PGAConst>(node));

@@ -74,7 +74,7 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
         auto &colref = expr.Cast<BoundColumnRefExpression>();
         auto &decide_var = decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
         if (colref.binding == decide_var.binding) {
-            return make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+            return make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
         }
     }
 
@@ -90,14 +90,14 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
             }
 
             if (filtered_children.empty()) {
-                return make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+                return make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
             }
             if (filtered_children.size() == 1) {
                 return std::move(filtered_children[0]);
             }
 
             // Rebuild multiplication with remaining children
-            return make_uniq<BoundFunctionExpression>(func.return_type, func.function,
+            return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function,
                                                      std::move(filtered_children), nullptr);
         }
     }
@@ -155,7 +155,7 @@ void PhysicalDecide::ExtractLinearTerms(const Expression &expr, vector<LinearTer
     } else {
         // Just a variable (coefficient = 1)
         out_terms.push_back(LinearTerm{var_idx,
-            make_uniq<BoundConstantExpression>(Value::INTEGER(1))});
+            make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
     }
 }
 
@@ -231,7 +231,7 @@ public:
                     if (var_idx != DConstants::INVALID_INDEX) {
                         constraint->lhs_terms.push_back(LinearTerm{
                             var_idx,
-                            make_uniq<BoundConstantExpression>(Value::INTEGER(1))
+                            make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))
                         });
                     }
                     constraint->lhs_is_aggregate = false;
@@ -377,11 +377,11 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalDecide::GetGlobalSinkState(ClientContext &context) const {
-    return make_uniq<DecideGlobalSinkState>(context, *this);
+    return make_uniq_base<GlobalSinkState, DecideGlobalSinkState>(context, *this);
 }
 
 unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &context) const {
-    return make_uniq<DecideLocalSinkState>(context.client, *this);
+    return make_uniq_base<LocalSinkState, DecideLocalSinkState>(context.client, *this);
 }
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
@@ -486,7 +486,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                         auto &colref = expr.Cast<BoundColumnRefExpression>();
                         // Map to chunk column index - assume column_index maps directly
-                        return make_uniq<BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                        return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
                     } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
                         auto &func = expr.Cast<BoundFunctionExpression>();
                         vector<unique_ptr<Expression>> new_children;
@@ -498,7 +498,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         if (func.bind_info) {
                             new_bind_info = func.bind_info->Copy();
                         }
-                        return make_uniq<BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                        return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
                     } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
                         auto &cast = expr.Cast<BoundCastExpression>();
                         // Transform the child and wrap in a new cast
@@ -581,7 +581,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
                 if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                     auto &colref = expr.Cast<BoundColumnRefExpression>();
-                    return make_uniq<BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                    return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
                 } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
                     auto &func = expr.Cast<BoundFunctionExpression>();
                     vector<unique_ptr<Expression>> new_children;
@@ -592,7 +592,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (func.bind_info) {
                         new_bind_info = func.bind_info->Copy();
                     }
-                    return make_uniq<BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                    return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
                 } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
                     auto &cast = expr.Cast<BoundCastExpression>();
                     auto transformed_child = TransformExpression(*cast.child);
@@ -662,7 +662,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
             if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                 auto &colref = expr.Cast<BoundColumnRefExpression>();
-                return make_uniq<BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
             } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
                 auto &func = expr.Cast<BoundFunctionExpression>();
                 vector<unique_ptr<Expression>> new_children;
@@ -673,7 +673,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (func.bind_info) {
                     new_bind_info = func.bind_info->Copy();
                 }
-                return make_uniq<BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
             } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
                 auto &cast = expr.Cast<BoundCastExpression>();
                 auto transformed_child = TransformExpression(*cast.child);
@@ -813,7 +813,7 @@ public:
 
 unique_ptr<GlobalSourceState> PhysicalDecide::GetGlobalSourceState(ClientContext &context) const {
     auto &sink = sink_state->Cast<DecideGlobalSinkState>();
-    return make_uniq<DecideGlobalSourceState>(*this, sink);
+    return make_uniq_base<GlobalSourceState, DecideGlobalSourceState>(*this, sink);
 }
 
 SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &chunk,
