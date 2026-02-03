@@ -16,15 +16,6 @@ on:
         type: string
       skip_tests:
         type: string
-  repository_dispatch:
-  push:
-    branches-ignore:
-      - 'main'
-      - 'feature'
-      - 'v*.*-*'
-    paths-ignore:
-      - '**'
-      - '!.github/workflows/Wasm.yml'
 
 env:
   GH_TOKEN: ${{ secrets.GH_TOKEN }}

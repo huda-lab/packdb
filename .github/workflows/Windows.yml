@@ -20,29 +20,6 @@ on:
         type: string
       run_all:
         type: string
-  repository_dispatch:
-  push:
-    branches-ignore:
-      - 'main'
-      - 'feature'
-      - 'v*.*-*'
-    paths-ignore:
-      - '**.md'
-      - 'tools/**'
-      - '!tools/shell/**'
-      - '.github/patches/duckdb-wasm/**'
-      - '.github/workflows/**'
-      - '!.github/workflows/Windows.yml'
-
-  pull_request:
-    types: [opened, reopened, ready_for_review]
-    paths-ignore:
-      - '**.md'
-      - 'tools/**'
-      - '!tools/shell/**'
-      - '.github/patches/duckdb-wasm/**'
-      - '.github/workflows/**'
-      - '!.github/workflows/Windows.yml'
 
 
 concurrency:

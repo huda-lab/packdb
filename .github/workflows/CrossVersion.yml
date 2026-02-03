@@ -8,15 +8,6 @@ on:
     inputs:
       git_ref:
         type: string
-  repository_dispatch:
-  push:
-    branches-ignore:
-      - 'main'
-      - 'feature'
-      - 'v*.*-*'
-    paths-ignore:
-      - '**'
-      - '!.github/workflows/CrossVersion.yml'
 
 env:
   GH_TOKEN: ${{ secrets.GH_TOKEN }}

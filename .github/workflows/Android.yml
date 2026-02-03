@@ -16,22 +16,6 @@ on:
         type: string
       skip_tests:
         type: string
-  repository_dispatch:
-  push:
-    branches-ignore:
-      - 'main'
-      - 'feature'
-      - 'v*.*-*'
-    paths-ignore:
-      - '**'
-      - '!.github/workflows/Android.yml'
-  pull_request:
-    types: [opened, reopened, ready_for_review]
-    paths-ignore:
-      - '**'
-      - '!.github/workflows/Android.yml'
-      - '!.github/patches/duckdb-wasm/**'
-
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}-${{ inputs.override_git_describe }}

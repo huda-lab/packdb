@@ -1,8 +1,6 @@
 name: Pull Request Requires Maintainer Approval
 on:
-  pull_request_target:
-    types:
-      - labeled
+  workflow_dispatch:
 
 env:
   GH_TOKEN: ${{ secrets.DUCKDBLABS_BOT_TOKEN }}

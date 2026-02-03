@@ -1,6 +1,5 @@
 name: Close Stale Issues
 on:
-  repository_dispatch:
   workflow_dispatch:
 
 jobs:

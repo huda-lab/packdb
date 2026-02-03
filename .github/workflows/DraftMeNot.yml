@@ -1,8 +1,7 @@
 # Marks all changed PR as draft
 name: Placeholder to cancel auto draft
 on:
-  pull_request:
-    types: [ ready_for_review ]
+  workflow_dispatch:
 
 concurrency:
   group: shouldturntodraft-${{ github.event.number }}

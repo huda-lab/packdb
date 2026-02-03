@@ -16,22 +16,6 @@ on:
         type: string
       skip_tests:
         type: string
-  push:
-    branches-ignore:
-      - 'main'
-      - 'feature'
-      - 'v*.*-*'
-    paths-ignore:
-      - "**"
-      - "!.github/workflows/Pyodide.yml"
-      - "!tools/pythonpkg/setup.py"
-
-  pull_request:
-    types: [opened, reopened, ready_for_review]
-    paths-ignore:
-      - "**"
-      - "!.github/workflows/Pyodide.yml"
-      - "!tools/pythonpkg/setup.py"
 
 jobs:
   build_pyodide:

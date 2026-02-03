@@ -1,10 +1,7 @@
 # Marks all changed PR as draft
 name: Move PR to Draft
 on:
-  workflow_run:
-    workflows: [Draft on Synchronize]
-    types:
-      - completed
+  workflow_dispatch:
 
 jobs:
   actually-move-to-draft:
