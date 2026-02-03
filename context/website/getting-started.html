@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Get started with PackDB - Download or build the standalone database and run your first optimization query in minutes.">
+  <meta name="keywords" content="PackDB, DuckDB, SQL, optimization, installation, tutorial, getting started">
+  <title>Getting Started - PackDB</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Prism.js for syntax highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="assets/css/custom.css">
+
+  <!-- Custom JS -->
+  <script src="assets/js/main.js" defer></script>
+
+  <style>
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background-color: #0d1117;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Skip Link for Accessibility -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- ============================================
+       HEADER / NAVIGATION
+       ============================================ -->
+  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
+      <!-- Logo -->
+      <a href="index.html" class="flex items-center space-x-2">
+        <img src="assets/images/logo.svg" alt="PackDB" class="h-8">
+        <div class="hidden sm:block">
+          <div class="text-xs text-[#6e7681]">by HUDA Lab</div>
+        </div>
+      </a>
+
+      <!-- Desktop Navigation -->
+      <div class="hidden md:flex items-center space-x-6">
+        <a href="index.html" class="nav-link">Home</a>
+        <a href="getting-started.html" class="nav-link active">Getting Started</a>
+        <a href="documentation.html" class="nav-link">Docs</a>
+        <a href="examples.html" class="nav-link">Examples</a>
+        <a href="about.html" class="nav-link">About</a>
+      </div>
+
+      <!-- CTA Buttons -->
+      <div class="hidden md:flex items-center space-x-3">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i>
+          GitHub
+        </a>
+        <a href="getting-started.html" class="btn btn-primary text-sm">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+
+      <!-- Mobile Menu Button -->
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#21262d]"
+              aria-label="Toggle menu" aria-expanded="false">
+        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
+        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
+      </button>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
+      <div class="container mx-auto px-4 py-4 space-y-4">
+        <a href="index.html" class="block py-2 nav-link">Home</a>
+        <a href="getting-started.html" class="block py-2 nav-link active">Getting Started</a>
+        <a href="documentation.html" class="block py-2 nav-link">Docs</a>
+        <a href="examples.html" class="block py-2 nav-link">Examples</a>
+        <a href="about.html" class="block py-2 nav-link">About</a>
+        <hr class="border-[#30363d]">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+          <i data-lucide="github" class="w-5 h-5"></i>
+          GitHub
+        </a>
+        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================
+       MAIN CONTENT
+       ============================================ -->
+  <main id="main-content" class="pt-20">
+
+    <!-- ============================================
+         HERO SECTION
+         ============================================ -->
+    <section class="py-12 bg-gradient-to-b from-[#161b22] to-[#0d1117]">
+      <div class="container mx-auto px-4">
+        <!-- Breadcrumb -->
+        <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
+          <a href="index.html">Home</a>
+          <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
+          <span class="text-[#e6edf3] font-medium">Getting Started</span>
+        </nav>
+
+        <div class="max-w-4xl">
+          <h1 class="text-4xl md:text-5xl font-bold text-[#e6edf3] mb-4">
+            Getting Started with PackDB
+          </h1>
+          <p class="text-xl text-[#8b949e]">
+            Install PackDB and run your first optimization query.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         CONTENT WITH SIDEBAR
+         ============================================ -->
+    <section class="py-12">
+      <div class="container mx-auto px-4">
+        <div class="flex flex-col lg:flex-row gap-12">
+
+          <!-- Sidebar Navigation -->
+          <aside class="lg:w-64 flex-shrink-0">
+            <nav class="sidebar-nav lg:sticky lg:top-24">
+              <h3 class="text-sm font-semibold text-[#e6edf3] uppercase tracking-wider mb-4">On This Page</h3>
+              <ul class="space-y-1">
+                <li>
+                  <a href="#prerequisites" class="sidebar-link active">Prerequisites</a>
+                </li>
+                <li>
+                  <a href="#installation" class="sidebar-link">Installation</a>
+                </li>
+                <li>
+                  <a href="#first-query" class="sidebar-link">Your First Query</a>
+                </li>
+              </ul>
+            </nav>
+          </aside>
+
+          <!-- Main Content -->
+          <div class="flex-1 max-w-3xl">
+
+            <!-- Prerequisites Section -->
+            <section id="prerequisites" class="mb-16">
+              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6 flex items-center gap-3">
+                <span class="flex items-center justify-center w-10 h-10 bg-[#30363d] text-[#e6edf3] rounded-md text-lg font-bold">1</span>
+                Prerequisites
+              </h2>
+
+              <p class="text-[#8b949e] mb-6">
+                Requirements depend on your installation method:
+              </p>
+
+              <!-- Binary Users -->
+              <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#3fb950] rounded-lg p-6 mb-6">
+                <div class="flex items-start gap-3">
+                  <i data-lucide="download" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                  <div>
+                    <h3 class="font-semibold text-[#e6edf3] mb-2">Binary Downloads (Recommended)</h3>
+                    <p class="text-[#8b949e] text-sm">
+                      No prerequisites. PackDB binaries are self-contained.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Build from Source -->
+              <div class="bg-[#161b22] rounded-lg p-6 mb-6">
+                <h3 class="font-semibold text-[#e6edf3] mb-4">Building from Source</h3>
+                <ul class="space-y-2 text-[#8b949e] text-sm">
+                  <li><strong>C++ Compiler:</strong> GCC 9+, Clang 10+, or MSVC 2019+</li>
+                  <li><strong>CMake:</strong> Version 3.15+</li>
+                  <li><strong>Python:</strong> Version 3.7+ (parser generation)</li>
+                  <li><strong>Git:</strong> For cloning the repository</li>
+                  <li><strong>Make or Ninja:</strong> Build system</li>
+                </ul>
+              </div>
+
+              <div class="bg-[#161b22] rounded-lg p-6 mb-6">
+                <h3 class="font-semibold text-[#e6edf3] mb-4">Supported Platforms</h3>
+                <ul class="text-[#8b949e] text-sm space-y-1">
+                  <li>Linux x86-64 (Ubuntu 18.04+)</li>
+                  <li>macOS 11.0+ (Intel & Apple Silicon)</li>
+                  <li>Windows 10+ (x64)</li>
+                </ul>
+              </div>
+
+              <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#d29922] rounded-lg p-6">
+                <div class="flex items-start gap-3">
+                  <i data-lucide="alert-triangle" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                  <div>
+                    <h4 class="font-semibold text-[#e6edf3]">Development Status</h4>
+                    <p class="text-[#8b949e] text-sm mt-1">
+                      PackDB is in active development. The <code class="bg-[#30363d] px-1 rounded">hatim</code> branch contains the stable prototype.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Installation Section -->
+            <section id="installation" class="mb-16">
+              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6 flex items-center gap-3">
+                <span class="flex items-center justify-center w-10 h-10 bg-[#30363d] text-[#e6edf3] rounded-md text-lg font-bold">2</span>
+                Installation
+              </h2>
+
+              <!-- Installation Method Tabs -->
+              <div class="mb-8">
+                <div class="flex flex-wrap gap-2 mb-6">
+                  <button class="install-tab active px-4 py-2 rounded-lg font-medium text-sm bg-[#30363d] text-[#e6edf3]" data-tab="binary">
+                    Download Binary
+                  </button>
+                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-[#21262d] text-[#8b949e] hover:bg-[#30363d]" data-tab="source">
+                    Build from Source
+                  </button>
+                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-[#21262d] text-[#6e7681] hover:bg-[#30363d]" data-tab="pip">
+                    pip install (coming soon)
+                  </button>
+                </div>
+
+                <!-- Option 1: Download Binary -->
+                <div id="install-binary" class="install-content">
+                  <!-- Step 1: Choose Platform -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 1: Choose Your Platform</h3>
+                    <div class="bg-[#161b22] rounded-lg border border-[#30363d] overflow-hidden">
+                      <table class="w-full text-sm">
+                        <thead>
+                          <tr class="bg-[#21262d]">
+                            <th class="text-left px-4 py-3 text-[#e6edf3]">Platform</th>
+                            <th class="text-left px-4 py-3 text-[#e6edf3]">Requirements</th>
+                            <th class="text-left px-4 py-3 text-[#e6edf3]">Filename</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr class="border-t border-[#30363d]">
+                            <td class="px-4 py-3 font-medium text-[#e6edf3]">Linux x86-64</td>
+                            <td class="px-4 py-3 text-[#8b949e]">Ubuntu 18.04+, CentOS 7+</td>
+                            <td class="px-4 py-3"><code class="text-[#8b949e]">packdb_cli-linux-amd64.zip</code></td>
+                          </tr>
+                          <tr class="border-t border-[#30363d]">
+                            <td class="px-4 py-3 font-medium text-[#e6edf3]">macOS Universal</td>
+                            <td class="px-4 py-3 text-[#8b949e]">macOS 11.0+</td>
+                            <td class="px-4 py-3"><code class="text-[#8b949e]">packdb_cli-osx-universal.zip</code></td>
+                          </tr>
+                          <tr class="border-t border-[#30363d]">
+                            <td class="px-4 py-3 font-medium text-[#e6edf3]">Windows x64</td>
+                            <td class="px-4 py-3 text-[#8b949e]">Windows 10+</td>
+                            <td class="px-4 py-3"><code class="text-[#8b949e]">packdb_cli-windows-amd64.zip</code></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p class="text-[#6e7681] text-xs mt-3">
+                      .gz archives are also available for Linux and macOS in the release assets.
+                    </p>
+                  </div>
+
+                  <!-- Step 2: Download -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 2: Download from GitHub Releases</h3>
+                    <a href="https://github.com/huda-lab/packdb/releases/latest" target="_blank" rel="noopener noreferrer"
+                       class="inline-flex items-center gap-2 btn btn-primary mb-4">
+                      <i data-lucide="external-link" class="w-4 h-4"></i>
+                      Latest Release
+                    </a>
+                    <p class="text-sm text-[#8b949e]">
+                      Download the ZIP file for your platform from the Assets section.
+                    </p>
+                  </div>
+
+                  <!-- Step 3: Extract and Verify -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 3: Extract and Verify</h3>
+
+                    <!-- Linux/macOS -->
+                    <div class="mb-4">
+                      <h4 class="font-medium text-[#8b949e] mb-2">Linux / macOS</h4>
+                      <div class="code-block">
+                        <div class="code-header">
+                          <span class="language-label">Bash</span>
+                          <button class="copy-button" data-clipboard-target="#code-extract-unix">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                            Copy
+                          </button>
+                        </div>
+                        <pre class="language-bash"><code id="code-extract-unix"># Extract the downloaded file (adjust filename for your platform)
+unzip packdb_cli-linux-amd64.zip
+
+# Make executable
+chmod +x packdb
+
+# Verify installation
+./packdb --version</code></pre>
+                      </div>
+                    </div>
+
+                    <!-- Windows -->
+                    <div class="mb-4">
+                      <h4 class="font-medium text-[#8b949e] mb-2">Windows (PowerShell)</h4>
+                      <div class="code-block">
+                        <div class="code-header">
+                          <span class="language-label">PowerShell</span>
+                          <button class="copy-button" data-clipboard-target="#code-extract-win">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                            Copy
+                          </button>
+                        </div>
+                        <pre class="language-bash"><code id="code-extract-win"># Extract ZIP file using File Explorer or:
+Expand-Archive packdb_cli-windows-amd64.zip -DestinationPath .
+
+# Verify installation
+.\packdb.exe --version</code></pre>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Security Note -->
+                  <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#d29922] rounded-lg p-6 mb-8">
+                    <div class="flex items-start gap-3">
+                      <i data-lucide="shield-alert" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                      <div>
+                        <h4 class="font-semibold text-[#e6edf3]">Unsigned Binaries</h4>
+                        <div class="text-[#8b949e] text-sm mt-2 space-y-1">
+                          <p><strong>macOS:</strong> Right-click → Open → confirm.</p>
+                          <p><strong>Windows:</strong> SmartScreen → "More info" → "Run anyway".</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Test Query -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 4: Test Installation</h3>
+                    <div class="code-block">
+                      <div class="code-header">
+                        <span class="language-label">Bash</span>
+                        <button class="copy-button" data-clipboard-target="#code-test-binary">
+                          <i data-lucide="copy" class="w-4 h-4"></i>
+                          Copy
+                        </button>
+                      </div>
+                      <pre class="language-bash"><code id="code-test-binary"># Test basic query
+./packdb -c "SELECT 'PackDB is ready!' as message;"</code></pre>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Option 2: Build from Source -->
+                <div id="install-source" class="install-content hidden">
+                  <!-- Step 1: Clone -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 1: Clone the Repository</h3>
+                    <div class="code-block">
+                      <div class="code-header">
+                        <span class="language-label">Bash</span>
+                        <button class="copy-button" data-clipboard-target="#code-clone">
+                          <i data-lucide="copy" class="w-4 h-4"></i>
+                          Copy
+                        </button>
+                      </div>
+                      <pre class="language-bash"><code id="code-clone">git clone https://github.com/huda-lab/packdb.git
+cd packdb
+git checkout hatim</code></pre>
+                    </div>
+                  </div>
+
+                  <!-- Step 2: Build -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 2: Configure and Build</h3>
+                    <!-- Linux / macOS -->
+                    <div class="mb-4">
+                      <h4 class="font-medium text-[#8b949e] mb-2">Linux / macOS</h4>
+                      <div class="code-block">
+                        <div class="code-header">
+                          <span class="language-label">Bash</span>
+                          <button class="copy-button" data-clipboard-target="#code-build-unix">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                            Copy
+                          </button>
+                        </div>
+                        <pre class="language-bash"><code id="code-build-unix">make release</code></pre>
+                      </div>
+                    </div>
+
+                    <!-- Windows -->
+                    <div class="mb-4">
+                      <h4 class="font-medium text-[#8b949e] mb-2">Windows (PowerShell)</h4>
+                      <p class="text-[#6e7681] text-xs mb-2">Requires Visual Studio 2019+ and Ninja installed.</p>
+                      <div class="code-block">
+                        <div class="code-header">
+                          <span class="language-label">PowerShell</span>
+                          <button class="copy-button" data-clipboard-target="#code-build-win">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                            Copy
+                          </button>
+                        </div>
+                        <pre class="language-bash"><code id="code-build-win">cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1
+ninja -C build/release</code></pre>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Step 3: Verify -->
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Step 3: Verify Installation</h3>
+                    <!-- Linux / macOS -->
+                    <div class="mb-4">
+                      <h4 class="font-medium text-[#8b949e] mb-2">Linux / macOS</h4>
+                      <div class="code-block">
+                        <div class="code-header">
+                          <span class="language-label">Bash</span>
+                          <button class="copy-button" data-clipboard-target="#code-verify-unix">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                            Copy
+                          </button>
+                        </div>
+                        <pre class="language-bash"><code id="code-verify-unix"># Verify installation
+./build/release/packdb --version
+
+# Test basic query
+./build/release/packdb -c "SELECT 'PackDB is ready!' as message;"</code></pre>
+                      </div>
+                    </div>
+
+                    <!-- Windows -->
+                    <div class="mb-4">
+                      <h4 class="font-medium text-[#8b949e] mb-2">Windows (PowerShell)</h4>
+                      <div class="code-block">
+                        <div class="code-header">
+                          <span class="language-label">PowerShell</span>
+                          <button class="copy-button" data-clipboard-target="#code-verify-win">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                            Copy
+                          </button>
+                        </div>
+                        <pre class="language-bash"><code id="code-verify-win"># Verify installation
+.\build\release\packdb.exe --version
+
+# Test basic query
+.\build\release\packdb.exe -c "SELECT 'PackDB is ready!' as message;"</code></pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Option 3: pip install -->
+                <div id="install-pip" class="install-content hidden">
+                  <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-8 text-center">
+                    <h3 class="text-xl font-semibold text-[#e6edf3] mb-2">Coming Soon</h3>
+                    <p class="text-[#8b949e] mb-4 text-sm">
+                      Python package is under development.
+                    </p>
+                    <div class="code-block max-w-md mx-auto opacity-50">
+                      <div class="code-header">
+                        <span class="language-label">Bash</span>
+                      </div>
+                      <pre class="language-bash"><code>pip install packdb</code></pre>
+                    </div>
+                    <p class="text-sm text-[#6e7681] mt-4">
+                      <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#8b949e] hover:underline">
+                        Watch the GitHub repo
+                      </a>
+                      for updates.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+            </section>
+
+            <!-- Your First Query Section -->
+            <section id="first-query" class="mb-16">
+              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6 flex items-center gap-3">
+                <span class="flex items-center justify-center w-10 h-10 bg-[#30363d] text-[#e6edf3] rounded-md text-lg font-bold">3</span>
+                Your First Query
+              </h2>
+
+              <p class="text-[#8b949e] mb-6">
+                A classic knapsack problem: select items to maximize value within a weight limit.
+              </p>
+
+              <!-- Start PackDB -->
+              <div class="mb-8">
+                <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Start PackDB</h3>
+                <div class="code-block">
+                  <div class="code-header">
+                    <span class="language-label">Bash</span>
+                    <button class="copy-button" data-clipboard-target="#code-start">
+                      <i data-lucide="copy" class="w-4 h-4"></i>
+                      Copy
+                    </button>
+                  </div>
+                  <pre class="language-bash"><code id="code-start"># Start PackDB with a new database
+./packdb my_database.db</code></pre>
+                </div>
+                <p class="text-sm text-[#6e7681] mt-2">
+                  This opens an interactive SQL shell. You can also use <code class="bg-[#21262d] px-1 rounded">./packdb</code> without a filename for an in-memory database.
+                </p>
+              </div>
+
+              <!-- Step 1: Create Sample Data -->
+              <div class="mb-8">
+                <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Create Sample Data</h3>
+                <p class="text-[#8b949e] mb-4">In the PackDB shell, run:</p>
+                <div class="code-block">
+                  <div class="code-header">
+                    <span class="language-label">SQL</span>
+                    <button class="copy-button" data-clipboard-target="#code-data">
+                      <i data-lucide="copy" class="w-4 h-4"></i>
+                      Copy
+                    </button>
+                  </div>
+                  <pre class="language-sql"><code id="code-data">CREATE TABLE Items (
+    id INTEGER,
+    value INTEGER,
+    weight INTEGER,
+    category VARCHAR
+);
+
+INSERT INTO Items VALUES
+    (1, 100, 20, 'electronics'),
+    (2, 60, 10, 'electronics'),
+    (3, 120, 30, 'electronics'),
+    (4, 50, 50, 'furniture');</code></pre>
+                </div>
+              </div>
+
+              <!-- Step 2: Write Optimization Query -->
+              <div class="mb-8">
+                <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Write the Optimization Query</h3>
+                <div class="code-block">
+                  <div class="code-header">
+                    <span class="language-label">SQL</span>
+                    <button class="copy-button" data-clipboard-target="#code-query">
+                      <i data-lucide="copy" class="w-4 h-4"></i>
+                      Copy
+                    </button>
+                  </div>
+                  <pre class="language-sql"><code id="code-query">SELECT id, value, weight, x
+FROM Items
+WHERE category = 'electronics'
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);</code></pre>
+                </div>
+              </div>
+
+              <!-- Understanding the Query -->
+              <div class="mb-8">
+                <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Understanding the Query</h3>
+                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
+                  <ol class="space-y-3">
+                    <li class="flex gap-4">
+                      <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">1</span>
+                      <div>
+                        <span class="font-semibold text-[#e6edf3]">WHERE</span>
+                        <span class="text-[#8b949e]"> — Filters to electronics only</span>
+                      </div>
+                    </li>
+                    <li class="flex gap-4">
+                      <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">2</span>
+                      <div>
+                        <span class="font-semibold text-[#e6edf3]">DECIDE x</span>
+                        <span class="text-[#8b949e]"> — Creates binary variable per row (1 = select, 0 = skip)</span>
+                      </div>
+                    </li>
+                    <li class="flex gap-4">
+                      <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">3</span>
+                      <div>
+                        <span class="font-semibold text-[#e6edf3]">SUCH THAT</span>
+                        <span class="text-[#8b949e]"> — <code class="bg-[#30363d] px-1 rounded">x IS BINARY</code> and <code class="bg-[#30363d] px-1 rounded">SUM(x * weight) &lt;= 50</code></span>
+                      </div>
+                    </li>
+                    <li class="flex gap-4">
+                      <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">4</span>
+                      <div>
+                        <span class="font-semibold text-[#e6edf3]">MAXIMIZE</span>
+                        <span class="text-[#8b949e]"> — Maximize total value of selected items</span>
+                      </div>
+                    </li>
+                  </ol>
+                </div>
+              </div>
+
+              <!-- Expected Output -->
+              <div class="mb-8">
+                <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Expected Output</h3>
+                <div class="table-wrapper rounded-lg border border-[#30363d] overflow-hidden">
+                  <table class="w-full">
+                    <thead>
+                      <tr class="bg-[#21262d]">
+                        <th class="text-left px-4 py-3 text-[#e6edf3]">id</th>
+                        <th class="text-left px-4 py-3 text-[#e6edf3]">value</th>
+                        <th class="text-left px-4 py-3 text-[#e6edf3]">weight</th>
+                        <th class="text-left px-4 py-3 text-[#e6edf3]">x</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td class="px-4 py-3 text-[#e6edf3]">1</td>
+                        <td class="px-4 py-3 text-[#e6edf3]">100</td>
+                        <td class="px-4 py-3 text-[#e6edf3]">20</td>
+                        <td class="px-4 py-3 font-semibold text-[#e6edf3]">1</td>
+                      </tr>
+                      <tr>
+                        <td class="px-4 py-3 text-[#e6edf3]">2</td>
+                        <td class="px-4 py-3 text-[#e6edf3]">60</td>
+                        <td class="px-4 py-3 text-[#e6edf3]">10</td>
+                        <td class="px-4 py-3 text-[#6e7681]">0</td>
+                      </tr>
+                      <tr>
+                        <td class="px-4 py-3 text-[#e6edf3]">3</td>
+                        <td class="px-4 py-3 text-[#e6edf3]">120</td>
+                        <td class="px-4 py-3 text-[#e6edf3]">30</td>
+                        <td class="px-4 py-3 font-semibold text-[#e6edf3]">1</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <p class="mt-4 text-[#8b949e] text-sm">
+                  <strong>Result:</strong> Items 1 and 3 selected. Total value = 220, total weight = 50 (at limit).
+                </p>
+              </div>
+
+              <!-- Alternative: One-liner -->
+              <div class="mb-8">
+                <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Alternative: Run from Command Line</h3>
+                <p class="text-[#8b949e] mb-4">
+                  You can also run queries directly from your terminal without entering the interactive shell:
+                </p>
+                <div class="code-block">
+                  <div class="code-header">
+                    <span class="language-label">Bash</span>
+                    <button class="copy-button" data-clipboard-target="#code-oneliner">
+                      <i data-lucide="copy" class="w-4 h-4"></i>
+                      Copy
+                    </button>
+                  </div>
+                  <pre class="language-bash"><code id="code-oneliner"># Run a query file
+./packdb my_database.db -f query.sql
+
+# Or execute inline
+./packdb my_database.db -c "SELECT * FROM Items;"</code></pre>
+                </div>
+              </div>
+            </section>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================
+       FOOTER
+       ============================================ -->
+  <footer class="bg-[#010409] text-gray-300">
+    <div class="container mx-auto px-4 py-12">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+
+        <!-- Col 1: Branding -->
+        <div>
+          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
+          <p class="text-sm text-[#8b949e] mb-4">
+            Optimization-enabled SQL queries for DuckDB
+          </p>
+          <p class="text-xs text-[#6e7681]">
+            &copy; 2025 HUDA Lab<br>
+            NYU Abu Dhabi
+          </p>
+        </div>
+
+        <!-- Col 2: Documentation -->
+        <div>
+          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="getting-started.html" class="text-[#8b949e] hover:text-white transition-colors">Getting Started</a></li>
+            <li><a href="documentation.html" class="text-[#8b949e] hover:text-white transition-colors">Syntax Reference</a></li>
+            <li><a href="examples.html" class="text-[#8b949e] hover:text-white transition-colors">Examples</a></li>
+          </ul>
+        </div>
+
+        <!-- Col 3: Resources -->
+        <div>
+          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <ul class="space-y-2 text-sm">
+            <li>
+              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+                 class="text-[#8b949e] hover:text-white transition-colors flex items-center gap-1">
+                <i data-lucide="github" class="w-4 h-4"></i>
+                GitHub Repository
+              </a>
+            </li>
+            <li>
+              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
+                 class="text-[#8b949e] hover:text-white transition-colors">Issue Tracker</a>
+            </li>
+            <li><a href="about.html#research" class="text-[#8b949e] hover:text-white transition-colors">Research Papers</a></li>
+            <li>
+              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
+                 class="text-[#8b949e] hover:text-white transition-colors">HUDA Lab</a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Col 4: Contact -->
+        <div>
+          <h4 class="font-semibold text-white mb-3">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#8b949e]">
+            <li>NYU Abu Dhabi</li>
+            <li>Saadiyat Island</li>
+            <li>Abu Dhabi, UAE</li>
+            <li>
+              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
+                huda-lab@nyu.edu
+              </a>
+            </li>
+          </ul>
+        </div>
+
+      </div>
+
+      <!-- Bottom Bar -->
+      <div class="mt-8 pt-8 border-t border-[#21262d] text-center text-sm text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Initialize Lucide Icons -->
+  <script>
+    lucide.createIcons();
+  </script>
+
+</body>
+</html>

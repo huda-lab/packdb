@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="About PackDB - Research team, HUDA Lab, publications, and project information.">
+  <meta name="keywords" content="PackDB, HUDA Lab, NYU Abu Dhabi, database research, optimization, team">
+  <title>About - PackDB</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Prism.js for syntax highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bibtex.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="assets/css/custom.css">
+
+  <!-- Custom JS -->
+  <script src="assets/js/main.js" defer></script>
+
+  <style>
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background-color: #0d1117;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Skip Link for Accessibility -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- ============================================
+       HEADER / NAVIGATION
+       ============================================ -->
+  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
+      <!-- Logo -->
+      <a href="index.html" class="flex items-center space-x-2">
+        <img src="assets/images/logo.svg" alt="PackDB" class="h-8">
+        <div class="hidden sm:block">
+          <div class="text-xs text-[#6e7681]">by HUDA Lab</div>
+        </div>
+      </a>
+
+      <!-- Desktop Navigation -->
+      <div class="hidden md:flex items-center space-x-6">
+        <a href="index.html" class="nav-link">Home</a>
+        <a href="getting-started.html" class="nav-link">Getting Started</a>
+        <a href="documentation.html" class="nav-link">Docs</a>
+        <a href="examples.html" class="nav-link">Examples</a>
+        <a href="about.html" class="nav-link active">About</a>
+      </div>
+
+      <!-- CTA Buttons -->
+      <div class="hidden md:flex items-center space-x-3">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i>
+          GitHub
+        </a>
+        <a href="getting-started.html" class="btn btn-primary text-sm">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+
+      <!-- Mobile Menu Button -->
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#21262d]"
+              aria-label="Toggle menu" aria-expanded="false">
+        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
+        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
+      </button>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
+      <div class="container mx-auto px-4 py-4 space-y-4">
+        <a href="index.html" class="block py-2 nav-link">Home</a>
+        <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
+        <a href="documentation.html" class="block py-2 nav-link">Docs</a>
+        <a href="examples.html" class="block py-2 nav-link">Examples</a>
+        <a href="about.html" class="block py-2 nav-link active">About</a>
+        <hr class="border-[#30363d]">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+          <i data-lucide="github" class="w-5 h-5"></i>
+          GitHub
+        </a>
+        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================
+       MAIN CONTENT
+       ============================================ -->
+  <main id="main-content" class="pt-20">
+
+    <!-- ============================================
+         HERO SECTION
+         ============================================ -->
+    <section class="py-12 bg-gradient-to-b from-[#161b22] to-[#0d1117]">
+      <div class="container mx-auto px-4">
+        <!-- Breadcrumb -->
+        <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
+          <a href="index.html">Home</a>
+          <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
+          <span class="text-[#e6edf3] font-medium">About</span>
+        </nav>
+
+        <div class="max-w-4xl">
+          <h1 class="text-4xl md:text-5xl font-bold text-[#e6edf3] mb-4">
+            About PackDB
+          </h1>
+          <p class="text-xl text-[#8b949e]">
+            A research project by the HUDA Lab at NYU Abu Dhabi, bringing optimization directly into SQL.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         CONTENT WITH SIDEBAR
+         ============================================ -->
+    <section class="py-12">
+      <div class="container mx-auto px-4">
+        <div class="flex flex-col lg:flex-row gap-12">
+
+          <!-- Sidebar Navigation -->
+          <aside class="lg:w-64 flex-shrink-0">
+            <nav class="sidebar-nav lg:sticky lg:top-24">
+              <h3 class="text-sm font-semibold text-[#e6edf3] uppercase tracking-wider mb-4">On This Page</h3>
+              <ul class="space-y-1">
+                <li><a href="#research" class="sidebar-link active">Research Foundation</a></li>
+                <li><a href="#team" class="sidebar-link">The Team</a></li>
+                <li><a href="#huda-lab" class="sidebar-link">HUDA Lab</a></li>
+                <li><a href="#technical" class="sidebar-link">Technical Details</a></li>
+                <li><a href="#limitations" class="sidebar-link">Limitations</a></li>
+                <li><a href="#future" class="sidebar-link">Future Development</a></li>
+              </ul>
+            </nav>
+          </aside>
+
+          <!-- Main Content -->
+          <div class="flex-1 max-w-3xl">
+
+
+          <!-- ============================================
+               RESEARCH FOUNDATION
+               ============================================ -->
+          <section id="research" class="mb-16">
+            <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Research Foundation</h2>
+            <p class="text-[#8b949e] mb-6">
+              PackDB builds on the <strong>Package Queries</strong> framework:
+            </p>
+
+            <div class="space-y-6">
+              <!-- Paper 1 -->
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
+                <div class="flex items-start gap-4">
+                  <div class="w-10 h-10 rounded-lg bg-[#21262d] flex items-center justify-center flex-shrink-0">
+                    <i data-lucide="file-text" class="w-5 h-5 text-[#8b949e]"></i>
+                  </div>
+                  <div>
+                    <h3 class="font-semibold text-[#e6edf3] mb-1">Scalable Package Queries in Relational Database Systems</h3>
+                    <p class="text-sm text-[#8b949e] mb-2">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+                    <p class="text-sm text-[#6e7681] mb-3"><em>VLDB 2016</em></p>
+                    <a href="https://doi.org/10.14778/2904483.2904489" target="_blank" rel="noopener noreferrer"
+                       class="text-sm text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
+                      <i data-lucide="external-link" class="w-4 h-4"></i>
+                      Read Paper
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Paper 2 -->
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
+                <div class="flex items-start gap-4">
+                  <div class="w-10 h-10 rounded-lg bg-[#21262d] flex items-center justify-center flex-shrink-0">
+                    <i data-lucide="file-text" class="w-5 h-5 text-[#8b949e]"></i>
+                  </div>
+                  <div>
+                    <h3 class="font-semibold text-[#e6edf3] mb-1">Scalable Computation of High-Order Optimization Queries</h3>
+                    <p class="text-sm text-[#8b949e] mb-2">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+                    <p class="text-sm text-[#6e7681] mb-3"><em>Communications of the ACM, 2019</em></p>
+                    <a href="https://doi.org/10.1145/3299881" target="_blank" rel="noopener noreferrer"
+                       class="text-sm text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
+                      <i data-lucide="external-link" class="w-4 h-4"></i>
+                      Read Paper
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Paper 3 -->
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
+                <div class="flex items-start gap-4">
+                  <div class="w-10 h-10 rounded-lg bg-[#21262d] flex items-center justify-center flex-shrink-0">
+                    <i data-lucide="file-text" class="w-5 h-5 text-[#8b949e]"></i>
+                  </div>
+                  <div>
+                    <h3 class="font-semibold text-[#e6edf3] mb-1">Scaling Package Queries to a Billion Tuples</h3>
+                    <p class="text-sm text-[#8b949e] mb-2">Anh L. Mai, Pengyu Wang, Azza Abouzied, Matteo Brucato, Peter J. Haas, Alexandra Meliou</p>
+                    <p class="text-sm text-[#6e7681] mb-3"><em>VLDB 2024</em></p>
+                    <a href="https://doi.org/10.14778/3641204.3641222" target="_blank" rel="noopener noreferrer"
+                       class="text-sm text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
+                      <i data-lucide="external-link" class="w-4 h-4"></i>
+                      Read Paper
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================
+               THE TEAM
+               ============================================ -->
+          <section id="team" class="mb-16">
+            <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">The Team</h2>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                <a href="https://azza.azurewebsites.net/" target="_blank" rel="noopener noreferrer"
+                   class="font-semibold text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
+                  Prof. Azza Abouzied
+                  <i data-lucide="external-link" class="w-3 h-3"></i>
+                </a>
+                <p class="text-sm text-[#8b949e]">Principal Investigator, Director HUDA Lab</p>
+                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
+              </div>
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                <p class="font-semibold text-[#e6edf3]">Anh Mai</p>
+                <p class="text-sm text-[#8b949e]">PhD Student, Sketch-Refine algorithm</p>
+                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
+              </div>
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                <p class="font-semibold text-[#e6edf3]">Filip Milisov</p>
+                <p class="text-sm text-[#8b949e]">Research Assistant</p>
+                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
+              </div>
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                <p class="font-semibold text-[#e6edf3]">Hatim Rehmanjee</p>
+                <p class="text-sm text-[#8b949e]">Capstone Project 2025-2026</p>
+                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================
+               HUDA LAB
+               ============================================ -->
+          <section id="huda-lab" class="mb-16">
+            <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">HUDA Lab</h2>
+            <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-8">
+              <div class="flex items-center gap-3 mb-4">
+                <div class="w-12 h-12 rounded-lg bg-[#21262d] flex items-center justify-center">
+                  <i data-lucide="users" class="w-6 h-6 text-[#8b949e]"></i>
+                </div>
+                <h3 class="text-2xl font-bold text-[#e6edf3]">Human Data Interaction Lab</h3>
+              </div>
+              <p class="text-[#8b949e] mb-4">
+                The HUDA Lab focuses on making data systems more accessible, interactive, and intelligent.
+              </p>
+              <h4 class="font-semibold text-[#e6edf3] mb-2">Research Areas:</h4>
+              <ul class="space-y-2 mb-6">
+                <li class="flex items-center gap-2 text-[#8b949e]">
+                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
+                  Query interfaces for non-experts
+                </li>
+                <li class="flex items-center gap-2 text-[#8b949e]">
+                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
+                  Visual data exploration
+                </li>
+                <li class="flex items-center gap-2 text-[#8b949e]">
+                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
+                  Automated data analysis
+                </li>
+                <li class="flex items-center gap-2 text-[#8b949e]">
+                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
+                  Optimization in databases
+                </li>
+              </ul>
+              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
+                 class="btn btn-primary">
+                Visit HUDA Lab Website
+                <i data-lucide="external-link" class="w-4 h-4"></i>
+              </a>
+            </div>
+          </section>
+
+          <!-- ============================================
+               TECHNICAL DETAILS
+               ============================================ -->
+          <section id="technical" class="mb-16">
+            <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Technical Details</h2>
+
+            <!-- Built With -->
+            <div class="mb-8">
+              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Built With</h3>
+              <p class="text-[#8b949e] mb-4">PackDB leverages several open-source technologies:</p>
+              <div class="grid md:grid-cols-3 gap-4">
+                <a href="https://duckdb.org" target="_blank" rel="noopener noreferrer"
+                   class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:bg-[#21262d] hover:border-[#8b949e] transition-all group">
+                  <div class="flex items-center gap-3 mb-2">
+                    <div class="w-10 h-10 rounded-lg bg-[#21262d] flex items-center justify-center">
+                      <i data-lucide="database" class="w-5 h-5 text-[#8b949e]"></i>
+                    </div>
+                    <h4 class="font-semibold text-[#e6edf3] group-hover:text-[#58a6ff]">DuckDB</h4>
+                  </div>
+                  <p class="text-sm text-[#8b949e]">Embeddable analytical database</p>
+                </a>
+                <a href="https://highs.dev/" target="_blank" rel="noopener noreferrer"
+                   class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:bg-[#21262d] hover:border-[#8b949e] transition-all group">
+                  <div class="flex items-center gap-3 mb-2">
+                    <div class="w-10 h-10 rounded-lg bg-[#21262d] flex items-center justify-center">
+                      <i data-lucide="cpu" class="w-5 h-5 text-[#8b949e]"></i>
+                    </div>
+                    <h4 class="font-semibold text-[#e6edf3] group-hover:text-[#58a6ff]">HiGHS</h4>
+                  </div>
+                  <p class="text-sm text-[#8b949e]">High-performance LP/MIP solver</p>
+                </a>
+                <a href="https://issc.uj.ac.za/symbolic/symbolic.html" target="_blank" rel="noopener noreferrer"
+                   class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:bg-[#21262d] hover:border-[#8b949e] transition-all group">
+                  <div class="flex items-center gap-3 mb-2">
+                    <div class="w-10 h-10 rounded-lg bg-[#21262d] flex items-center justify-center">
+                      <i data-lucide="sigma" class="w-5 h-5 text-[#8b949e]"></i>
+                    </div>
+                    <h4 class="font-semibold text-[#e6edf3] group-hover:text-[#58a6ff]">SymbolicC++</h4>
+                  </div>
+                  <p class="text-sm text-[#8b949e]">Computer algebra system</p>
+                </a>
+              </div>
+            </div>
+
+            <!-- Current Status -->
+            <div class="mb-8">
+              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Current Status</h3>
+              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
+                <div class="grid md:grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span class="font-semibold text-[#e6edf3]">Version:</span>
+                    <span class="text-[#8b949e]"> 0.1.0 (Prototype)</span>
+                  </div>
+                  <div>
+                    <span class="font-semibold text-[#e6edf3]">Branch:</span>
+                    <span class="text-[#8b949e]"> <code class="bg-[#30363d] px-2 py-0.5 rounded">hatim</code> (stable)</span>
+                  </div>
+                  <div>
+                    <span class="font-semibold text-[#e6edf3]">Test Coverage:</span>
+                    <span class="text-[#8b949e]"> automated test suite</span>
+                  </div>
+                  <div>
+                    <span class="font-semibold text-[#e6edf3]">Target Scale:</span>
+                    <span class="text-[#8b949e]"> ~10K rows (exact solving)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Known Limitations -->
+            <div class="mb-8">
+              <h3 id="limitations" class="text-xl font-semibold text-[#e6edf3] mb-4">Known Limitations</h3>
+              <p class="text-[#8b949e] mb-4">
+                As a research prototype, PackDB has several constraints that will be addressed in future releases:
+              </p>
+              <div class="space-y-4">
+                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                  <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
+                    Linearity Requirement
+                  </h4>
+                  <p class="text-sm text-[#8b949e]">
+                    Only Linear Programming (LP) and Integer Linear Programming (ILP) are supported. Cannot express quadratic objectives, variable interactions, or non-linear functions.
+                  </p>
+                </div>
+                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                  <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
+                    Scalability Constraints
+                  </h4>
+                  <p class="text-sm text-[#8b949e]">
+                    Exact solving works well for ~1K-10K rows. Performance degrades significantly beyond this range due to NP-Hard nature of integer programming.
+                  </p>
+                </div>
+                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                  <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
+                    Subquery Restrictions
+                  </h4>
+                  <p class="text-sm text-[#8b949e]">
+                    Only uncorrelated scalar subqueries are supported. Correlated subqueries that reference outer query columns are not yet implemented.
+                  </p>
+                </div>
+                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                  <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
+                    Variable Types
+                  </h4>
+                  <p class="text-sm text-[#8b949e]">
+                    No support for continuous (real) decision variables. Only BINARY {0, 1} and non-negative INTEGER {0, 1, 2, ...} variables are available.
+                  </p>
+                </div>
+                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                  <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
+                    Memory Requirements
+                  </h4>
+                  <p class="text-sm text-[#8b949e]">
+                    All candidate rows are materialized in memory. Very large candidate sets may exceed available RAM. Use WHERE clauses to filter aggressively.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Future Development -->
+            <div>
+              <h3 id="future" class="text-xl font-semibold text-[#e6edf3] mb-4">Future Development</h3>
+              <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#58a6ff] rounded-lg p-6">
+                <ul class="space-y-3">
+                  <li class="flex items-start gap-3">
+                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                    <div>
+                      <span class="font-semibold text-[#e6edf3]">Sketch-Refine Algorithm</span>
+                      <p class="text-sm text-[#8b949e]">Enable million-row scale optimization with bounded approximation error</p>
+                    </div>
+                  </li>
+                  <li class="flex items-start gap-3">
+                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                    <div>
+                      <span class="font-semibold text-[#e6edf3]">Correlated Subqueries</span>
+                      <p class="text-sm text-[#8b949e]">Support complex data dependencies via query unnesting</p>
+                    </div>
+                  </li>
+                  <li class="flex items-start gap-3">
+                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                    <div>
+                      <span class="font-semibold text-[#e6edf3]">Performance Benchmarking</span>
+                      <p class="text-sm text-[#8b949e]">Comprehensive performance testing and optimization</p>
+                    </div>
+                  </li>
+                  <li class="flex items-start gap-3">
+                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                    <div>
+                      <span class="font-semibold text-[#e6edf3]">Multi-Solver Integration</span>
+                      <p class="text-sm text-[#8b949e]">Support for multiple solver backends beyond HiGHS</p>
+                    </div>
+                  </li>
+                  <li class="flex items-start gap-3">
+                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
+                    <div>
+                      <span class="font-semibold text-[#e6edf3]">Automatic Linearization</span>
+                      <p class="text-sm text-[#8b949e]">Automatic linearization of common non-linear patterns</p>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================
+       FOOTER
+       ============================================ -->
+  <footer class="bg-[#010409] text-[#8b949e] py-12">
+    <div class="container mx-auto px-4">
+      <div class="grid md:grid-cols-4 gap-8 mb-8">
+        <!-- Brand -->
+        <div>
+          <div class="flex items-center space-x-2 mb-4">
+            <img src="assets/images/logo.svg" alt="PackDB" class="h-8 brightness-200">
+          </div>
+          <p class="text-sm">
+            Native optimization in SQL.<br>
+            A research project by HUDA Lab at NYU Abu Dhabi.
+          </p>
+        </div>
+
+        <!-- Resources -->
+        <div>
+          <h4 class="text-[#e6edf3] font-semibold mb-4">Resources</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="getting-started.html" class="hover:text-[#e6edf3] transition-colors">Getting Started</a></li>
+            <li><a href="documentation.html" class="hover:text-[#e6edf3] transition-colors">Documentation</a></li>
+            <li><a href="examples.html" class="hover:text-[#e6edf3] transition-colors">Examples</a></li>
+          </ul>
+        </div>
+
+        <!-- Project -->
+        <div>
+          <h4 class="text-[#e6edf3] font-semibold mb-4">Project</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="about.html" class="hover:text-[#e6edf3] transition-colors">About</a></li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="hover:text-[#e6edf3] transition-colors">GitHub</a></li>
+            <li><a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer" class="hover:text-[#e6edf3] transition-colors">HUDA Lab</a></li>
+          </ul>
+        </div>
+
+        <!-- Connect -->
+        <div>
+          <h4 class="text-[#e6edf3] font-semibold mb-4">Connect</h4>
+          <div class="flex space-x-4">
+            <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+               class="w-10 h-10 rounded-full bg-[#21262d] flex items-center justify-center hover:bg-[#30363d] transition-colors"
+               aria-label="GitHub">
+              <i data-lucide="github" class="w-5 h-5"></i>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="border-t border-[#21262d] pt-8 flex flex-col md:flex-row justify-between items-center text-sm">
+        <p>&copy; 2025 HUDA Lab, NYU Abu Dhabi. All rights reserved.</p>
+        <p class="mt-2 md:mt-0">
+          Built with
+          <a href="https://duckdb.org" target="_blank" rel="noopener noreferrer" class="text-[#58a6ff] hover:text-[#79c0ff]">DuckDB</a>
+          and
+          <a href="https://highs.dev" target="_blank" rel="noopener noreferrer" class="text-[#58a6ff] hover:text-[#79c0ff]">HiGHS</a>
+        </p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Initialize Lucide Icons -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      lucide.createIcons();
+    });
+  </script>
+
+</body>
+</html>

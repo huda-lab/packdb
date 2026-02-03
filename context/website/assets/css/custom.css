@@ -1,0 +1,669 @@
+/* PackDB Website - Custom Styles */
+/* GitHub-Inspired Dark Mode Theme */
+
+/* ============================================
+   CSS Custom Properties (Design Tokens)
+   ============================================ */
+:root {
+  /* Background Colors (GitHub Dark) */
+  --color-canvas: #0d1117;
+  --color-canvas-overlay: #161b22;
+  --color-canvas-inset: #010409;
+  --color-canvas-subtle: #21262d;
+
+  /* Foreground Colors */
+  --color-fg-default: #e6edf3;
+  --color-fg-muted: #8b949e;
+  --color-fg-subtle: #6e7681;
+
+  /* Border Colors */
+  --color-border-default: #30363d;
+  --color-border-muted: #21262d;
+
+  /* Accent Colors */
+  --color-accent-fg: #58a6ff;
+  --color-accent-emphasis: #1f6feb;
+  --color-accent-muted: rgba(56, 139, 253, 0.15);
+
+  /* Status Colors */
+  --color-success-fg: #3fb950;
+  --color-success-emphasis: #238636;
+  --color-warning-fg: #d29922;
+  --color-danger-fg: #f85149;
+
+  /* Legacy mappings for compatibility */
+  --color-primary: #58a6ff;
+  --color-primary-light: #79c0ff;
+  --color-primary-dark: #1f6feb;
+  --color-secondary: #3fb950;
+  --color-secondary-light: #56d364;
+  --color-secondary-dark: #238636;
+  --color-accent: #f85149;
+  --color-accent-light: #ff7b72;
+  --color-accent-dark: #da3633;
+
+  /* Neutral Colors */
+  --color-gray-50: #161b22;
+  --color-gray-100: #21262d;
+  --color-gray-200: #30363d;
+  --color-gray-300: #484f58;
+  --color-gray-400: #6e7681;
+  --color-gray-500: #8b949e;
+  --color-gray-600: #c9d1d9;
+  --color-gray-700: #e6edf3;
+  --color-gray-800: #f0f6fc;
+  --color-gray-900: #ffffff;
+
+  /* Typography */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Spacing */
+  --header-height: 4rem;
+  --sidebar-width: 16rem;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
+/* ============================================
+   Base Styles
+   ============================================ */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--header-height) + 1rem);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-canvas);
+  color: var(--color-fg-default);
+  line-height: 1.6;
+}
+
+/* ============================================
+   Typography
+   ============================================ */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-fg-default);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+}
+
+/* Inline code */
+:not(pre) > code {
+  background-color: var(--color-canvas-subtle);
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.875em;
+  color: var(--color-fg-default);
+  border: 1px solid var(--color-border-default);
+}
+
+/* Links */
+a {
+  color: var(--color-accent-fg);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-primary-light);
+  text-decoration: underline;
+}
+
+/* ============================================
+   Code Blocks (Prism.js enhancements)
+   ============================================ */
+.code-block {
+  position: relative;
+  margin: 1rem 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+}
+
+.code-block .code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background-color: var(--color-canvas-subtle);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+}
+
+.code-block .code-header .language-label {
+  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.code-block pre {
+  margin: 0;
+  border-radius: 0;
+}
+
+.code-block pre[class*="language-"] {
+  background: var(--color-canvas);
+  padding: 1rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+/* Copy button */
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background-color: transparent;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  color: var(--color-fg-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.copy-button:hover {
+  background-color: var(--color-canvas-subtle);
+  border-color: var(--color-fg-subtle);
+  color: var(--color-fg-default);
+}
+
+.copy-button.copied {
+  background-color: var(--color-success-emphasis);
+  border-color: var(--color-success-emphasis);
+  color: white;
+}
+
+/* ============================================
+   Navigation
+   ============================================ */
+.nav-link {
+  position: relative;
+  color: var(--color-fg-muted);
+  transition: color var(--transition-fast);
+}
+
+.nav-link:hover {
+  color: var(--color-fg-default);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: var(--color-fg-default);
+  font-weight: 500;
+}
+
+.nav-link.active::after {
+  content: '';
+  position: absolute;
+  bottom: -0.5rem;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: var(--color-accent-fg);
+  border-radius: 2px;
+}
+
+/* Mobile menu */
+.mobile-menu {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height var(--transition-slow);
+}
+
+.mobile-menu.open {
+  max-height: 24rem;
+}
+
+/* ============================================
+   Sidebar Navigation (Documentation pages)
+   ============================================ */
+.sidebar-nav {
+  position: sticky;
+  top: calc(var(--header-height) + 1rem);
+  max-height: calc(100vh - var(--header-height) - 2rem);
+  overflow-y: auto;
+}
+
+.sidebar-link {
+  display: block;
+  padding: 0.5rem 1rem;
+  color: var(--color-fg-muted);
+  border-left: 2px solid transparent;
+  transition: all var(--transition-fast);
+  border-radius: 0 6px 6px 0;
+}
+
+.sidebar-link:hover {
+  color: var(--color-fg-default);
+  background-color: var(--color-canvas-subtle);
+  text-decoration: none;
+}
+
+.sidebar-link.active {
+  color: var(--color-accent-fg);
+  border-left-color: var(--color-accent-fg);
+  background-color: var(--color-accent-muted);
+}
+
+/* ============================================
+   Buttons
+   ============================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  font-weight: 500;
+  border-radius: 6px;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:hover {
+  text-decoration: none;
+}
+
+.btn-primary {
+  background-color: var(--color-success-emphasis);
+  color: white;
+  border: 1px solid var(--color-success-emphasis);
+}
+
+.btn-primary:hover {
+  background-color: #2ea043;
+  border-color: #2ea043;
+  color: white;
+}
+
+.btn-secondary {
+  background-color: var(--color-canvas-subtle);
+  color: var(--color-fg-default);
+  border: 1px solid var(--color-border-default);
+}
+
+.btn-secondary:hover {
+  background-color: var(--color-canvas-subtle);
+  border-color: var(--color-fg-subtle);
+  color: var(--color-fg-default);
+}
+
+.btn-accent {
+  background-color: var(--color-accent-emphasis);
+  color: white;
+  border: 1px solid var(--color-accent-emphasis);
+}
+
+.btn-accent:hover {
+  background-color: #388bfd;
+  border-color: #388bfd;
+  color: white;
+}
+
+/* ============================================
+   Cards
+   ============================================ */
+.card {
+  background-color: var(--color-canvas-overlay);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  padding: 1.5rem;
+  transition: all var(--transition-base);
+}
+
+.card:hover {
+  border-color: var(--color-fg-subtle);
+}
+
+.card-feature {
+  text-align: center;
+}
+
+.card-feature .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: 1rem;
+  background-color: var(--color-accent-muted);
+  border-radius: 12px;
+  color: var(--color-accent-fg);
+}
+
+/* ============================================
+   Badges
+   ============================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 9999px;
+}
+
+.badge-basic {
+  background-color: rgba(63, 185, 80, 0.15);
+  color: var(--color-success-fg);
+}
+
+.badge-intermediate {
+  background-color: rgba(56, 139, 253, 0.15);
+  color: var(--color-accent-fg);
+}
+
+.badge-advanced {
+  background-color: rgba(248, 81, 73, 0.15);
+  color: var(--color-danger-fg);
+}
+
+/* ============================================
+   Tables
+   ============================================ */
+.table-wrapper {
+  overflow-x: auto;
+  margin: 1rem 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+th {
+  background-color: var(--color-canvas-subtle);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border-default);
+  color: var(--color-fg-default);
+}
+
+td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border-default);
+  color: var(--color-fg-default);
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover td {
+  background-color: var(--color-canvas-subtle);
+}
+
+/* ============================================
+   Collapsible Sections
+   ============================================ */
+.collapsible {
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  margin: 1rem 0;
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  cursor: pointer;
+  background-color: var(--color-canvas-subtle);
+  border-radius: 6px;
+  transition: background-color var(--transition-fast);
+}
+
+.collapsible-header:hover {
+  background-color: var(--color-canvas-overlay);
+}
+
+.collapsible-header .icon {
+  transition: transform var(--transition-base);
+  color: var(--color-fg-muted);
+}
+
+.collapsible.open .collapsible-header .icon {
+  transform: rotate(180deg);
+}
+
+.collapsible-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height var(--transition-slow);
+}
+
+.collapsible.open .collapsible-content {
+  max-height: 1000px;
+}
+
+.collapsible-body {
+  padding: 1rem;
+}
+
+/* ============================================
+   Breadcrumbs
+   ============================================ */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--color-fg-muted);
+}
+
+.breadcrumb a {
+  color: var(--color-fg-muted);
+  transition: color var(--transition-fast);
+}
+
+.breadcrumb a:hover {
+  color: var(--color-accent-fg);
+  text-decoration: none;
+}
+
+.breadcrumb .separator {
+  color: var(--color-fg-subtle);
+}
+
+/* ============================================
+   Mermaid Diagram Styling
+   ============================================ */
+.mermaid {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ============================================
+   Installation Tabs (Getting Started page)
+   ============================================ */
+.install-tab {
+  transition: all var(--transition-fast);
+  color: var(--color-fg-muted);
+}
+
+.install-tab:hover:not(.active) {
+  background-color: var(--color-canvas-subtle);
+  color: var(--color-fg-default);
+}
+
+.install-tab.active {
+  background-color: var(--color-accent-muted);
+  color: var(--color-accent-fg);
+}
+
+.install-content {
+  animation: fadeIn var(--transition-base);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
+.text-primary {
+  color: var(--color-accent-fg);
+}
+
+.text-secondary {
+  color: var(--color-success-fg);
+}
+
+.text-accent {
+  color: var(--color-danger-fg);
+}
+
+.bg-primary {
+  background-color: var(--color-accent-emphasis);
+}
+
+.bg-secondary {
+  background-color: var(--color-success-emphasis);
+}
+
+.bg-accent {
+  background-color: var(--color-accent);
+}
+
+/* Focus styles for accessibility */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-accent-fg);
+  outline-offset: 2px;
+}
+
+/* Skip link for accessibility */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 0;
+  padding: 1rem;
+  background-color: var(--color-accent-emphasis);
+  color: white;
+  z-index: 9999;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ============================================
+   Dark Theme Overrides for Prism.js
+   ============================================ */
+code[class*="language-"],
+pre[class*="language-"] {
+  color: var(--color-fg-default);
+  background: none;
+  text-shadow: none;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--color-fg-subtle);
+}
+
+.token.punctuation {
+  color: var(--color-fg-muted);
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #79c0ff;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #a5d6ff;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #d2a8ff;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #ff7b72;
+}
+
+.token.function,
+.token.class-name {
+  color: #d2a8ff;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #ffa657;
+}
+
+/* ============================================
+   Print Styles
+   ============================================ */
+@media print {
+  .no-print,
+  nav,
+  .sidebar-nav,
+  .copy-button {
+    display: none !important;
+  }
+
+  body {
+    background-color: white;
+    color: black;
+  }
+
+  .code-block pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+}

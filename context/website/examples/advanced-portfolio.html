@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="PackDB Example: Portfolio Optimization - Select assets to maximize returns while respecting risk limits and diversification rules.">
+  <meta name="keywords" content="PackDB, DuckDB, SQL, portfolio optimization, finance, investment, risk management">
+  <title>Portfolio Optimization - PackDB Examples</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Prism.js for syntax highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="../assets/css/custom.css">
+
+  <!-- Custom JS -->
+  <script src="../assets/js/main.js" defer></script>
+
+  <style>
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background-color: #0d1117;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Skip Link for Accessibility -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- ============================================
+       HEADER / NAVIGATION
+       ============================================ -->
+  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
+      <!-- Logo -->
+      <a href="../index.html" class="flex items-center space-x-2">
+        <img src="../assets/images/logo.svg" alt="PackDB" class="h-8">
+        <div class="hidden sm:block">
+          <div class="text-xs text-[#8b949e]">by HUDA Lab</div>
+        </div>
+      </a>
+
+      <!-- Desktop Navigation -->
+      <div class="hidden md:flex items-center space-x-6">
+        <a href="../index.html" class="nav-link">Home</a>
+        <a href="../getting-started.html" class="nav-link">Getting Started</a>
+        <a href="../documentation.html" class="nav-link">Docs</a>
+        <a href="../examples.html" class="nav-link active">Examples</a>
+        <a href="../about.html" class="nav-link">About</a>
+      </div>
+
+      <!-- CTA Buttons -->
+      <div class="hidden md:flex items-center space-x-3">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i>
+          GitHub
+        </a>
+        <a href="../getting-started.html" class="btn btn-primary text-sm">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+
+      <!-- Mobile Menu Button -->
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#30363d]"
+              aria-label="Toggle menu" aria-expanded="false">
+        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6 text-[#e6edf3]"></i>
+        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden text-[#e6edf3]"></i>
+      </button>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
+      <div class="container mx-auto px-4 py-4 space-y-4">
+        <a href="../index.html" class="block py-2 nav-link">Home</a>
+        <a href="../getting-started.html" class="block py-2 nav-link">Getting Started</a>
+        <a href="../documentation.html" class="block py-2 nav-link">Docs</a>
+        <a href="../examples.html" class="block py-2 nav-link active">Examples</a>
+        <a href="../about.html" class="block py-2 nav-link">About</a>
+        <hr class="border-[#30363d]">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+          <i data-lucide="github" class="w-5 h-5"></i>
+          GitHub
+        </a>
+        <a href="../getting-started.html" class="btn btn-primary w-full justify-center">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================
+       MAIN CONTENT
+       ============================================ -->
+  <main id="main-content" class="pt-20">
+
+    <!-- ============================================
+         CONTENT
+         ============================================ -->
+    <section class="py-12">
+      <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto">
+
+          <!-- Breadcrumb -->
+          <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
+            <a href="../index.html">Home</a>
+            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
+            <a href="../examples.html">Examples</a>
+            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
+            <span class="text-[#e6edf3] font-medium">Portfolio Optimization</span>
+          </nav>
+
+          <!-- Problem Definition -->
+          <div class="mb-8">
+            <div class="flex items-start gap-4 mb-4">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(248, 81, 73, 0.1)">
+                <i data-lucide="trending-up" class="w-6 h-6 text-[#f85149]"></i>
+              </div>
+              <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                  <h1 class="text-3xl font-bold text-[#e6edf3]">Portfolio Optimization</h1>
+                  <span class="badge badge-advanced">Advanced</span>
+                </div>
+                <p class="text-[#8b949e]">
+                  Select assets to maximize expected return while respecting risk limits and diversification rules.
+                </p>
+              </div>
+            </div>
+
+            <!-- Tags -->
+            <div class="flex flex-wrap gap-2">
+              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Scalar Subquery</span>
+              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">CASE Expression</span>
+              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Complex Coefficients</span>
+            </div>
+          </div>
+
+          <!-- Query -->
+          <div class="mb-12">
+            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Query</h2>
+            <div class="code-block">
+              <div class="code-header">
+                <span class="language-label">SQL</span>
+                <button class="copy-button" data-clipboard-target="#code-query">
+                  <i data-lucide="copy" class="w-4 h-4"></i>
+                  Copy
+                </button>
+              </div>
+              <pre class="language-sql"><code id="code-query">SELECT
+    ticker,
+    name,
+    sector,
+    expected_return,
+    risk_score,
+    min_investment,
+    x as selected
+FROM Assets
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+
+    -- Budget constraint: total investment within budget
+    -- Uses subquery to get budget from config table
+    SUM(x * min_investment) <= (SELECT value FROM Config WHERE name = 'budget'),
+
+    -- Risk constraint: total risk budget limited to 300 points
+    SUM(x * risk_score) <= 300,
+
+    -- Diversification: at least 5 different assets
+    SUM(x) >= 5,
+
+    -- Sector limits: no more than 2 assets per sector
+    -- Technology sector
+    SUM(x * CASE WHEN sector = 'Technology' THEN 1 ELSE 0 END) <= 2,
+    -- Healthcare sector
+    SUM(x * CASE WHEN sector = 'Healthcare' THEN 1 ELSE 0 END) <= 2,
+    -- Finance sector
+    SUM(x * CASE WHEN sector = 'Finance' THEN 1 ELSE 0 END) <= 2,
+    -- Energy sector
+    SUM(x * CASE WHEN sector = 'Energy' THEN 1 ELSE 0 END) <= 2,
+    -- Consumer sector
+    SUM(x * CASE WHEN sector = 'Consumer' THEN 1 ELSE 0 END) <= 2
+
+MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
+            </div>
+          </div>
+
+          <!-- Expected Output -->
+          <div class="mb-12">
+            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Expected Output</h2>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ticker</th>
+                    <th>name</th>
+                    <th>sector</th>
+                    <th>return</th>
+                    <th>risk</th>
+                    <th>invest</th>
+                    <th>selected</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>MSFT</td>
+                    <td>Microsoft</td>
+                    <td>Technology</td>
+                    <td>11.2%</td>
+                    <td>55</td>
+                    <td>5000</td>
+                    <td>1</td>
+                  </tr>
+                  <tr>
+                    <td>PFE</td>
+                    <td>Pfizer</td>
+                    <td>Healthcare</td>
+                    <td>8.5%</td>
+                    <td>35</td>
+                    <td>2000</td>
+                    <td>1</td>
+                  </tr>
+                  <tr>
+                    <td>JPM</td>
+                    <td>JP Morgan</td>
+                    <td>Finance</td>
+                    <td>9.2%</td>
+                    <td>50</td>
+                    <td>4000</td>
+                    <td>1</td>
+                  </tr>
+                  <tr>
+                    <td>BAC</td>
+                    <td>Bank of America</td>
+                    <td>Finance</td>
+                    <td>10.1%</td>
+                    <td>55</td>
+                    <td>3000</td>
+                    <td>1</td>
+                  </tr>
+                  <tr>
+                    <td>PG</td>
+                    <td>Procter & Gamble</td>
+                    <td>Consumer</td>
+                    <td>6.5%</td>
+                    <td>20</td>
+                    <td>2000</td>
+                    <td>1</td>
+                  </tr>
+                  <tr>
+                    <td>KO</td>
+                    <td>Coca-Cola</td>
+                    <td>Consumer</td>
+                    <td>5.8%</td>
+                    <td>15</td>
+                    <td>2000</td>
+                    <td>1</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Navigation -->
+          <div class="pt-8 border-t border-[#30363d]">
+            <a href="../examples.html" class="btn btn-secondary">
+              <i data-lucide="arrow-left" class="w-4 h-4"></i>
+              Back to Examples
+            </a>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================
+       FOOTER
+       ============================================ -->
+  <footer class="bg-[#010409] text-gray-300">
+    <div class="container mx-auto px-4 py-12">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+
+        <!-- Col 1: Branding -->
+        <div>
+          <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
+          <p class="text-sm text-gray-400 mb-4">
+            Optimization-enabled SQL queries for DuckDB
+          </p>
+          <p class="text-xs text-gray-500">
+            &copy; 2025 HUDA Lab<br>
+            NYU Abu Dhabi
+          </p>
+        </div>
+
+        <!-- Col 2: Documentation -->
+        <div>
+          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="../getting-started.html" class="text-gray-400 hover:text-white transition-colors">Getting Started</a></li>
+            <li><a href="../documentation.html" class="text-gray-400 hover:text-white transition-colors">Syntax Reference</a></li>
+            <li><a href="../examples.html" class="text-gray-400 hover:text-white transition-colors">Examples</a></li>
+          </ul>
+        </div>
+
+        <!-- Col 3: Resources -->
+        <div>
+          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <ul class="space-y-2 text-sm">
+            <li>
+              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+                 class="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
+                <i data-lucide="github" class="w-4 h-4"></i>
+                GitHub Repository
+              </a>
+            </li>
+            <li>
+              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
+                 class="text-gray-400 hover:text-white transition-colors">Issue Tracker</a>
+            </li>
+            <li><a href="../about.html#research" class="text-gray-400 hover:text-white transition-colors">Research Papers</a></li>
+            <li>
+              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
+                 class="text-gray-400 hover:text-white transition-colors">HUDA Lab</a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Col 4: Contact -->
+        <div>
+          <h4 class="font-semibold text-white mb-3">Contact</h4>
+          <ul class="space-y-2 text-sm text-gray-400">
+            <li>NYU Abu Dhabi</li>
+            <li>Saadiyat Island</li>
+            <li>Abu Dhabi, UAE</li>
+            <li>
+              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
+                huda-lab@nyu.edu
+              </a>
+            </li>
+          </ul>
+        </div>
+
+      </div>
+
+      <!-- Bottom Bar -->
+      <div class="mt-8 pt-8 border-t border-[#30363d] text-center text-sm text-gray-500">
+        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Initialize Lucide Icons -->
+  <script>
+    lucide.createIcons();
+  </script>
+
+</body>
+</html>

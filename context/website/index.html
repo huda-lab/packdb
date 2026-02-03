@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="PackDB - Optimization-enabled SQL queries for DuckDB. Express optimization problems directly in SQL with the DECIDE clause.">
+  <meta name="keywords" content="PackDB, DuckDB, SQL, optimization, ILP, integer linear programming, database, HUDA Lab">
+  <title>PackDB - Optimization, Native in SQL</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inter Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Prism.js for syntax highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+
+  <!-- Mermaid.js for diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="assets/css/custom.css">
+
+  <!-- Custom JS -->
+  <script src="assets/js/main.js" defer></script>
+
+  <style>
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    code, pre {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Skip Link for Accessibility -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- ============================================
+       HEADER / NAVIGATION
+       ============================================ -->
+  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
+      <!-- Logo -->
+      <a href="index.html" class="flex items-center space-x-2">
+        <img src="assets/images/logo.svg" alt="PackDB" class="h-8">
+        <div class="hidden sm:block">
+          <div class="text-xs text-[#8b949e]">by HUDA Lab</div>
+        </div>
+      </a>
+
+      <!-- Desktop Navigation -->
+      <div class="hidden md:flex items-center space-x-6">
+        <a href="index.html" class="nav-link active">Home</a>
+        <a href="getting-started.html" class="nav-link">Getting Started</a>
+        <a href="documentation.html" class="nav-link">Docs</a>
+        <a href="examples.html" class="nav-link">Examples</a>
+        <a href="about.html" class="nav-link">About</a>
+      </div>
+
+      <!-- CTA Buttons -->
+      <div class="hidden md:flex items-center space-x-3">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i>
+          GitHub
+        </a>
+        <a href="getting-started.html" class="btn btn-primary text-sm">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+
+      <!-- Mobile Menu Button -->
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#21262d] text-[#e6edf3]"
+              aria-label="Toggle menu" aria-expanded="false">
+        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
+        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
+      </button>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
+      <div class="container mx-auto px-4 py-4 space-y-4">
+        <a href="index.html" class="block py-2 nav-link active">Home</a>
+        <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
+        <a href="documentation.html" class="block py-2 nav-link">Docs</a>
+        <a href="examples.html" class="block py-2 nav-link">Examples</a>
+        <a href="about.html" class="block py-2 nav-link">About</a>
+        <hr class="border-[#30363d]">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+          <i data-lucide="github" class="w-5 h-5"></i>
+          GitHub
+        </a>
+        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
+          Get Started
+          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================
+       MAIN CONTENT
+       ============================================ -->
+  <main id="main-content">
+
+    <!-- ============================================
+         HERO SECTION
+         ============================================ -->
+    <section class="pt-24 pb-16 md:pt-32 md:pb-24 bg-gradient-to-b from-[#161b22] to-[#0d1117]">
+      <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto text-center">
+          <!-- Badge -->
+
+
+          <!-- Headline -->
+          <h1 class="text-4xl md:text-5xl lg:text-6xl font-bold text-[#e6edf3] mb-6 leading-tight">
+            Optimization, Native in <span class="text-[#58a6ff]">SQL</span>
+          </h1>
+
+          <!-- Subheadline -->
+          <p class="text-xl md:text-2xl text-[#8b949e] mb-8 max-w-3xl mx-auto">
+            PackDB extends DuckDB with declarative optimization.<br>
+            Select optimal data packages with constraints.<br>
+            No external tools required.
+          </p>
+
+          <!-- CTA Buttons -->
+          <div class="flex flex-col sm:flex-row gap-4 justify-center mb-12">
+            <a href="getting-started.html" class="btn btn-primary text-lg px-8 py-3">
+              Get Started
+              <i data-lucide="arrow-right" class="w-5 h-5"></i>
+            </a>
+            <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+               class="btn btn-secondary text-lg px-8 py-3">
+              <i data-lucide="github" class="w-5 h-5"></i>
+              View on GitHub
+            </a>
+          </div>
+        </div>
+
+        <!-- Code Comparison -->
+        <div class="max-w-6xl mx-auto">
+          <div class="grid md:grid-cols-2 gap-6">
+            <!-- Traditional Approach -->
+            <div class="code-block">
+              <div class="code-header" style="background-color: rgba(248, 81, 73, 0.15);">
+                <span class="language-label flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-[#f85149]"></span>
+                  Traditional Approach
+                </span>
+                <button class="copy-button">
+                  <i data-lucide="copy" class="w-4 h-4"></i>
+                  Copy
+                </button>
+              </div>
+              <pre class="language-python"><code># Traditional: Export, Transform, Solve
+import duckdb
+import pulp
+
+# Query database
+conn = duckdb.connect('db.duckdb')
+items = conn.execute("""
+    SELECT id, value, weight
+    FROM Items
+    WHERE category = 'electronics'
+""").fetchall()
+
+# Build optimization model
+prob = pulp.LpProblem("knapsack", pulp.LpMaximize)
+x = [pulp.LpVariable(f"x_{i}", cat='Binary') for i in range(len(items))]
+
+# Add constraints manually
+prob += pulp.lpSum(x[i] * items[i][2] for i in range(len(items))) <= 50
+
+# Solve
+prob += pulp.lpSum(x[i] * items[i][1] for i in range(len(items)))
+prob.solve()
+
+# And then map results back to database...
+</code></pre>
+            </div>
+
+            <!-- PackDB Approach -->
+            <div class="code-block">
+              <div class="code-header" style="background-color: rgba(63, 185, 80, 0.15);">
+                <span class="language-label flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-[#3fb950]"></span>
+                  With PackDB
+                </span>
+                <button class="copy-button">
+                  <i data-lucide="copy" class="w-4 h-4"></i>
+                  Copy
+                </button>
+              </div>
+              <pre class="language-sql"><code>-- PackDB: Optimize Directly in SQL
+SELECT id, value, weight, x
+FROM Items
+WHERE category = 'electronics'
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);</code></pre>
+            </div>
+          </div>
+          <p class="text-center text-lg font-medium text-[#8b949e] mt-6">
+            <span class="text-[#58a6ff] font-semibold">Same result</span>, one-tenth the code. No context switching.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         THE UNBUNDLING PROBLEM SECTION
+         ============================================ -->
+    <section class="py-16 md:py-24 bg-[#0d1117]">
+      <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto text-center mb-12">
+          <h2 class="text-3xl md:text-4xl font-bold text-[#e6edf3] mb-4">
+            The Unbundling Problem
+          </h2>
+          <p class="text-lg text-[#8b949e]">
+            Today's optimization workflows are fragmented across multiple tools and languages.
+          </p>
+        </div>
+
+        <!-- Problem Steps -->
+        <div class="max-w-5xl mx-auto">
+          <div class="grid md:grid-cols-3 gap-8 mb-12">
+            <!-- Step 1 -->
+            <div class="text-center">
+              <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[#f8514915] flex items-center justify-center border border-[#f8514930]">
+                <i data-lucide="database" class="w-8 h-8 text-[#f85149]"></i>
+              </div>
+              <h3 class="text-lg font-semibold text-[#e6edf3] mb-2">1. Export Data</h3>
+              <ul class="text-[#8b949e] text-sm space-y-1">
+                <li>Query database</li>
+                <li>Materialize to app memory</li>
+                <li>Data staleness risk</li>
+              </ul>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="text-center">
+              <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[#d2992215] flex items-center justify-center border border-[#d2992230]">
+                <i data-lucide="code" class="w-8 h-8 text-[#d29922]"></i>
+              </div>
+              <h3 class="text-lg font-semibold text-[#e6edf3] mb-2">2. Transform & Model</h3>
+              <ul class="text-[#8b949e] text-sm space-y-1">
+                <li>Write solver code</li>
+                <li>Maintain dual expertise</li>
+                <li>Complex debugging</li>
+              </ul>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="text-center">
+              <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[#f8514915] flex items-center justify-center border border-[#f8514930]">
+                <i data-lucide="rotate-ccw" class="w-8 h-8 text-[#f85149]"></i>
+              </div>
+              <h3 class="text-lg font-semibold text-[#e6edf3] mb-2">3. Solve & Map Back</h3>
+              <ul class="text-[#8b949e] text-sm space-y-1">
+                <li>Parse solver output</li>
+                <li>Rejoin with database</li>
+                <li>Performance overhead</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- Flow Diagram -->
+          <div class="flex flex-col items-center justify-center py-8">
+            <!-- Flow visualization -->
+            <div class="flex flex-wrap items-center justify-center gap-3 md:gap-4">
+              <!-- Database -->
+              <div class="flex flex-col items-center">
+                <div class="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-[#f8514915] border border-[#f8514940] flex items-center justify-center">
+                  <i data-lucide="database" class="w-8 h-8 md:w-10 md:h-10 text-[#f85149]"></i>
+                </div>
+                <span class="text-xs md:text-sm font-medium text-[#8b949e] mt-2">Database</span>
+              </div>
+
+              <!-- Arrow 1 -->
+              <div class="flex flex-col items-center">
+                <i data-lucide="arrow-right" class="w-5 h-5 md:w-6 md:h-6 text-[#484f58]"></i>
+                <span class="text-xs text-[#6e7681]">export</span>
+              </div>
+
+              <!-- Application -->
+              <div class="flex flex-col items-center">
+                <div class="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-[#d2992215] border border-[#d2992240] flex items-center justify-center">
+                  <i data-lucide="code" class="w-8 h-8 md:w-10 md:h-10 text-[#d29922]"></i>
+                </div>
+                <span class="text-xs md:text-sm font-medium text-[#8b949e] mt-2">Application</span>
+              </div>
+
+              <!-- Arrow 2 -->
+              <div class="flex flex-col items-center">
+                <i data-lucide="arrow-right" class="w-5 h-5 md:w-6 md:h-6 text-[#484f58]"></i>
+                <span class="text-xs text-[#6e7681]">transform</span>
+              </div>
+
+              <!-- Solver -->
+              <div class="flex flex-col items-center">
+                <div class="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-[#d2992215] border border-[#d2992240] flex items-center justify-center">
+                  <i data-lucide="cpu" class="w-8 h-8 md:w-10 md:h-10 text-[#d29922]"></i>
+                </div>
+                <span class="text-xs md:text-sm font-medium text-[#8b949e] mt-2">Solver</span>
+              </div>
+
+              <!-- Arrow 3 -->
+              <div class="flex flex-col items-center">
+                <i data-lucide="arrow-right" class="w-5 h-5 md:w-6 md:h-6 text-[#484f58]"></i>
+                <span class="text-xs text-[#6e7681]">parse</span>
+              </div>
+
+              <!-- Application again -->
+              <div class="flex flex-col items-center">
+                <div class="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-[#d2992215] border border-[#d2992240] flex items-center justify-center">
+                  <i data-lucide="code" class="w-8 h-8 md:w-10 md:h-10 text-[#d29922]"></i>
+                </div>
+                <span class="text-xs md:text-sm font-medium text-[#8b949e] mt-2">Application</span>
+              </div>
+
+              <!-- Arrow 4 -->
+              <div class="flex flex-col items-center">
+                <i data-lucide="arrow-right" class="w-5 h-5 md:w-6 md:h-6 text-[#484f58]"></i>
+                <span class="text-xs text-[#6e7681]">map back</span>
+              </div>
+
+              <!-- Database again -->
+              <div class="flex flex-col items-center">
+                <div class="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-[#f8514915] border border-[#f8514940] flex items-center justify-center">
+                  <i data-lucide="database" class="w-8 h-8 md:w-10 md:h-10 text-[#f85149]"></i>
+                </div>
+                <span class="text-xs md:text-sm font-medium text-[#8b949e] mt-2">Database</span>
+              </div>
+            </div>
+
+            <!-- Solution Text -->
+            <p class="text-center text-lg font-medium text-[#8b949e] mt-10">
+              <span class="text-[#3fb950] font-semibold">PackDB</span> collapses this entire workflow into a single SQL query.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         KEY FEATURES SECTION
+         ============================================ -->
+    <section class="py-16 md:py-24 bg-[#161b22]">
+      <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto text-center mb-12">
+          <h2 class="text-3xl md:text-4xl font-bold text-[#e6edf3] mb-4">
+            Why PackDB?
+          </h2>
+          <p class="text-lg text-[#8b949e]">
+            Bringing the power of optimization solvers directly into your SQL queries.
+          </p>
+        </div>
+
+        <!-- Feature Cards Grid -->
+        <div class="max-w-5xl mx-auto grid md:grid-cols-2 gap-6">
+          <!-- Feature 1 -->
+          <div class="card card-feature p-8">
+            <div class="icon w-14 h-14 mb-4" style="background-color: rgba(56, 139, 253, 0.15); color: #58a6ff;">
+              <i data-lucide="database" class="w-7 h-7"></i>
+            </div>
+            <h3 class="text-xl font-semibold text-[#e6edf3] mb-2">Native SQL Integration</h3>
+            <p class="text-[#8b949e]">
+              Express optimization problems as SQL extensions.
+              No context switching between query and optimization languages.
+            </p>
+          </div>
+
+          <!-- Feature 2 -->
+          <div class="card card-feature p-8">
+            <div class="icon w-14 h-14 mb-4" style="background-color: rgba(63, 185, 80, 0.15); color: #3fb950;">
+              <i data-lucide="zap" class="w-7 h-7"></i>
+            </div>
+            <h3 class="text-xl font-semibold text-[#e6edf3] mb-2">Zero Data Movement</h3>
+            <p class="text-[#8b949e]">
+              Solve directly on database buffers.
+              Eliminate export/import overhead completely.
+            </p>
+          </div>
+
+          <!-- Feature 3 -->
+          <div class="card card-feature p-8">
+            <div class="icon w-14 h-14 mb-4" style="background-color: rgba(210, 153, 34, 0.15); color: #d29922;">
+              <i data-lucide="file-code" class="w-7 h-7"></i>
+            </div>
+            <h3 class="text-xl font-semibold text-[#e6edf3] mb-2">Declarative Syntax</h3>
+            <p class="text-[#8b949e]">
+              Define what to optimize, not how.
+              System handles model formulation automatically.
+            </p>
+          </div>
+
+          <!-- Feature 4 -->
+          <div class="card card-feature p-8">
+            <div class="icon w-14 h-14 mb-4" style="background-color: rgba(163, 113, 247, 0.15); color: #a371f7;">
+              <i data-lucide="cpu" class="w-7 h-7"></i>
+            </div>
+            <h3 class="text-xl font-semibold text-[#e6edf3] mb-2">Built on DuckDB</h3>
+            <p class="text-[#8b949e]">
+              Leverage columnar storage and vectorized execution.
+              Embedded HiGHS solver for high performance.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         USE CASES SECTION
+         ============================================ -->
+    <section class="py-16 md:py-24 bg-[#0d1117]">
+      <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto text-center mb-12">
+          <h2 class="text-3xl md:text-4xl font-bold text-[#e6edf3] mb-4">
+            Built for Complex Selection Problems
+          </h2>
+          <p class="text-lg text-[#8b949e]">
+            From resource allocation to portfolio optimization, solve real-world problems with SQL.
+          </p>
+        </div>
+
+        <!-- Use Case Cards -->
+        <div class="max-w-6xl mx-auto grid md:grid-cols-2 gap-6">
+          <!-- Use Case 1: Resource Allocation -->
+          <div class="card p-6">
+            <div class="flex items-start gap-4 mb-4">
+              <div class="w-12 h-12 rounded-xl bg-[#388bfd15] border border-[#388bfd30] flex items-center justify-center flex-shrink-0">
+                <i data-lucide="users" class="w-6 h-6 text-[#58a6ff]"></i>
+              </div>
+              <div>
+                <h3 class="text-lg font-semibold text-[#e6edf3]">Resource Allocation</h3>
+                <p class="text-[#8b949e] text-sm">Assign engineers to projects within workload constraints</p>
+              </div>
+            </div>
+            <div class="code-block">
+              <pre class="language-sql text-xs"><code>SELECT engineer_id, project_id, x
+FROM Assignments
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * hours) PER engineer_id <= 40
+MAXIMIZE SUM(x * skill_match);</code></pre>
+            </div>
+            <p class="text-xs text-[#6e7681] mt-2 italic">Note: PER (grouped constraints) is a planned feature &mdash; coming soon.</p>
+          </div>
+
+          <!-- Use Case 2: Portfolio Optimization -->
+          <div class="card p-6">
+            <div class="flex items-start gap-4 mb-4">
+              <div class="w-12 h-12 rounded-xl bg-[#3fb95015] border border-[#3fb95030] flex items-center justify-center flex-shrink-0">
+                <i data-lucide="trending-up" class="w-6 h-6 text-[#3fb950]"></i>
+              </div>
+              <div>
+                <h3 class="text-lg font-semibold text-[#e6edf3]">Portfolio Optimization</h3>
+                <p class="text-[#8b949e] text-sm">Select assets maximizing return under risk limits</p>
+              </div>
+            </div>
+            <div class="code-block">
+              <pre class="language-sql text-xs"><code>SELECT ticker, expected_return, x
+FROM Assets
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * risk_score) <= 100
+MAXIMIZE SUM(x * expected_return);</code></pre>
+            </div>
+          </div>
+
+          <!-- Use Case 3: Meal Planning -->
+          <div class="card p-6">
+            <div class="flex items-start gap-4 mb-4">
+              <div class="w-12 h-12 rounded-xl bg-[#d2992215] border border-[#d2992230] flex items-center justify-center flex-shrink-0">
+                <i data-lucide="utensils" class="w-6 h-6 text-[#d29922]"></i>
+              </div>
+              <div>
+                <h3 class="text-lg font-semibold text-[#e6edf3]">Meal Planning</h3>
+                <p class="text-[#8b949e] text-sm">Choose recipes optimizing nutrition within calorie budget</p>
+              </div>
+            </div>
+            <div class="code-block">
+              <pre class="language-sql text-xs"><code>SELECT recipe_name, calories, protein, x
+FROM Recipes
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * calories) <= 2000,
+    SUM(x * protein) >= 50
+MAXIMIZE SUM(x * taste_score);</code></pre>
+            </div>
+          </div>
+
+          <!-- Use Case 4: Inventory Selection -->
+          <div class="card p-6">
+            <div class="flex items-start gap-4 mb-4">
+              <div class="w-12 h-12 rounded-xl bg-[#a371f715] border border-[#a371f730] flex items-center justify-center flex-shrink-0">
+                <i data-lucide="package" class="w-6 h-6 text-[#a371f7]"></i>
+              </div>
+              <div>
+                <h3 class="text-lg font-semibold text-[#e6edf3]">Inventory Selection</h3>
+                <p class="text-[#8b949e] text-sm">Classic knapsack: maximize value, minimize weight</p>
+              </div>
+            </div>
+            <div class="code-block">
+              <pre class="language-sql text-xs"><code>SELECT item_name, value, weight, x
+FROM Inventory
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-center mt-8">
+          <a href="examples.html" class="btn btn-secondary">
+            View All Examples
+            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         QUICK START TEASER SECTION
+         ============================================ -->
+    <section class="py-16 md:py-24 bg-[#161b22]">
+      <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto text-center mb-12">
+          <h2 class="text-3xl md:text-4xl font-bold text-[#e6edf3] mb-4">
+            Get Started in Minutes
+          </h2>
+          <p class="text-lg text-[#8b949e]">
+            Three steps to your first optimization query.
+          </p>
+        </div>
+
+        <!-- Steps -->
+        <div class="max-w-5xl mx-auto">
+          <div class="grid md:grid-cols-3 gap-8">
+            <!-- Step 1 -->
+            <div class="relative">
+              <div class="absolute -left-4 top-0 w-8 h-8 rounded-full bg-[#238636] text-white flex items-center justify-center font-bold text-sm">
+                1
+              </div>
+              <div class="pl-8">
+                <h3 class="text-lg font-semibold text-[#e6edf3] mb-3">Install PackDB</h3>
+                <div class="code-block">
+                  <pre class="language-bash text-sm"><code>git clone https://github.com/huda-lab/packdb.git
+cd packdb && git checkout hatim
+mkdir build && cd build
+cmake .. && make -j4</code></pre>
+                </div>
+              </div>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="relative">
+              <div class="absolute -left-4 top-0 w-8 h-8 rounded-full bg-[#238636] text-white flex items-center justify-center font-bold text-sm">
+                2
+              </div>
+              <div class="pl-8">
+                <h3 class="text-lg font-semibold text-[#e6edf3] mb-3">Load Your Data</h3>
+                <div class="code-block">
+                  <pre class="language-sql text-sm"><code>CREATE TABLE Items (
+    id INTEGER,
+    value INTEGER,
+    weight INTEGER
+);
+
+INSERT INTO Items VALUES
+    (1, 100, 20),
+    (2, 60, 10),
+    (3, 120, 30);</code></pre>
+                </div>
+              </div>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="relative">
+              <div class="absolute -left-4 top-0 w-8 h-8 rounded-full bg-[#3fb950] text-white flex items-center justify-center font-bold text-sm">
+                3
+              </div>
+              <div class="pl-8">
+                <h3 class="text-lg font-semibold text-[#e6edf3] mb-3">Write a DECIDE Query</h3>
+                <div class="code-block">
+                  <pre class="language-sql text-sm"><code>SELECT id, value, weight, x
+FROM Items
+DECIDE x
+SUCH THAT
+    x IS BINARY,
+    SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="text-center mt-12">
+            <a href="getting-started.html" class="btn btn-primary text-lg px-8 py-3">
+              View Full Tutorial
+              <i data-lucide="arrow-right" class="w-5 h-5"></i>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================
+       FOOTER
+       ============================================ -->
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#30363d]">
+    <div class="container mx-auto px-4 py-12">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+
+        <!-- Col 1: Branding -->
+        <div>
+          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
+          <p class="text-sm text-[#8b949e] mb-4">
+            Optimization-enabled SQL queries for DuckDB
+          </p>
+          <p class="text-xs text-[#6e7681]">
+            &copy; 2025 HUDA Lab<br>
+            NYU Abu Dhabi
+          </p>
+        </div>
+
+        <!-- Col 2: Documentation -->
+        <div>
+          <h4 class="font-semibold text-[#e6edf3] mb-3">Documentation</h4>
+          <ul class="space-y-2 text-sm">
+            <li><a href="getting-started.html" class="text-[#8b949e] hover:text-[#58a6ff] transition-colors">Getting Started</a></li>
+            <li><a href="documentation.html" class="text-[#8b949e] hover:text-[#58a6ff] transition-colors">Syntax Reference</a></li>
+            <li><a href="examples.html" class="text-[#8b949e] hover:text-[#58a6ff] transition-colors">Examples</a></li>
+          </ul>
+        </div>
+
+        <!-- Col 3: Resources -->
+        <div>
+          <h4 class="font-semibold text-[#e6edf3] mb-3">Resources</h4>
+          <ul class="space-y-2 text-sm">
+            <li>
+              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+                 class="text-[#8b949e] hover:text-[#58a6ff] transition-colors flex items-center gap-1">
+                <i data-lucide="github" class="w-4 h-4"></i>
+                GitHub Repository
+              </a>
+            </li>
+            <li>
+              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
+                 class="text-[#8b949e] hover:text-[#58a6ff] transition-colors">Issue Tracker</a>
+            </li>
+            <li><a href="about.html#research" class="text-[#8b949e] hover:text-[#58a6ff] transition-colors">Research Papers</a></li>
+            <li>
+              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
+                 class="text-[#8b949e] hover:text-[#58a6ff] transition-colors">HUDA Lab</a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Col 4: Contact -->
+        <div>
+          <h4 class="font-semibold text-[#e6edf3] mb-3">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#8b949e]">
+            <li>NYU Abu Dhabi</li>
+            <li>Saadiyat Island</li>
+            <li>Abu Dhabi, UAE</li>
+            <li>
+              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
+                huda-lab@nyu.edu
+              </a>
+            </li>
+          </ul>
+        </div>
+
+      </div>
+
+      <!-- Bottom Bar -->
+      <div class="mt-8 pt-8 border-t border-[#21262d] text-center text-sm text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Initialize Lucide Icons -->
+  <script>
+    lucide.createIcons();
+  </script>
+
+</body>
+</html>
