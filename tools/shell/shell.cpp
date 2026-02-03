@@ -191,6 +191,7 @@ extern int pclose(FILE *);
 #endif
 
 #if defined(_WIN32) || defined(WIN32)
+#define WIN32_LEAN_AND_MEAN
 #if SQLITE_OS_WINRT
 #include <intrin.h>
 #endif

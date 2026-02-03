@@ -1498,6 +1498,7 @@ void *sqlite3_user_data(sqlite3_context *context) {
 }
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 static void *sqlite3MallocZero(size_t n) {
