@@ -179,21 +179,21 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1 -DOVERRIDE_GIT_DESCRIBE="${{ inputs.version }}"
-          ninja
+          cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1 -DOVERRIDE_GIT_DESCRIBE="${{ inputs.version }}"
+          ninja -C build/release
 
       - name: Verify Build
         shell: bash
         run: |
-          Release/packdb.exe -c "PRAGMA platform;"
-          Release/packdb.exe --version
+          build/release/packdb.exe -c "PRAGMA platform;"
+          build/release/packdb.exe --version
 
       - name: Package Binaries
         shell: bash
         run: |
           # Create CLI package only (skip library package - build from source if needed)
           choco install zip -y --force
-          zip -j packdb_cli-windows-amd64.zip Release/packdb.exe
+          zip -j packdb_cli-windows-amd64.zip build/release/packdb.exe
 
           # Verify package
           ls -lh packdb_cli-windows-amd64.zip
