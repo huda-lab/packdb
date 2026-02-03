@@ -6,6 +6,8 @@
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -205,7 +207,8 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
 
                             // Don't bind this as a constraint - it's metadata
                             // Return a dummy constant that will be filtered out
-                            return BindResult(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
+                            auto bound_expr = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+                            return BindResult(std::move(bound_expr));
                         }
                     }
                 }

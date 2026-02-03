@@ -37,7 +37,8 @@ unique_ptr<ParsedExpression> Transformer::TransformExpression(duckdb_libpgquery:
     {
         auto &type_name_node = PGCast<duckdb_libpgquery::PGTypeName>(node);
 		auto logical_type = TransformTypeName(type_name_node);
-		return make_uniq<ConstantExpression>(Value(logical_type.ToString()));
+		auto expr = make_uniq<ConstantExpression>(Value(logical_type.ToString()));
+		return std::move(expr);
     }
 	case duckdb_libpgquery::T_PGAConst:
 		return TransformConstant(PGCast<duckdb_libpgquery::PGAConst>(node));

@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 
 namespace duckdb {
 
