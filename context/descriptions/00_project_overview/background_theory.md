@@ -1,0 +1,27 @@
+# Theoretical Background
+
+## 1. The "Unbundling" Problem
+In traditional data analysis pipelines involving optimization, there is a fundamental disconnect known as "Unbundling".
+-   **Data Management**: Handled by DBMS (SQL). Efficient at storage, retrieval, filtering.
+-   **Decision Logic**: Handled by Solvers (OR tools). Efficient at searching solution spaces.
+-   **The Gap**: To solve a problem, data must be unbundled from the database, transported to the application, and re-bundled into the solver's format. This creates latency, consistency risks, and engineering complexity.
+
+## 2. Package Queries
+The concept of "Package Queries" was formalized by generic Package Query Language (PQL) research (Brucato et al.).
+-   **Definition**: A query that returns a *package* (subset of tuples) that collectively satisfy global constraints.
+-   **Contrast**: Standard SQL `WHERE` clauses apply predicates to *individual* tuples independently. `DECIDE` clauses apply predicates to the *collection* of selected tuples.
+
+## 3. Integer Linear Programming (ILP)
+PackDB maps these queries to ILP problems.
+-   **Canonical Form**:
+    $$ \text{maximize } \mathbf{c}^T \mathbf{x} $$
+    $$ \text{subject to } A \mathbf{x} \le \mathbf{b} $$
+    $$ \mathbf{x} \in \mathbb{Z}^n $$
+-   **Mapping**:
+    -   $\mathbf{x}$: The decision variables (one per row).
+    -   $\mathbf{c}$: The coefficients of the objective function (derived from row values).
+    -   $A, \mathbf{b}$: The constraint matrix and bounds.
+
+## 4. Why DuckDB + HiGHS?
+-   **DuckDB**: Columnar, vectorized execution makes it fast to compute the coefficients ($\mathbf{c}$ and $A$) over large datasets.
+-   **HiGHS**: A modern, open-source C++ solver with reliable performance for mixed-integer problems. Embedding it creates a zero-copy (or near zero-copy) path from DB memory to Solver memory.
