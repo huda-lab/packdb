@@ -502,7 +502,10 @@ tr:hover td {
    ============================================ */
 .install-tab {
   transition: all var(--transition-fast);
+  background-color: var(--color-canvas-subtle);
   color: var(--color-fg-muted);
+  border: none;
+  cursor: pointer;
 }
 
 .install-tab:hover:not(.active) {

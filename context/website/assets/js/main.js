@@ -278,11 +278,9 @@
 
         // Update active tab styling
         tabs.forEach(function(t) {
-          t.classList.remove('active', 'bg-blue-100', 'text-blue-700');
-          t.classList.add('bg-gray-100', 'text-gray-600');
+          t.classList.remove('active');
         });
-        this.classList.add('active', 'bg-blue-100', 'text-blue-700');
-        this.classList.remove('bg-gray-100', 'text-gray-600');
+        this.classList.add('active');
 
         // Show corresponding content
         contents.forEach(function(content) {
