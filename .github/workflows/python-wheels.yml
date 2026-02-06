@@ -1,0 +1,131 @@
+name: Python Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0)'
+        required: true
+        type: string
+      publish_to_pypi:
+        description: 'Publish to PyPI'
+        required: false
+        default: false
+        type: boolean
+  release:
+    types: [published]
+
+env:
+  OVERRIDE_GIT_DESCRIBE: ${{ inputs.version || github.ref_name }}
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2019]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel==2.21.3
+
+      - name: Setup ccache (macOS)
+        if: runner.os == 'macOS'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}-python
+
+      - name: Install libomp (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+
+      - name: Build wheels
+        working-directory: tools/pythonpkg
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_SKIP: "*-musllinux_i686 *-manylinux_i686"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_ARCHS_MACOS: x86_64 arm64
+          CIBW_ARCHS_WINDOWS: AMD64
+          CIBW_BEFORE_ALL_LINUX: yum install -y perl-IPC-Cmd || true
+          CIBW_ENVIRONMENT_LINUX: CMAKE_BUILD_PARALLEL_LEVEL=4
+          CIBW_ENVIRONMENT_MACOS: >
+            CMAKE_BUILD_PARALLEL_LEVEL=4
+            CMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
+            CMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
+          CIBW_ENVIRONMENT_WINDOWS: CMAKE_BUILD_PARALLEL_LEVEL=4
+          CIBW_TEST_COMMAND: python -c "import packdb; print(packdb.__version__)"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: tools/pythonpkg/wheelhouse/*.whl
+          retention-days: 7
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build setuptools_scm
+
+      - name: Build sdist
+        working-directory: tools/pythonpkg
+        run: python -m build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: tools/pythonpkg/dist/*.tar.gz
+          retention-days: 7
+
+  publish_pypi:
+    name: Publish to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
+    environment: pypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -113,7 +113,7 @@ class build_ext(CompilerLauncherMixin, _build_ext):
     pass
 
 
-lib_name = 'duckdb'
+lib_name = 'packdb'
 
 extensions = ['core_functions', 'parquet', 'icu', 'tpch', 'json']
 
@@ -354,34 +354,34 @@ if no_source_wheel:
 
 packages = [
     lib_name,
-    'duckdb.typing',
-    'duckdb.query_graph',
-    'duckdb.functional',
-    'duckdb.value',
-    'duckdb-stubs',
-    'duckdb-stubs.functional',
-    'duckdb-stubs.typing',
-    'duckdb-stubs.value',
-    'duckdb-stubs.value.constant',
-    'adbc_driver_duckdb',
+    'packdb.typing',
+    'packdb.query_graph',
+    'packdb.functional',
+    'packdb.value',
+    'packdb-stubs',
+    'packdb-stubs.functional',
+    'packdb-stubs.typing',
+    'packdb-stubs.value',
+    'packdb-stubs.value.constant',
+    'adbc_driver_packdb',
 ]
 
 spark_packages = [
-    'duckdb.experimental',
-    'duckdb.experimental.spark',
-    'duckdb.experimental.spark.sql',
-    'duckdb.experimental.spark.errors',
-    'duckdb.experimental.spark.errors.exceptions',
+    'packdb.experimental',
+    'packdb.experimental.spark',
+    'packdb.experimental.spark.sql',
+    'packdb.experimental.spark.errors',
+    'packdb.experimental.spark.errors.exceptions',
 ]
 
 packages.extend(spark_packages)
 
 setup(
     name=lib_name,
-    description='DuckDB in-process database',
-    keywords='DuckDB Database SQL OLAP',
-    url="https://www.duckdb.org",
-    long_description='See here for an introduction: https://duckdb.org/docs/api/python/overview',
+    description='PackDB - DuckDB with DECIDE clause for optimization queries',
+    keywords='PackDB DuckDB Database SQL OLAP Optimization ILP',
+    url="https://huda-lab.github.io/packdb",
+    long_description='PackDB extends DuckDB with native support for Package Queries using the DECIDE clause. See: https://huda-lab.github.io/packdb',
     license='MIT',
     data_files=data_files,
     # NOTE: might need to be find_packages() ?
@@ -391,17 +391,18 @@ setup(
     tests_require=['google-cloud-storage', 'mypy', 'pytest'],
     classifiers=[
         'Topic :: Database :: Database Engines/Servers',
+        'Topic :: Scientific/Engineering :: Mathematics',
         'Intended Audience :: Developers',
+        'Intended Audience :: Science/Research',
         'License :: OSI Approved :: MIT License',
     ],
     ext_modules=[libduckdb],
-    maintainer="Hannes Muehleisen",
-    maintainer_email="hannes@cwi.nl",
+    maintainer="HUDA Lab",
+    maintainer_email="huda-lab@nyu.edu",
     cmdclass={"build_ext": build_ext},
     project_urls={
-        "Documentation": "https://duckdb.org/docs/api/python/overview",
-        "Source": "https://github.com/duckdb/duckdb/blob/main/tools/pythonpkg",
-        "Issues": "https://github.com/duckdb/duckdb/issues",
-        "Changelog": "https://github.com/duckdb/duckdb/releases",
+        "Documentation": "https://huda-lab.github.io/packdb/documentation.html",
+        "Source": "https://github.com/huda-lab/packdb",
+        "Issues": "https://github.com/huda-lab/packdb/issues",
     },
 )

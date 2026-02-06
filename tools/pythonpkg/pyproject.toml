@@ -6,6 +6,39 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "packdb"
+description = "PackDB - DuckDB with DECIDE clause for optimization queries"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "HUDA Lab", email = "huda-lab@nyu.edu"}
+]
+keywords = ["database", "sql", "olap", "optimization", "packdb", "duckdb", "ilp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+requires-python = ">=3.8"
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://huda-lab.github.io/packdb"
+Documentation = "https://huda-lab.github.io/packdb/documentation.html"
+Repository = "https://github.com/huda-lab/packdb"
+Issues = "https://github.com/huda-lab/packdb/issues"
+
 [tool.setuptools_scm]
 root = "../.."
 local_scheme = "no-local-version"
@@ -18,7 +51,7 @@ dependency-versions = "latest"
 before-build = 'pip install numpy>=2.0'
 before-test = 'python scripts/optional_requirements.py'
 test-requires = 'pytest'
-test-command = 'DUCKDB_PYTHON_TEST_EXTENSION_PATH={project} DUCKDB_PYTHON_TEST_EXTENSION_REQUIRED=1 python -m pytest {project}/tests --verbose'
+test-command = 'PACKDB_PYTHON_TEST_EXTENSION_PATH={project} PACKDB_PYTHON_TEST_EXTENSION_REQUIRED=1 python -m pytest {project}/tests --verbose'
 
 [tool.cibuildwheel.environment]
 PIP_CONSTRAINT = 'build-constraints.txt'
