@@ -115,7 +115,7 @@ class build_ext(CompilerLauncherMixin, _build_ext):
 
 lib_name = 'packdb'
 
-extensions = ['core_functions', 'parquet', 'icu', 'tpch', 'json']
+extensions = ['core_functions', 'parquet', 'tpch']
 
 is_android = hasattr(sys, 'getandroidapilevel')
 is_pyodide = 'PYODIDE' in os.environ
@@ -162,9 +162,9 @@ if os.name == 'nt':
     toolchain_args = ['/wd4244', '/wd4267', '/wd4200', '/wd26451', '/wd26495', '/D_CRT_SECURE_NO_WARNINGS', '/utf-8']
 else:
     # macos/linux
-    toolchain_args = ['-std=c++11', '-g0']
+    toolchain_args = ['-std=c++17', '-g0']
     if 'DUCKDEBUG' in os.environ:
-        toolchain_args = ['-std=c++11', '-Wall', '-O0', '-g']
+        toolchain_args = ['-std=c++17', '-Wall', '-O0', '-g']
 if 'DUCKDB_INSTALL_USER' in os.environ and 'install' in sys.argv:
     sys.argv.append('--user')
 
@@ -173,11 +173,11 @@ libraries = []
 if 'DUCKDB_BINARY_DIR' in os.environ:
     existing_duckdb_dir = os.environ['DUCKDB_BINARY_DIR']
 if 'DUCKDB_COMPILE_FLAGS' in os.environ:
-    toolchain_args = ['-std=c++11'] + os.environ['DUCKDB_COMPILE_FLAGS'].split()
+    toolchain_args = ['-std=c++17'] + os.environ['DUCKDB_COMPILE_FLAGS'].split()
 if 'DUCKDB_LIBS' in os.environ:
     libraries = os.environ['DUCKDB_LIBS'].split(' ')
 
-define_macros = [('DUCKDB_PYTHON_LIB_NAME', lib_name)]
+define_macros = [('DUCKDB_PYTHON_LIB_NAME', 'duckdb')]
 
 custom_platform = os.environ.get('DUCKDB_CUSTOM_PLATFORM')
 if custom_platform is not None:
@@ -306,6 +306,11 @@ else:
     import package_build
 
     include_directories += [os.path.join('..', '..', include) for include in package_build.third_party_includes()]
+    # Add PackDB third-party dependencies (SymbolicC++ and HiGHS)
+    include_directories += [os.path.join('..', '..', 'third_party', 'symboliccpp')]
+    highs_src_dir = os.path.join(existing_duckdb_dir, '_deps', 'highs-src', 'highs')
+    if os.path.isdir(highs_src_dir):
+        include_directories += [highs_src_dir]
     toolchain_args += ['-I' + x for x in package_build.includes(extensions)]
 
     result_libraries = package_build.get_libraries(existing_duckdb_dir, libraries, extensions)
