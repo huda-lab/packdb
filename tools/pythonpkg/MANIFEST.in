@@ -7,3 +7,6 @@ recursive-include packdb
 include scripts/optional_requirements.py
 include requirements-dev.txt
 include pyproject.toml
+include sources.list
+include includes.list
+graft duckdb_build

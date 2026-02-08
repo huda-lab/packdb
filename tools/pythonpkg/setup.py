@@ -36,7 +36,7 @@ class CompilerLauncherMixin:
     def build_libraries(self):
         # Integrate into "build_clib"
         self.__setup()
-        super().build_extensions()
+        super().build_libraries()
 
     def __setup(self):
         if self.__is_set_up:
@@ -148,10 +148,13 @@ class build_ext(CompilerLauncherMixin, _build_ext):
                             debug, extra_preargs, c_postargs, depends
                         ))
                     else:
-                        # Windows: use original flags
+                        # Windows: filter C++-specific flags for C files
+                        c_postargs = [arg for arg in (extra_postargs or [])
+                                     if arg not in ['/std:c++17']]
+                        c_postargs.append('/std:c17')
                         objects.extend(original_compiler_compile(
                             c_sources, output_dir, macros, include_dirs,
-                            debug, extra_preargs, extra_postargs, depends
+                            debug, extra_preargs, c_postargs, depends
                         ))
 
                 return objects
@@ -240,6 +243,17 @@ if custom_platform is not None:
 
 if platform.system() == 'Darwin':
     toolchain_args.extend(['-stdlib=libc++', '-mmacosx-version-min=10.13'])
+    # Add OpenMP support on macOS (requires: brew install libomp)
+    # Check both ARM (M1/M2) and Intel Homebrew locations
+    homebrew_prefixes = ['/opt/homebrew', '/usr/local']
+    for prefix in homebrew_prefixes:
+        omp_include = os.path.join(prefix, 'include')
+        omp_lib = os.path.join(prefix, 'lib')
+        if os.path.exists(os.path.join(omp_include, 'omp.h')):
+            toolchain_args.extend(['-Xpreprocessor', '-fopenmp', f'-I{omp_include}'])
+            # Store for later use in linker_args (libraries list is processed separately)
+            os.environ['DUCKDB_MACOS_OMP_LIB'] = omp_lib
+            break
 
 if platform.system() == 'Windows':
     define_macros.extend([('DUCKDB_BUILD_LIBRARY', None), ('WIN32', None)])
@@ -266,6 +280,10 @@ if platform.system() == 'Windows':
 elif platform.system() == 'Darwin':
     # macOS: linker needs stdlib and version min, but not std or optimization flags
     linker_args = ['-stdlib=libc++', '-mmacosx-version-min=10.13']
+    # Add OpenMP linking if we found it earlier
+    if 'DUCKDB_MACOS_OMP_LIB' in os.environ:
+        omp_lib = os.environ['DUCKDB_MACOS_OMP_LIB']
+        linker_args.extend([f'-L{omp_lib}', '-lomp'])
 else:
     # Linux: no special linker flags needed
     linker_args = []

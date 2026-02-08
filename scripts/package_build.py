@@ -399,11 +399,13 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
 
             # Also unity-build third-party directories that have multiple files,
             # excluding dirs with static symbol conflicts that break unity builds
+            # NOTE: Use forward slashes to match convert_backslashes() normalization
             unity_excluded_dirs = [
-                os.path.join('third_party', 'brotli', 'enc'),       # kHashMul32, BrotliStoreMetaBlockHeader, etc.
-                os.path.join('third_party', 'mbedtls', 'library'),  # static K[] in sha256/sha512
+                'third_party/brotli/enc',       # kHashMul32, BrotliStoreMetaBlockHeader, etc.
+                'third_party/mbedtls/library',  # static K[] in sha256/sha512
+                'third_party/libpg_query',      # ScanKeywords[], NumScanKeywords in kwlist.hpp
             ]
-            is_third_party = dirname.startswith('third_party' + os.path.sep)
+            is_third_party = dirname.startswith('third_party/')
             if not unity_build and is_third_party and len(current_files) > 1 and dirname not in unity_excluded_dirs:
                 unity_build = True
 
