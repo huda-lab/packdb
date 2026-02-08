@@ -110,7 +110,36 @@ def get_short_path(long_name: str) -> str:
 
 
 class build_ext(CompilerLauncherMixin, _build_ext):
-    pass
+    def build_extensions(self):
+        # Separate C and C++ compiler flags
+        # C files should not receive C++-specific flags
+        self._c_compile_args = []
+        self._cxx_compile_args = toolchain_args[:]
+
+        # For C files, we need basic flags but not C++-specific ones
+        if os.name != 'nt':
+            # Use C11 standard for C files, no C++ specific flags
+            self._c_compile_args = ['-g0']
+            if platform.system() == 'Darwin':
+                # macOS needs version min, but not stdlib or std flags
+                self._c_compile_args.append('-mmacosx-version-min=10.7')
+
+        # Override the compile arguments per file
+        original_compile = self.compiler._compile
+
+        def _compile_with_per_file_flags(obj, src, ext, cc_args, extra_postargs, pp_opts):
+            # Determine if this is a C or C++ file
+            if src.endswith('.c'):
+                # Pure C file - use C flags
+                extra_postargs = [arg for arg in extra_postargs if arg not in ['-std=c++17', '-stdlib=libc++']]
+                extra_postargs = self._c_compile_args + extra_postargs
+            else:
+                # C++ file - use C++ flags (already set)
+                pass
+            return original_compile(obj, src, ext, cc_args, extra_postargs, pp_opts)
+
+        self.compiler._compile = _compile_with_per_file_flags
+        super().build_extensions()
 
 
 lib_name = 'packdb'
