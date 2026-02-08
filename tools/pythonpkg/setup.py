@@ -141,7 +141,7 @@ class build_ext(CompilerLauncherMixin, _build_ext):
                         # Add minimal C flags
                         c_postargs.insert(0, '-g0')
                         if platform.system() == 'Darwin':
-                            c_postargs.append('-mmacosx-version-min=10.7')
+                            c_postargs.append('-mmacosx-version-min=10.13')
 
                         objects.extend(original_compiler_compile(
                             c_sources, output_dir, macros, include_dirs,
@@ -239,7 +239,7 @@ if custom_platform is not None:
     define_macros.append(('DUCKDB_CUSTOM_PLATFORM', custom_platform))
 
 if platform.system() == 'Darwin':
-    toolchain_args.extend(['-stdlib=libc++', '-mmacosx-version-min=10.7'])
+    toolchain_args.extend(['-stdlib=libc++', '-mmacosx-version-min=10.13'])
 
 if platform.system() == 'Windows':
     define_macros.extend([('DUCKDB_BUILD_LIBRARY', None), ('WIN32', None)])
@@ -265,7 +265,7 @@ if platform.system() == 'Windows':
     linker_args = ['rstrtmgr.lib', 'bcrypt.lib']
 elif platform.system() == 'Darwin':
     # macOS: linker needs stdlib and version min, but not std or optimization flags
-    linker_args = ['-stdlib=libc++', '-mmacosx-version-min=10.7']
+    linker_args = ['-stdlib=libc++', '-mmacosx-version-min=10.13']
 else:
     # Linux: no special linker flags needed
     linker_args = []
