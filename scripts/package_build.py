@@ -412,10 +412,13 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
             # excluding dirs with static symbol conflicts that break unity builds
             # NOTE: Use forward slashes to match convert_backslashes() normalization
             unity_excluded_dirs = [
-                'third_party/brotli/enc',       # kHashMul32, BrotliStoreMetaBlockHeader, etc.
-                'third_party/mbedtls/library',  # static K[] in sha256/sha512
-                'third_party/libpg_query',      # ScanKeywords[], NumScanKeywords in kwlist.hpp
-                'third_party/zstd/dict',        # cover.h has no include guards, redefinition errors
+                'third_party/brotli/enc',               # static symbols (kHashMul32, etc.)
+                'third_party/mbedtls/library',          # static K[] in sha256/sha512
+                'third_party/libpg_query',              # ScanKeywords[] in kwlist.hpp
+                'third_party/zstd/dict',                # cover.h: no include guards → typedef redefinition
+                'third_party/highs/highs/ipm/basiclu',  # lu_list.h: static inline in C → redefinition
+                'third_party/snowball/src_c',           # static s_0_0[] etc. in every stemmer file
+                'third_party/tpce-tool/main',           # static DataFileNames[] in shared header
             ]
             is_third_party = dirname.startswith('third_party/')
             if not unity_build and is_third_party and len(current_files) > 1 and dirname not in unity_excluded_dirs:
