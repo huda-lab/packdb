@@ -39,6 +39,27 @@ def third_party_includes():
     includes += [os.path.join('third_party', 'yyjson', 'include')]
     includes += [os.path.join('third_party', 'zstd', 'include')]
     includes += [os.path.join('third_party', 'symboliccpp')]
+    includes += [os.path.join('third_party', 'highs')]
+    includes += [os.path.join('third_party', 'highs', 'highs')]
+    includes += [os.path.join('third_party', 'highs', 'extern')]
+    includes += [os.path.join('third_party', 'highs', 'extern', 'filereaderlp')]
+    includes += [os.path.join('third_party', 'highs', 'extern', 'pdqsort')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'interfaces')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'io')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'ipm')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'ipm', 'ipx')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'ipm', 'basiclu')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'lp_data')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'mip')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'model')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'parallel')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'pdlp')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'pdlp', 'cupdlp')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'presolve')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'qpsolver')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'simplex')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'test_kkt')]
+    includes += [os.path.join('third_party', 'highs', 'highs', 'util')]
     return includes
 
 
@@ -56,6 +77,7 @@ def third_party_sources():
     sources += [os.path.join('third_party', 'mbedtls')]
     sources += [os.path.join('third_party', 'yyjson')]
     sources += [os.path.join('third_party', 'zstd')]
+    sources += [os.path.join('third_party', 'highs')]
     return sources
 
 

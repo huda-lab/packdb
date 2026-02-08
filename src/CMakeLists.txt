@@ -133,13 +133,13 @@ else()
   endif()
 
   target_link_libraries(duckdb ${DUCKDB_LINK_LIBS})
-  target_link_libraries(duckdb highs::highs)
+  target_link_libraries(duckdb duckdb_highs)
   link_threads(duckdb)
   link_extension_libraries(duckdb)
 
   add_library(duckdb_static STATIC ${ALL_OBJECT_FILES})
   target_link_libraries(duckdb_static ${DUCKDB_LINK_LIBS})
-  target_link_libraries(duckdb_static highs::highs)
+  target_link_libraries(duckdb_static duckdb_highs)
   link_threads(duckdb_static)
   link_extension_libraries(duckdb_static)
 

@@ -662,6 +662,8 @@ include_directories(third_party/jaro_winkler)
 include_directories(third_party/yyjson/include)
 include_directories(third_party/zstd/include)
 include_directories(third_party/symboliccpp)
+include_directories(third_party/highs)
+include_directories(third_party/highs/highs)
 
 # todo only regenerate ub file if one of the input files changed hack alert
 function(enable_unity_build UB_SUFFIX SOURCE_VARIABLE_NAME)
@@ -1297,18 +1299,6 @@ foreach(EXT_NAME IN LISTS DUCKDB_EXTENSION_NAMES)
     list(APPEND TEST_WITH_LOADABLE_EXTENSION ${EXT_NAME})
   endif()
 endforeach()
-
-include(FetchContent)
-FetchContent_Declare(
-    highs
-    GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
-    GIT_TAG        "v1.11.0"
-)
-# Build HiGHS as static library for portable binaries
-set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF)
-FetchContent_MakeAvailable(highs)
-set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_SAVED})
 
 if (BUILD_MAIN_DUCKDB_LIBRARY)
   add_subdirectory(src)
