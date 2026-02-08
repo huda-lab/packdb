@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14, windows-2019]
+        os: [ubuntu-22.04, macos-14, windows-2022]
 
     steps:
       - name: Checkout Code
@@ -42,8 +42,8 @@ jobs:
       - name: Install cibuildwheel
         run: pip install cibuildwheel==2.21.3
 
-      - name: Setup ccache (macOS)
-        if: runner.os == 'macOS'
+      - name: Setup ccache
+        if: runner.os != 'Windows'
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ matrix.os }}-python
@@ -114,23 +114,20 @@ jobs:
         working-directory: tools/pythonpkg
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
           CIBW_SKIP: "*-musllinux_i686 *-manylinux_i686"
           CIBW_ARCHS_LINUX: x86_64
           CIBW_ARCHS_MACOS: x86_64 arm64
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BUILD_VERBOSITY: 3
-          CIBW_BEFORE_ALL_LINUX: yum install -y perl-IPC-Cmd || true
+          CIBW_BEFORE_ALL_LINUX: yum install -y perl-IPC-Cmd ccache || true
           CIBW_ENVIRONMENT_LINUX: >
-            CMAKE_BUILD_PARALLEL_LEVEL=4
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
+            DISTUTILS_C_COMPILER_LAUNCHER=ccache
           CIBW_ENVIRONMENT_MACOS: >
-            CMAKE_BUILD_PARALLEL_LEVEL=4
-            CMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
-            CMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
+            DISTUTILS_C_COMPILER_LAUNCHER=ccache
           CIBW_ENVIRONMENT_WINDOWS: >
-            CMAKE_BUILD_PARALLEL_LEVEL=4
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
           CIBW_TEST_COMMAND: python -c "import packdb; print(packdb.__version__)"
 

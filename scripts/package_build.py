@@ -362,6 +362,20 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
                 files_per_directory[dirname] = []
             files_per_directory[dirname].append(source)
 
+        def create_unity_for_files(current_files, dirname, linenumbers):
+            """Create unity build files, separating C and C++ sources."""
+            result = []
+            c_files = [f for f in current_files if f.endswith('.c')]
+            cxx_files = [f for f in current_files if not f.endswith('.c')]
+            unity_base = dirname.replace(os.path.sep, '_')
+            if cxx_files:
+                unity_name = f'ub_{unity_base}.cpp'
+                result.append(generate_unity_build(cxx_files, unity_name, linenumbers))
+            if c_files:
+                unity_name = f'ub_{unity_base}.c'
+                result.append(generate_unity_build(c_files, unity_name, linenumbers))
+            return result
+
         new_source_files = []
         for dirname in files_per_directory.keys():
             current_files = files_per_directory[dirname]
@@ -382,6 +396,12 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
                         current_files.sort(
                             key=lambda x: scores[os.path.basename(x)] if os.path.basename(x) in scores else 99999
                         )
+
+            # Also unity-build third-party directories that have multiple files
+            is_third_party = dirname.startswith('third_party' + os.path.sep)
+            if not unity_build and is_third_party and len(current_files) > 1:
+                unity_build = True
+
             if not unity_build:
                 if short_paths:
                     # replace source files with "__"
@@ -392,9 +412,7 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
                     # directly use the source files
                     new_source_files += [os.path.join(folder_name, file) for file in current_files]
             else:
-                unity_base = dirname.replace(os.path.sep, '_')
-                unity_name = f'ub_{unity_base}.cpp'
-                new_source_files.append(generate_unity_build(current_files, unity_name, linenumbers))
+                new_source_files += create_unity_for_files(current_files, dirname, linenumbers)
         return new_source_files
 
     original_sources = source_list
