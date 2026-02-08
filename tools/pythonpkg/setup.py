@@ -259,9 +259,16 @@ if not is_pyodide:
     # currently pyodide environment is not compatible with dynamic extension loading
     define_macros.extend([('DUCKDB_EXTENSION_AUTOLOAD_DEFAULT', '1'), ('DUCKDB_EXTENSION_AUTOINSTALL_DEFAULT', '1')])
 
-linker_args = toolchain_args[:]
+# Set up linker arguments - only include flags valid for linking
 if platform.system() == 'Windows':
-    linker_args.extend(['rstrtmgr.lib', 'bcrypt.lib'])
+    # Windows: linker doesn't need compile flags, only libraries
+    linker_args = ['rstrtmgr.lib', 'bcrypt.lib']
+elif platform.system() == 'Darwin':
+    # macOS: linker needs stdlib and version min, but not std or optimization flags
+    linker_args = ['-stdlib=libc++', '-mmacosx-version-min=10.7']
+else:
+    # Linux: no special linker flags needed
+    linker_args = []
 
 short_paths = False
 if platform.system() == 'Windows':
