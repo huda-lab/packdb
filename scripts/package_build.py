@@ -379,6 +379,17 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
         new_source_files = []
         for dirname in files_per_directory.keys():
             current_files = files_per_directory[dirname]
+
+            # Separate excluded files before unity grouping — they must be
+            # compiled individually (e.g. utf8proc_data.cpp needs its own TU)
+            excluded_files = [f for f in current_files if file_is_excluded(f)]
+            current_files = [f for f in current_files if not file_is_excluded(f)]
+            for f in excluded_files:
+                new_source_files.append(os.path.join(folder_name, f))
+
+            if not current_files:
+                continue
+
             cmake_file = os.path.join(dirname, 'CMakeLists.txt')
             unity_build = False
             if os.path.isfile(cmake_file):

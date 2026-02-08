@@ -1,6 +1,5 @@
 #include "duckdb/packdb/utility/debug.hpp"
 
-#include <omp.h>
 #include <cassert>
 #include "fmt/printf.h"
 

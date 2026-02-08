@@ -42,6 +42,21 @@ class CompilerLauncherMixin:
         if self.__is_set_up:
             return
         self.__is_set_up = True
+
+        # On Windows, force the 64-bit hosted toolchain (HostX64) to avoid
+        # the 32-bit linker (HostX86) running out of address space on large builds
+        if platform.system() == 'Windows':
+            original_spawn_for_linker = self.compiler.spawn
+
+            def spawn_with_x64_linker(cmd, **kwargs):
+                if cmd and 'HostX86' in cmd[0]:
+                    x64_path = cmd[0].replace('HostX86', 'HostX64')
+                    if os.path.exists(x64_path):
+                        cmd = [x64_path] + cmd[1:]
+                return original_spawn_for_linker(cmd, **kwargs)
+
+            self.compiler.spawn = spawn_with_x64_linker
+
         compiler_launcher = os.getenv("DISTUTILS_C_COMPILER_LAUNCHER")
         if compiler_launcher:
 
@@ -244,11 +259,16 @@ if custom_platform is not None:
 if platform.system() == 'Darwin':
     toolchain_args.extend(['-stdlib=libc++', '-mmacosx-version-min=10.13'])
     # Add OpenMP support on macOS (requires: brew install libomp)
-    # Check both ARM (M1/M2) and Intel Homebrew locations
-    homebrew_prefixes = ['/opt/homebrew', '/usr/local']
-    for prefix in homebrew_prefixes:
-        omp_include = os.path.join(prefix, 'include')
-        omp_lib = os.path.join(prefix, 'lib')
+    # Check Homebrew locations: direct prefix, keg-only libomp, ARM and Intel
+    omp_search_dirs = [
+        '/opt/homebrew/opt/libomp',   # ARM keg-only (most common)
+        '/usr/local/opt/libomp',      # Intel keg-only
+        '/opt/homebrew',              # ARM symlinked
+        '/usr/local',                 # Intel symlinked
+    ]
+    for omp_dir in omp_search_dirs:
+        omp_include = os.path.join(omp_dir, 'include')
+        omp_lib = os.path.join(omp_dir, 'lib')
         if os.path.exists(os.path.join(omp_include, 'omp.h')):
             toolchain_args.extend(['-Xpreprocessor', '-fopenmp', f'-I{omp_include}'])
             # Store for later use in linker_args (libraries list is processed separately)
