@@ -52,6 +52,61 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libomp
 
+      - name: Prepare build files
+        working-directory: tools/pythonpkg
+        run: |
+          python -c "
+          import sys
+          import os
+
+          # Trigger amalgamation by importing setup with the right context
+          # This will generate sources.list and includes.list
+          sys.path.insert(0, os.path.join('..', '..', 'scripts'))
+
+          # Check if we can run amalgamation
+          script_path = os.getcwd()
+          amalgamation_path = os.path.join(script_path, '..', '..', 'scripts', 'amalgamation.py')
+
+          if os.path.isfile(amalgamation_path):
+              import package_build
+              import amalgamation
+
+              extensions = ['core_functions', 'parquet', 'tpch']
+              import platform
+              # Add jemalloc only on 64-bit Linux (matching setup.py logic)
+              if platform.system() == 'Linux' and platform.architecture()[0] == '64bit':
+                  extensions.append('jemalloc')
+
+              (source_list, include_list, original_sources) = package_build.build_package(
+                  'duckdb_build', extensions, False, 0, 'duckdb_build', platform.system() == 'Windows'
+              )
+
+              duckdb_sources = [
+                  os.path.sep.join(package_build.get_relative_path(script_path, x).split('/'))
+                  for x in source_list
+              ]
+              duckdb_sources.sort()
+
+              duckdb_includes = ['duckdb_build/' + x for x in include_list]
+              duckdb_includes.append('duckdb_build')
+
+              # Write sources.list
+              with open('sources.list', 'w', encoding='utf8') as f:
+                  for s in duckdb_sources:
+                      f.write(s + '\n')
+
+              # Write includes.list
+              with open('includes.list', 'w', encoding='utf8') as f:
+                  for i in duckdb_includes:
+                      f.write(i + '\n')
+
+              print('Generated sources.list and includes.list successfully')
+              print(f'Sources: {len(duckdb_sources)}, Includes: {len(duckdb_includes)}')
+          else:
+              print('Amalgamation script not found, skipping')
+              sys.exit(1)
+          "
+
       - name: Build wheels
         working-directory: tools/pythonpkg
         run: python -m cibuildwheel --output-dir wheelhouse
@@ -94,6 +149,50 @@ jobs:
 
       - name: Install build tools
         run: pip install build setuptools_scm
+
+      - name: Prepare build files for sdist
+        working-directory: tools/pythonpkg
+        run: |
+          python -c "
+          import sys
+          import os
+          sys.path.insert(0, os.path.join('..', '..', 'scripts'))
+          script_path = os.getcwd()
+          amalgamation_path = os.path.join(script_path, '..', '..', 'scripts', 'amalgamation.py')
+
+          if os.path.isfile(amalgamation_path):
+              import package_build
+              import amalgamation
+
+              extensions = ['core_functions', 'parquet', 'tpch', 'jemalloc']
+
+              (source_list, include_list, original_sources) = package_build.build_package(
+                  'duckdb_build', extensions, False, 0, 'duckdb_build', False
+              )
+
+              duckdb_sources = [
+                  os.path.sep.join(package_build.get_relative_path(script_path, x).split('/'))
+                  for x in source_list
+              ]
+              duckdb_sources.sort()
+
+              duckdb_includes = ['duckdb_build/' + x for x in include_list]
+              duckdb_includes.append('duckdb_build')
+
+              with open('sources.list', 'w', encoding='utf8') as f:
+                  for s in duckdb_sources:
+                      f.write(s + '\n')
+
+              with open('includes.list', 'w', encoding='utf8') as f:
+                  for i in duckdb_includes:
+                      f.write(i + '\n')
+
+              print('Generated sources.list and includes.list for sdist')
+              print(f'Sources: {len(duckdb_sources)}, Includes: {len(duckdb_includes)}')
+          else:
+              print('Amalgamation script not found')
+              sys.exit(1)
+          "
 
       - name: Build sdist
         working-directory: tools/pythonpkg
