@@ -80,8 +80,10 @@ jobs:
           CIBW_ENVIRONMENT_MACOS: >
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
             DISTUTILS_C_COMPILER_LAUNCHER=ccache
+            MACOSX_DEPLOYMENT_TARGET=10.13
           CIBW_ENVIRONMENT_WINDOWS: >
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
+          CIBW_BEFORE_TEST: ""
           CIBW_TEST_COMMAND: python -c "import packdb; print(packdb.__version__)"
 
       - name: Upload wheels
