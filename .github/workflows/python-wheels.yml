@@ -48,10 +48,6 @@ jobs:
         with:
           key: ${{ matrix.os }}-python
 
-      - name: Install libomp (macOS)
-        if: runner.os == 'macOS'
-        run: brew install libomp
-
       - name: Prepare build files
         run: python scripts/prepare_wheel_build.py
 
@@ -59,10 +55,10 @@ jobs:
         working-directory: tools/pythonpkg
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_i686 *-manylinux_i686"
           CIBW_ARCHS_LINUX: x86_64
-          CIBW_ARCHS_MACOS: x86_64 arm64
+          CIBW_ARCHS_MACOS: arm64
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BUILD_VERBOSITY: 3
           CIBW_BEFORE_ALL_LINUX: >
@@ -80,7 +76,7 @@ jobs:
           CIBW_ENVIRONMENT_MACOS: >
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
             DISTUTILS_C_COMPILER_LAUNCHER=ccache
-            MACOSX_DEPLOYMENT_TARGET=10.13
+            MACOSX_DEPLOYMENT_TARGET=11.0
           CIBW_ENVIRONMENT_WINDOWS: >
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
           CIBW_BEFORE_TEST: ""

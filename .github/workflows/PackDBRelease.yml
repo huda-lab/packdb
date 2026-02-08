@@ -106,7 +106,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Dependencies
-        run: brew install ninja libomp
+        run: brew install ninja
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # main
@@ -116,9 +116,7 @@ jobs:
 
       - name: Build
         shell: bash
-        run: 
-          export EXTRA_CMAKE_VARIABLES="-DCMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include -DCMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include"
-          make
+        run: make
 
       - name: Verify Build
         shell: bash
