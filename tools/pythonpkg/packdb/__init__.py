@@ -11,7 +11,7 @@ _exported_symbols.extend([
 ])
 
 # Classes
-from .duckdb import (
+from ._packdb import (
     DuckDBPyRelation,
     DuckDBPyConnection,
     Statement,
@@ -52,7 +52,7 @@ _exported_symbols.extend([
     'df',
     'arrow'
 ])
-from .duckdb import (
+from ._packdb import (
     df,
     arrow
 )
@@ -62,7 +62,7 @@ from .duckdb import (
 
 # START OF CONNECTION WRAPPER
 
-from .duckdb import (
+from ._packdb import (
 	cursor,
 	register_filesystem,
 	unregister_filesystem,
@@ -223,7 +223,7 @@ _exported_symbols.extend([
 # END OF CONNECTION WRAPPER
 
 # Enums
-from .duckdb import (
+from ._packdb import (
     ANALYZE,
     DEFAULT,
     RETURN_NULL,
@@ -240,7 +240,7 @@ _exported_symbols.extend([
 
 
 # read-only properties
-from .duckdb import (
+from ._packdb import (
     __standard_vector_size__,
     __interactive__,
     __jupyter__,
@@ -278,7 +278,7 @@ _exported_symbols.extend([
 ])
 
 
-from .duckdb import (
+from ._packdb import (
     connect,
     default_connection,
     set_default_connection,
@@ -291,7 +291,7 @@ _exported_symbols.extend([
 ])
 
 # Exceptions
-from .duckdb import (
+from ._packdb import (
     Error,
     DataError,
     ConversionException,

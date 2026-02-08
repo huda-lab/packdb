@@ -177,7 +177,7 @@ if 'DUCKDB_COMPILE_FLAGS' in os.environ:
 if 'DUCKDB_LIBS' in os.environ:
     libraries = os.environ['DUCKDB_LIBS'].split(' ')
 
-define_macros = [('DUCKDB_PYTHON_LIB_NAME', 'duckdb')]
+define_macros = [('DUCKDB_PYTHON_LIB_NAME', '_packdb')]
 
 custom_platform = os.environ.get('DUCKDB_CUSTOM_PLATFORM')
 if custom_platform is not None:
@@ -292,7 +292,7 @@ if len(existing_duckdb_dir) == 0:
     include_directories = duckdb_includes + include_directories
 
     libduckdb = Extension(
-        lib_name + '.duckdb',
+        lib_name + '._packdb',
         include_dirs=include_directories,
         sources=source_files,
         extra_compile_args=toolchain_args,
@@ -306,11 +306,8 @@ else:
     import package_build
 
     include_directories += [os.path.join('..', '..', include) for include in package_build.third_party_includes()]
-    # Add PackDB third-party dependencies (SymbolicC++ and HiGHS)
+    # Add PackDB third-party dependencies (SymbolicC++)
     include_directories += [os.path.join('..', '..', 'third_party', 'symboliccpp')]
-    highs_src_dir = os.path.join(existing_duckdb_dir, '_deps', 'highs-src', 'highs')
-    if os.path.isdir(highs_src_dir):
-        include_directories += [highs_src_dir]
     toolchain_args += ['-I' + x for x in package_build.includes(extensions)]
 
     result_libraries = package_build.get_libraries(existing_duckdb_dir, libraries, extensions)
@@ -318,7 +315,7 @@ else:
     libnames = [x[1] for x in result_libraries if x[1] is not None]
 
     libduckdb = Extension(
-        lib_name + '.duckdb',
+        lib_name + '._packdb',
         include_dirs=include_directories,
         sources=main_source_files,
         extra_compile_args=toolchain_args,

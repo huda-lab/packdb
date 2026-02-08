@@ -1,4 +1,4 @@
-from packdb.duckdb.functional import (
+from packdb._packdb.functional import (
 	FunctionNullHandling,
 	PythonUDFType,
 	SPECIAL,
