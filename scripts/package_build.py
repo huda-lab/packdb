@@ -367,7 +367,7 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
             result = []
             c_files = [f for f in current_files if f.endswith('.c')]
             cxx_files = [f for f in current_files if not f.endswith('.c')]
-            unity_base = dirname.replace(os.path.sep, '_')
+            unity_base = dirname.replace(os.path.sep, '_').replace('/', '_')
             if cxx_files:
                 unity_name = f'ub_{unity_base}.cpp'
                 result.append(generate_unity_build(cxx_files, unity_name, linenumbers))
@@ -379,6 +379,11 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
         new_source_files = []
         for dirname in files_per_directory.keys():
             current_files = files_per_directory[dirname]
+
+            # Normalize dirname to forward slashes for consistent comparisons
+            # on Windows (os.path.dirname returns backslashes, but our exclusion
+            # lists and startswith checks use forward slashes)
+            norm_dirname = dirname.replace(os.path.sep, '/')
 
             # Separate excluded files before unity grouping — they must be
             # compiled individually (e.g. utf8proc_data.cpp needs its own TU)
@@ -410,7 +415,6 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
 
             # Also unity-build third-party directories that have multiple files,
             # excluding dirs with static symbol conflicts that break unity builds
-            # NOTE: Use forward slashes to match convert_backslashes() normalization
             unity_excluded_dirs = [
                 'third_party/brotli/enc',               # static symbols (kHashMul32, etc.)
                 'third_party/mbedtls/library',          # static K[] in sha256/sha512
@@ -421,15 +425,18 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
                 'third_party/snowball/src_c',           # static s_0_0[] etc. in every stemmer file
                 'third_party/tpce-tool/main',           # static DataFileNames[] in shared header
             ]
-            is_third_party = dirname.startswith('third_party/')
-            if not unity_build and is_third_party and len(current_files) > 1 and dirname not in unity_excluded_dirs:
+            is_third_party = norm_dirname.startswith('third_party/')
+            if not unity_build and is_third_party and len(current_files) > 1 and norm_dirname not in unity_excluded_dirs:
                 unity_build = True
 
             if not unity_build:
                 if short_paths:
-                    # replace source files with "__"
+                    # Use directory-prefixed names to prevent object file collisions
+                    # when files from different dirs share basenames (e.g. ipx/basis.cc
+                    # vs qpsolver/basis.cpp would both produce basis.obj)
+                    dir_prefix = norm_dirname.replace('/', '_')
                     for file in current_files:
-                        unity_filename = os.path.basename(file)
+                        unity_filename = '{}_{}'.format(dir_prefix, os.path.basename(file))
                         new_source_files.append(generate_unity_build([file], unity_filename, linenumbers))
                 else:
                     # directly use the source files
