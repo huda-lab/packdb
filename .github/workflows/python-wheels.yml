@@ -120,12 +120,17 @@ jobs:
           CIBW_ARCHS_MACOS: x86_64 arm64
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BEFORE_ALL_LINUX: yum install -y perl-IPC-Cmd || true
-          CIBW_ENVIRONMENT_LINUX: CMAKE_BUILD_PARALLEL_LEVEL=4
+          CIBW_ENVIRONMENT_LINUX: >
+            CMAKE_BUILD_PARALLEL_LEVEL=4
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
           CIBW_ENVIRONMENT_MACOS: >
             CMAKE_BUILD_PARALLEL_LEVEL=4
             CMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
             CMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
-          CIBW_ENVIRONMENT_WINDOWS: CMAKE_BUILD_PARALLEL_LEVEL=4
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
+          CIBW_ENVIRONMENT_WINDOWS: >
+            CMAKE_BUILD_PARALLEL_LEVEL=4
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
           CIBW_TEST_COMMAND: python -c "import packdb; print(packdb.__version__)"
 
       - name: Upload wheels
