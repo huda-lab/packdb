@@ -417,6 +417,7 @@ def build_package(target_dir, extensions, linenumbers=False, unity_count=32, fol
                 'third_party/libpg_query',              # ScanKeywords[] in kwlist.hpp
                 'third_party/zstd/dict',                # cover.h: no include guards → typedef redefinition
                 'third_party/highs/highs/ipm/basiclu',  # lu_list.h: static inline in C → redefinition
+                'third_party/highs/highs/ipm/ipx',      # Mixed with basiclu, causes duplicate obj files
                 'third_party/snowball/src_c',           # static s_0_0[] etc. in every stemmer file
                 'third_party/tpce-tool/main',           # static DataFileNames[] in shared header
             ]

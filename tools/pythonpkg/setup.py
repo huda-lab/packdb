@@ -512,7 +512,7 @@ setup(
     # NOTE: might need to be find_packages() ?
     packages=packages,
     include_package_data=True,
-    python_requires='>=3.9.0',
+    python_requires='>=3.11.0',
     tests_require=['google-cloud-storage', 'mypy', 'pytest'],
     classifiers=[
         'Topic :: Database :: Database Engines/Servers',
