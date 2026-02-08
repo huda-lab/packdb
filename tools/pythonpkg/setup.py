@@ -49,10 +49,33 @@ class CompilerLauncherMixin:
             original_spawn_for_linker = self.compiler.spawn
 
             def spawn_with_x64_linker(cmd, **kwargs):
+                # Redirect HostX86 to HostX64 for 64-bit linker
                 if cmd and 'HostX86' in cmd[0]:
                     x64_path = cmd[0].replace('HostX86', 'HostX64')
                     if os.path.exists(x64_path):
                         cmd = [x64_path] + cmd[1:]
+
+                # Use a response file for long link commands to stay under
+                # the 32,767-character CreateProcess limit on Windows.
+                # With ~572 object files the linker command easily exceeds this.
+                if cmd and os.path.basename(cmd[0]).lower().startswith('link'):
+                    cmd_length = sum(len(arg) + 3 for arg in cmd)
+                    if cmd_length > 30000:
+                        import tempfile
+                        rsp_fd, rsp_path = tempfile.mkstemp(suffix='.rsp')
+                        try:
+                            with os.fdopen(rsp_fd, 'w') as rsp:
+                                for arg in cmd[1:]:
+                                    rsp.write(f'"{arg}"\n')
+                            return original_spawn_for_linker(
+                                [cmd[0], f'@{rsp_path}'], **kwargs
+                            )
+                        finally:
+                            try:
+                                os.unlink(rsp_path)
+                            except OSError:
+                                pass
+
                 return original_spawn_for_linker(cmd, **kwargs)
 
             self.compiler.spawn = spawn_with_x64_linker
