@@ -110,36 +110,62 @@ def get_short_path(long_name: str) -> str:
 
 
 class build_ext(CompilerLauncherMixin, _build_ext):
-    def build_extensions(self):
-        # Separate C and C++ compiler flags
-        # C files should not receive C++-specific flags
-        self._c_compile_args = []
-        self._cxx_compile_args = toolchain_args[:]
+    def build_extension(self, ext):
+        # Before building this extension, wrap the compiler's compile method
+        # to handle C and C++ files differently
+        original_compiler_compile = None
+        if hasattr(self.compiler, 'compile'):
+            original_compiler_compile = self.compiler.compile
 
-        # For C files, we need basic flags but not C++-specific ones
-        if os.name != 'nt':
-            # Use C11 standard for C files, no C++ specific flags
-            self._c_compile_args = ['-g0']
-            if platform.system() == 'Darwin':
-                # macOS needs version min, but not stdlib or std flags
-                self._c_compile_args.append('-mmacosx-version-min=10.7')
+            def custom_compile(sources, output_dir=None, macros=None, include_dirs=None,
+                              debug=0, extra_preargs=None, extra_postargs=None, depends=None):
+                # Separate C and C++ sources
+                c_sources = [s for s in sources if s.endswith('.c')]
+                cxx_sources = [s for s in sources if not s.endswith('.c')]
 
-        # Override the compile arguments per file
-        original_compile = self.compiler._compile
+                objects = []
 
-        def _compile_with_per_file_flags(obj, src, ext, cc_args, extra_postargs, pp_opts):
-            # Determine if this is a C or C++ file
-            if src.endswith('.c'):
-                # Pure C file - use C flags
-                extra_postargs = [arg for arg in extra_postargs if arg not in ['-std=c++17', '-stdlib=libc++']]
-                extra_postargs = self._c_compile_args + extra_postargs
-            else:
-                # C++ file - use C++ flags (already set)
-                pass
-            return original_compile(obj, src, ext, cc_args, extra_postargs, pp_opts)
+                # Compile C++ files with original flags
+                if cxx_sources:
+                    objects.extend(original_compiler_compile(
+                        cxx_sources, output_dir, macros, include_dirs,
+                        debug, extra_preargs, extra_postargs, depends
+                    ))
 
-        self.compiler._compile = _compile_with_per_file_flags
-        super().build_extensions()
+                # Compile C files with filtered flags (on non-Windows)
+                if c_sources:
+                    if os.name != 'nt':
+                        # Filter out C++-specific flags for C compilation
+                        c_postargs = [arg for arg in (extra_postargs or [])
+                                     if arg not in ['-std=c++17', '-stdlib=libc++']]
+                        # Add minimal C flags
+                        c_postargs.insert(0, '-g0')
+                        if platform.system() == 'Darwin':
+                            c_postargs.append('-mmacosx-version-min=10.7')
+
+                        objects.extend(original_compiler_compile(
+                            c_sources, output_dir, macros, include_dirs,
+                            debug, extra_preargs, c_postargs, depends
+                        ))
+                    else:
+                        # Windows: use original flags
+                        objects.extend(original_compiler_compile(
+                            c_sources, output_dir, macros, include_dirs,
+                            debug, extra_preargs, extra_postargs, depends
+                        ))
+
+                return objects
+
+            # Temporarily replace the compile method
+            self.compiler.compile = custom_compile
+
+        try:
+            # Build the extension with our custom compile method
+            super().build_extension(ext)
+        finally:
+            # Restore the original compile method
+            if original_compiler_compile:
+                self.compiler.compile = original_compiler_compile
 
 
 lib_name = 'packdb'
@@ -188,7 +214,7 @@ os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
 if os.name == 'nt':
     # windows:
-    toolchain_args = ['/wd4244', '/wd4267', '/wd4200', '/wd26451', '/wd26495', '/D_CRT_SECURE_NO_WARNINGS', '/utf-8']
+    toolchain_args = ['/std:c++17', '/wd4244', '/wd4267', '/wd4200', '/wd26451', '/wd26495', '/D_CRT_SECURE_NO_WARNINGS', '/utf-8']
 else:
     # macos/linux
     toolchain_args = ['-std=c++17', '-g0']
