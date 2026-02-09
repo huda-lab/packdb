@@ -48,7 +48,7 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
             per_var_lower[var] = 0.0;
             per_var_upper[var] = 1e30;
         } else if (logical_type == LogicalType::BOOLEAN) {
-            // BINARY variables: [0, 1] (either include or don't include)
+            // BOOLEAN variables: [0, 1] (either include or don't include)
             per_var_types[var] = HighsVarType::kInteger;
             per_var_lower[var] = 0.0;
             per_var_upper[var] = 1.0;
@@ -356,7 +356,7 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
                 "Common causes:\n"
                 "  • Contradictory bounds (e.g., x >= 10 AND x <= 5)\n"
                 "  • SUM constraints impossible to satisfy with available data\n"
-                "  • Variable types too restrictive (BINARY when INTEGER needed)\n\n"
+                "  • Variable types too restrictive (BOOLEAN when INTEGER needed)\n\n"
                 "Suggestion: Try relaxing constraints or verify input data.");
         } else if (model_status == HighsModelStatus::kUnbounded) {
             throw InvalidInputException(
@@ -366,7 +366,7 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
                 "Examples:\n"
                 "  • Add upper bounds: SUCH THAT x <= 100\n"
                 "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
-                "  • Use BINARY instead of INTEGER for selection problems");
+                "  • Use BOOLEAN instead of INTEGER for selection problems");
         } else if (model_status == HighsModelStatus::kTimeLimit) {
             throw InvalidInputException(
                 "DECIDE optimization exceeded time limit.\n"

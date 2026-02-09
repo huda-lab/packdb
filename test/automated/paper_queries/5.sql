@@ -3,9 +3,8 @@ CREATE VIEW Tpch AS SELECT *, l_extendedprice AS revenue FROM lineitem LIMIT 100
 
 SELECT *
 FROM Tpch R
-DECIDE x
-SUCH THAT x IS INTEGER AND
-    x BETWEEN 0 AND 1 AND
+DECIDE x IS INTEGER
+SUCH THAT x BETWEEN 0 AND 1 AND
     SUM(revenue*x) >= 414000 AND
     SUM(x) >= 1
 MINIMIZE SUM(x);

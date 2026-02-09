@@ -7,11 +7,11 @@ structured for quick navigation by both AI agents and human developers.
 
 ## Folder Map
 
-| Folder | Contains | Start here if... |
-|---|---|---|
-| `00_project_overview/` | What PackDB is, the theory behind it, and the DECIDE syntax reference | You are new to the project or need to understand what queries are valid |
-| `01_pipeline/` | The query processing pipeline: architecture, each stage in order, source-code map, and a concrete end-to-end trace | You are working on or debugging any part of the DECIDE query path |
-| `02_operations/` | Testing methodology, release workflow, and known limitations | You need to run tests, cut a release, or check whether a feature is supported |
+| Folder                 | Contains                                                                                                           | Start here if...                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `00_project_overview/` | What PackDB is, the theory behind it, and the DECIDE syntax reference                                              | You are new to the project or need to understand what queries are valid       |
+| `01_pipeline/`         | The query processing pipeline: architecture, each stage in order, source-code map, and a concrete end-to-end trace | You are working on or debugging any part of the DECIDE query path             |
+| `02_operations/`       | Testing methodology, release workflow, and known limitations                                                       | You need to run tests, cut a release, or check whether a feature is supported |
 
 ---
 
@@ -34,11 +34,11 @@ know where things live on disk.
 
 The DECIDE clause passes through three custom stages after standard DuckDB parsing:
 
-| Stage | What it does | Doc | Key source file(s) |
-|---|---|---|---|
-| Parser / Symbolic | Normalizes algebraic expressions into canonical linear form | `01_pipeline/01_parser.md` | `src/packdb/symbolic/decide_symbolic.cpp` |
-| Binder | Validates linearity, binds decision variables, resolves types | `01_pipeline/02_binder.md` | `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp` |
-| Execution | Materializes data, builds the solver matrix, runs HiGHS, projects results | `01_pipeline/03_execution.md` | `src/execution/operator/decide/physical_decide.cpp` |
+| Stage             | What it does                                                              | Doc                           | Key source file(s)                                                                 |
+| ----------------- | ------------------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------- |
+| Parser / Symbolic | Normalizes algebraic expressions into canonical linear form               | `01_pipeline/01_parser.md`    | `src/packdb/symbolic/decide_symbolic.cpp`                                          |
+| Binder            | Validates linearity, binds decision variables, resolves types             | `01_pipeline/02_binder.md`    | `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp` |
+| Execution         | Materializes data, builds the solver matrix, runs HiGHS, projects results | `01_pipeline/03_execution.md` | `src/execution/operator/decide/physical_decide.cpp`                                |
 
 For the full source-tree map (all headers, all classes, all key methods), see
 `01_pipeline/code_structure.md`.
@@ -53,7 +53,7 @@ scoped to that file's audience. Authoritative sources:
 - **DECIDE syntax** — `00_project_overview/syntax_reference.md` is the full spec.
   `project_description.md` has a brief teaser; `trace_life_of_a_query.md` shows it in
   the context of a real query.
-- **IS BINARY / IS INTEGER** — `syntax_reference.md` defines what the user writes.
+- **IS BOOLEAN / IS INTEGER** — `syntax_reference.md` defines what the user writes.
   `02_binder.md` explains what the binder does with that declaration internally.
 - **Linearity constraint** — appears in theory, parser, binder, and syntax docs, each
   scoped to that stage. The user-facing spec is in `syntax_reference.md`. The

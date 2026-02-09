@@ -597,6 +597,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     auto &cast = expr.Cast<BoundCastExpression>();
                     auto transformed_child = TransformExpression(*cast.child);
                     return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+                    // Handle count_star() aggregate - replace with num_rows constant
+                    auto &agg = expr.Cast<BoundAggregateExpression>();
+                    if (agg.function.name == "count_star") {
+                        return make_uniq_base<Expression, BoundConstantExpression>(Value::BIGINT(num_rows));
+                    }
+                    // Other aggregates are not supported in RHS
+                    throw InternalException("Unsupported aggregate '%s' in constraint RHS. "
+                                          "Only count_star() is supported.", agg.function.name);
                 } else {
                     return expr.Copy();
                 }

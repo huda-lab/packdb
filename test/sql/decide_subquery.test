@@ -14,7 +14,7 @@ INSERT INTO limits VALUES (50);
 query I
 SELECT sum(x)
 FROM items
-DECIDE x SUCH THAT x IS BINARY AND sum(x * weight) <= (SELECT max_weight FROM limits)
+DECIDE x SUCH THAT x IS BOOLEAN AND sum(x * weight) <= (SELECT max_weight FROM limits)
 MAXIMIZE sum(x * value);
 ----
 2
@@ -24,7 +24,7 @@ MAXIMIZE sum(x * value);
 query I
 SELECT sum(x)
 FROM items
-DECIDE x SUCH THAT x IS BINARY AND sum(x * weight) <= 50
+DECIDE x SUCH THAT x IS BOOLEAN AND sum(x * weight) <= 50
 MAXIMIZE sum(x * (SELECT max(value) FROM items));
 ----
 2

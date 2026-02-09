@@ -2,8 +2,7 @@
 SELECT ps_partkey, ps_suppkey, ps_supplycost, ps_availqty, x
 FROM partsupp
 WHERE ps_partkey < 50
-DECIDE x
-SUCH THAT x IS INTEGER
-  AND x <= ps_availqty
+DECIDE x IS INTEGER
+SUCH THAT x <= ps_availqty
   AND SUM(x * ps_supplycost) <= 10000
 MAXIMIZE SUM(x);

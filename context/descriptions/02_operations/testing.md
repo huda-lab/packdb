@@ -24,7 +24,7 @@ For every test case:
 
 ## 3. Test Coverage
 The suite (`test/automated/queries/`) covers:
--   **Basic Constraints**: Bounds (`0 <= x <= 1`), Binary variables.
+-   **Basic Constraints**: Bounds (`0 <= x <= 1`), Boolean variables.
 -   **Aggregations**: `SUM(x * price)`.
 -   **Complex Expressions**: `(x + y) / 2 <= 10`.
 -   **Subqueries**: Using scalar subqueries in bounds (e.g., `x <= (SELECT MAX(v) FROM T)`).

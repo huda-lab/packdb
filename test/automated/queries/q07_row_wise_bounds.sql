@@ -2,8 +2,7 @@
 SELECT ps_partkey, ps_availqty, x
 FROM partsupp
 WHERE ps_partkey < 20
-DECIDE x
-SUCH THAT x IS INTEGER
-  AND x <= 5
+DECIDE x IS INTEGER
+SUCH THAT x <= 5
   AND SUM(x) <= 100
 MAXIMIZE SUM(x * ps_availqty);

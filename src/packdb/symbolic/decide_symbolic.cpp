@@ -863,13 +863,26 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
         if (SymbolicIsZero(neg_inner)) {
             continue;
         }
-        vector<unique_ptr<ParsedExpression>> rhs_args;
-        rhs_args.push_back(FromSymbolic(neg_inner, ctx));
-        auto rhs_sum = make_uniq<FunctionExpression>("sum", std::move(rhs_args));
-        if (!rhs_expr) {
-            rhs_expr = std::move(rhs_sum);
+        
+        unique_ptr<ParsedExpression> term_expr;
+        if (neg_inner.type() == typeid(Numeric)) {
+            // Pure numeric constant: use constant * count_star() instead of sum(constant)
+            // This is mathematically equivalent: sum(c) over n rows = c * n = c * count(*)
+            auto const_expr = FromSymbolic(neg_inner, ctx);
+            vector<unique_ptr<ParsedExpression>> count_args;
+            auto count_star = make_uniq<FunctionExpression>("count_star", std::move(count_args));
+            term_expr = MakeOp("*", std::move(const_expr), std::move(count_star));
         } else {
-            rhs_expr = MakeOp("+", std::move(rhs_expr), std::move(rhs_sum));
+            // Non-constant expression: wrap in sum() as before
+            vector<unique_ptr<ParsedExpression>> rhs_args;
+            rhs_args.push_back(FromSymbolic(neg_inner, ctx));
+            term_expr = make_uniq<FunctionExpression>("sum", std::move(rhs_args));
+        }
+        
+        if (!rhs_expr) {
+            rhs_expr = std::move(term_expr);
+        } else {
+            rhs_expr = MakeOp("+", std::move(rhs_expr), std::move(term_expr));
         }
     }
 

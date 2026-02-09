@@ -172,12 +172,43 @@ variable_type:
 				{ $$ = makeTypeName("integer_variable"); $$->location = @1; }
 			| REAL
 				{ $$ = makeTypeName("real_variable"); $$->location = @1; }
-			| BINARY
-				{ $$ = makeTypeName("binary_variable"); $$->location = @1; }
+			| BOOLEAN_P
+				{ $$ = makeTypeName("bool_variable"); $$->location = @1; }
+		;
+
+/* A single typed variable declaration: "x IS INTEGER" or just "x" (defaults to INTEGER) */
+typed_decide_variable:
+			ColId IS variable_type
+				{
+					/* Create a comparison node: ColId = type_marker */
+					/* This reuses the existing pattern - x IS INTEGER becomes x = "integer_variable" */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make1(makeString($1));
+					col->location = @1;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$3, @2);
+				}
+			| ColId
+				{
+					/* Just a variable name - defaults to INTEGER */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make1(makeString($1));
+					col->location = @1;
+					PGTypeName *deftype = makeTypeName("integer_variable");
+					deftype->location = @1;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)deftype, @1);
+				}
+		;
+
+/* List of typed variables: "x IS INTEGER, y IS BOOLEAN" */
+typed_decide_variable_list:
+			typed_decide_variable
+				{ $$ = list_make1($1); }
+			| typed_decide_variable_list ',' typed_decide_variable
+				{ $$ = lappend($1, $3); }
 		;
 
 decide_clause:
-			DECIDE columnrefList SUCH THAT a_expr MAXIMIZE a_expr							
+			DECIDE typed_decide_variable_list SUCH THAT a_expr MAXIMIZE a_expr							
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     n->variables = $2;
@@ -186,7 +217,7 @@ decide_clause:
                     n->objective = $7;
                     $$ = (PGNode *)n;
                 }
-			| DECIDE columnrefList SUCH THAT a_expr MINIMIZE a_expr							
+			| DECIDE typed_decide_variable_list SUCH THAT a_expr MINIMIZE a_expr							
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     n->variables = $2;

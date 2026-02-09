@@ -13,14 +13,10 @@
 
 #include "duckdb/packdb/utility/debug.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/connection.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/planner.hpp"
-#include "duckdb/optimizer/optimizer.hpp"
-#include "duckdb/execution/physical_plan_generator.hpp"
-#include "duckdb/execution/operator/helper/physical_materialized_collector.hpp"
-#include "duckdb/execution/executor.hpp"
-#include "duckdb/main/prepared_statement_data.hpp"
 
 namespace duckdb {
 
@@ -286,7 +282,7 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
         string subquery_sql = expr.ToString();
         string sql = "SELECT " + subquery_sql;
         
-        // Manual execution to avoid deadlock (context.Query acquires lock)
+        // First, do a quick plan to check for correlated subqueries (not supported)
         Parser parser;
         parser.ParseQuery(sql);
         if (parser.statements.empty()) {
@@ -294,7 +290,7 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
         }
         
         Planner planner(context);
-        planner.CreatePlan(std::move(parser.statements[0]));
+        planner.CreatePlan(parser.statements[0]->Copy());
 
         // Check for correlated subquery - not supported in DECIDE clauses
         if (!planner.binder->correlated_columns.empty()) {
@@ -305,39 +301,20 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
                 "non-correlated subquery, or table column instead."));
         }
 
-        Optimizer optimizer(*planner.binder, context);
-        auto optimized_plan = optimizer.Optimize(std::move(planner.plan));
+        // Execute the subquery using a fresh Connection
+        // This is safe because:
+        // 1. A new Connection has its own ClientContext with its own lock (no deadlock)
+        // 2. It goes through the complete query execution path (handles complex queries like HashJoin)
+        // 3. Read-only subqueries don't conflict with the outer transaction (MVCC)
+        Connection temp_conn(*context.db);
+        auto query_result = temp_conn.Query(sql);
         
-        PhysicalPlanGenerator generator(context);
-        auto physical_plan = generator.CreatePlan(std::move(optimized_plan));
-        
-        // Wrap in result collector
-        PreparedStatementData data(StatementType::SELECT_STATEMENT);
-        data.types = physical_plan->GetTypes();
-        for(size_t i=0; i<data.types.size(); ++i) data.names.push_back("col" + to_string(i));
-        data.plan = std::move(physical_plan);
-        
-        auto collector = make_uniq<PhysicalMaterializedCollector>(data, false);
-        // collector->children.push_back(std::move(physical_plan)); // Do not add as child, it uses data.plan reference
-        
-        Executor executor(context);
-        executor.Initialize(std::move(collector));
-        
-        auto result = executor.ExecuteTask();
-        while (result != PendingExecutionResult::EXECUTION_FINISHED && result != PendingExecutionResult::EXECUTION_ERROR) {
-             result = executor.ExecuteTask();
+        if (query_result->HasError()) {
+            return BindResult(BinderException::Unsupported(expr, 
+                "Failed to execute subquery: " + query_result->GetError()));
         }
         
-        if (executor.HasError()) {
-             return BindResult(BinderException::Unsupported(expr, "Failed to execute subquery: " + executor.GetError().Message()));
-        }
-        
-        auto query_result = executor.GetResult();
-        if (query_result->type != QueryResultType::MATERIALIZED_RESULT) {
-             return BindResult(BinderException::Unsupported(expr, "Internal error: expected materialized result from subquery execution"));
-        }
-        
-        auto &mat_res = (MaterializedQueryResult&)*query_result;
+        auto &mat_res = query_result->Cast<MaterializedQueryResult>();
         Value val;
         if (mat_res.RowCount() == 0) {
              val = Value(LogicalType::SQLNULL);
@@ -345,8 +322,7 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
              val = mat_res.GetValue(0, 0);
         }
         
-        unique_ptr<Expression> bound_expr = make_uniq_base<Expression, BoundConstantExpression>(val);
-        return BindResult(std::move(bound_expr));
+        return BindResult(make_uniq<BoundConstantExpression>(val));
     }
     default:
         return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);

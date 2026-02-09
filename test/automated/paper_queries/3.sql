@@ -3,9 +3,8 @@ CREATE VIEW Tpch AS SELECT *, l_extendedprice AS sum_base_price, l_extendedprice
 
 SELECT *
 FROM Tpch R
-DECIDE x
-SUCH THAT x IS INTEGER AND
-    x BETWEEN 0 AND 1 AND
+DECIDE x IS INTEGER
+SUCH THAT x BETWEEN 0 AND 1 AND
     SUM(sum_base_price*x) <= 15000000 AND
     SUM(sum_disc_price*x) <= 45000000 AND
     SUM(sum_charge*x) <= 96000000 AND

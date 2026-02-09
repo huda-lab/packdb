@@ -17,6 +17,95 @@ from pathlib import Path
 from datetime import datetime
 import re
 import time
+import ast
+import operator
+import math
+
+
+def safe_eval_arithmetic(expr_str):
+    """
+    Safely evaluate arithmetic expressions like '2.667e-6 * 100' or 'sqrt(100)'.
+    
+    Supports:
+    - Numbers (int, float, scientific notation)
+    - Operators: +, -, *, /, ** (power), % (modulo)
+    - Functions: sqrt, abs, floor, ceil, round
+    
+    Returns None if the expression cannot be evaluated.
+    """
+    expr_str = expr_str.strip()
+    
+    # First, try direct float conversion (handles simple numbers and scientific notation)
+    try:
+        return float(expr_str)
+    except ValueError:
+        pass
+    
+    # Define allowed operators
+    allowed_operators = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Pow: operator.pow,      # Exponentiation: 2 ** 3
+        ast.Mod: operator.mod,      # Modulo: 10 % 3
+        ast.FloorDiv: operator.floordiv,  # Floor division: 10 // 3
+        ast.USub: operator.neg,     # Unary minus: -5
+        ast.UAdd: operator.pos,     # Unary plus: +5
+    }
+    
+    # Define allowed functions
+    allowed_functions = {
+        'sqrt': math.sqrt,
+        'abs': abs,
+        'floor': math.floor,
+        'ceil': math.ceil,
+        'round': round,
+        'pow': pow,
+        'log': math.log,
+        'log10': math.log10,
+        'exp': math.exp,
+    }
+    
+    def _eval(node):
+        if isinstance(node, ast.Num):  # Python 3.7 and earlier
+            return node.n
+        elif isinstance(node, ast.Constant):  # Python 3.8+
+            if isinstance(node.value, (int, float)):
+                return node.value
+            raise ValueError(f"Unsupported constant type: {type(node.value)}")
+        elif isinstance(node, ast.BinOp):
+            left = _eval(node.left)
+            right = _eval(node.right)
+            op_type = type(node.op)
+            if op_type not in allowed_operators:
+                raise ValueError(f"Unsupported operator: {op_type}")
+            return allowed_operators[op_type](left, right)
+        elif isinstance(node, ast.UnaryOp):
+            operand = _eval(node.operand)
+            op_type = type(node.op)
+            if op_type not in allowed_operators:
+                raise ValueError(f"Unsupported unary operator: {op_type}")
+            return allowed_operators[op_type](operand)
+        elif isinstance(node, ast.Call):
+            # Handle function calls like sqrt(100)
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id.lower()
+                if func_name not in allowed_functions:
+                    raise ValueError(f"Unsupported function: {func_name}")
+                args = [_eval(arg) for arg in node.args]
+                return allowed_functions[func_name](*args)
+            raise ValueError(f"Unsupported call type: {type(node.func)}")
+        elif isinstance(node, ast.Expression):
+            return _eval(node.body)
+        else:
+            raise ValueError(f"Unsupported node type: {type(node)}")
+    
+    try:
+        tree = ast.parse(expr_str, mode='eval')
+        return _eval(tree)
+    except (SyntaxError, ValueError, TypeError, ZeroDivisionError):
+        return None
 
 
 def run_highs_solver(mps_file, solution_file):
@@ -107,22 +196,39 @@ def run_packdb_query(query_file, db_file):
 
 
 def extract_from_clause(query_content):
-    """Extract FROM clause from SQL query"""
+    """Extract FROM clause from the main SELECT statement (the one with DECIDE)"""
     # Normalize
     upper_query = query_content.upper()
     
-    if 'FROM' not in upper_query:
+    if 'FROM' not in upper_query or 'DECIDE' not in upper_query:
+        return ""
+    
+    # Find the DECIDE keyword - the main SELECT is the one that contains DECIDE
+    decide_idx = upper_query.find('DECIDE')
+    
+    # Find the SELECT that precedes this DECIDE (search backwards from DECIDE)
+    # This is the main query SELECT, not a CREATE VIEW or subquery
+    select_idx = upper_query.rfind('SELECT', 0, decide_idx)
+    
+    if select_idx == -1:
+        return ""
+    
+    # Now find FROM between this SELECT and DECIDE
+    from_idx = upper_query.find('FROM', select_idx, decide_idx)
+    
+    if from_idx == -1:
         return ""
         
-    # Find start of FROM
-    start_idx = upper_query.find('FROM') + 4
+    # Find start of FROM clause (after 'FROM' keyword)
+    start_idx = from_idx + 4
     
     # Find end of FROM (WHERE, DECIDE, GROUP BY, ORDER BY, LIMIT, ;, or end of string)
+    # But only search between FROM and DECIDE
     end_markers = ['WHERE', 'DECIDE', 'GROUP BY', 'ORDER BY', 'LIMIT', ';']
-    end_idx = len(query_content)
+    end_idx = decide_idx  # Default to DECIDE position
     
     for marker in end_markers:
-        idx = upper_query.find(marker, start_idx)
+        idx = upper_query.find(marker, start_idx, decide_idx + 1)
         if idx != -1 and idx < end_idx:
             end_idx = idx
             
@@ -231,8 +337,9 @@ def query_to_mps(query_file, db_file, mps_file):
     where_clause = extract_where_clause(sql_content)
     
     # Parse DECIDE clause components
-    # Look for DECIDE x, y, ...
+    # Look for DECIDE x [IS type], y [IS type], ...
     decide_vars = []
+    variable_type = "INTEGER"
     if 'DECIDE' in sql_content:
         decide_part = sql_content.split('DECIDE')[1]
         # It ends at SUCH THAT or MAXIMIZE or MINIMIZE or ;
@@ -244,14 +351,17 @@ def query_to_mps(query_file, db_file, mps_file):
                 end_idx = min(end_idx, idx)
         
         vars_str = decide_part[:end_idx].strip()
-        decide_vars = [v.strip().lower() for v in vars_str.split(',')]
+        raw_vars = [v.strip() for v in vars_str.split(',')]
+        for v in raw_vars:
+            # Each variable may be "x", "x IS INTEGER", or "x IS BOOLEAN"
+            parts = v.split()
+            decide_vars.append(parts[0].lower())  # Just the variable name
+            # Detect type from the declaration
+            if len(parts) >= 3 and parts[1].upper() == 'IS' and parts[2].upper() == 'BOOLEAN':
+                variable_type = "BINARY"
     
     if not decide_vars:
         decide_vars = ['x'] # Default fallback
-        
-    variable_type = "INTEGER"
-    if 'IS BINARY' in sql_content:
-        variable_type = "BINARY"
     
     # Get objective sense and expression
     if 'MAXIMIZE' in sql_content:
@@ -336,8 +446,23 @@ def query_to_mps(query_file, db_file, mps_file):
         # Normalize spaces
         constraint_part = ' '.join(constraint_part.split())
         
+        # Protect BETWEEN ... AND ... from being split by the AND delimiter
+        # Replace "BETWEEN X AND Y" with "BETWEEN X __BETWEENAND__ Y" temporarily
+        def protect_between(match):
+            return f"BETWEEN {match.group(1)} __BETWEENAND__ {match.group(2)}"
+        
+        constraint_part = re.sub(
+            r'BETWEEN\s+(-?[\d\.eE+-]+)\s+AND\s+(-?[\d\.eE+-]+)',
+            protect_between,
+            constraint_part,
+            flags=re.IGNORECASE
+        )
+        
         # Split by ' AND ' (case insensitive)
         parts = re.split(r'\s+AND\s+', constraint_part, flags=re.IGNORECASE)
+        
+        # Restore the protected AND in BETWEEN clauses
+        parts = [p.replace('__BETWEENAND__', 'AND') for p in parts]
         
         for part in parts:
             part = part.strip()
@@ -345,7 +470,7 @@ def query_to_mps(query_file, db_file, mps_file):
                 continue
                 
             # Type declarations
-            if 'IS BINARY' in part.upper():
+            if 'IS BOOLEAN' in part.upper():
                 continue 
             if 'IS INTEGER' in part.upper():
                 continue
@@ -353,6 +478,27 @@ def query_to_mps(query_file, db_file, mps_file):
             # SUM constraints
             if 'SUM(' in part.upper():
                 try:
+                    # Handle SUM(expr) BETWEEN a AND b -> two constraints: >= a AND <= b
+                    between_match = re.search(r'SUM\((.*?)\)\s+BETWEEN\s+(-?[\d\.eE+-]+)\s+AND\s+(-?[\d\.eE+-]+)', part, re.IGNORECASE)
+                    if between_match:
+                        sum_expr = between_match.group(1).strip().lower()
+                        lower_val = float(between_match.group(2))
+                        upper_val = float(between_match.group(3))
+                        
+                        # Add >= lower constraint
+                        constraints.append({
+                            'expr': sum_expr,
+                            'type': 'GE',
+                            'rhs': lower_val
+                        })
+                        # Add <= upper constraint
+                        constraints.append({
+                            'expr': sum_expr,
+                            'type': 'LE',
+                            'rhs': upper_val
+                        })
+                        continue
+                    
                     match = re.search(r'(<=|>=|=|<|>)', part)
                     if not match:
                         continue
@@ -366,8 +512,12 @@ def query_to_mps(query_file, db_file, mps_file):
                         sum_expr = sum_match.group(1).strip().lower()
                     else:
                         continue
-                        
-                    rhs = float(rhs_str.strip())
+                    
+                    # Evaluate RHS - handles simple numbers and arithmetic expressions like "2.667e-6 * 100"
+                    rhs = safe_eval_arithmetic(rhs_str)
+                    if rhs is None:
+                        print(f"Warning: Could not evaluate RHS expression: {rhs_str}")
+                        continue
                     
                     sense = 'EQ'
                     if '<' in operator:
@@ -388,8 +538,20 @@ def query_to_mps(query_file, db_file, mps_file):
                     print(f"Warning: Failed to parse constraint: {part}")
                     continue
             
-            # Variable bounds (x > 2, y < 10)
+            # Variable bounds (x > 2, y < 10, x BETWEEN 0 AND 1)
             else:
+                # Handle x BETWEEN a AND b -> lower = a, upper = b
+                between_match = re.match(r'([a-zA-Z0-9_]+)\s+BETWEEN\s+(-?[\d\.eE+-]+)\s+AND\s+(-?[\d\.eE+-]+)', part, re.IGNORECASE)
+                if between_match:
+                    var = between_match.group(1).lower()
+                    lower_val = float(between_match.group(2))
+                    upper_val = float(between_match.group(3))
+                    
+                    if var in bounds:
+                        bounds[var]['lower'] = max(bounds[var]['lower'], lower_val)
+                        bounds[var]['upper'] = min(bounds[var]['upper'], upper_val)
+                    continue
+                
                 match = re.match(r'([a-zA-Z0-9_]+)\s*(<=|>=|=|<|>)\s*(-?[\d\.]+)', part)
                 if match:
                     var = match.group(1).lower()

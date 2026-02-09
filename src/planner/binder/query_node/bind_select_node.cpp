@@ -434,9 +434,46 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         case_insensitive_map_t<idx_t> decide_variable_names;
         vector<string> var_names;
         vector<LogicalType> var_types;
+        vector<bool> is_boolean_var;  // Track which variables are BOOLEAN for generating bounds
+        
         for (const auto& expr_ptr : statement.decide_variables) {
-            const auto& colref = expr_ptr->Cast<duckdb::ColumnRefExpression>();
-            const auto &name = colref.GetColumnName();
+            string name;
+            string type_marker = "integer_variable";  // Default type
+            
+            // Handle typed variable declarations (ComparisonExpression from "x IS INTEGER")
+            if (expr_ptr->GetExpressionClass() == ExpressionClass::COMPARISON) {
+                const auto& comp = expr_ptr->Cast<duckdb::ComparisonExpression>();
+                
+                // LHS should be the variable name (ColumnRefExpression)
+                if (comp.left->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+                    throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration: expected variable name on left side.");
+                }
+                const auto& colref = comp.left->Cast<duckdb::ColumnRefExpression>();
+                name = colref.GetColumnName();
+                
+                // RHS should be the type marker (ConstantExpression with string value)
+                if (comp.right->GetExpressionClass() == ExpressionClass::CONSTANT) {
+                    const auto& const_expr = comp.right->Cast<duckdb::ConstantExpression>();
+                    if (const_expr.value.type() == LogicalType::VARCHAR) {
+                        type_marker = const_expr.value.ToString();
+                    }
+                }
+            } else if (expr_ptr->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+                // Plain variable name without type (backward compatibility)
+                const auto& colref = expr_ptr->Cast<duckdb::ColumnRefExpression>();
+                name = colref.GetColumnName();
+            } else {
+                throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration.");
+            }
+            
+            // Validate type marker
+            if (type_marker == "real_variable") {
+                throw BinderException(*expr_ptr, 
+                    "DECIDE variable '%s' cannot be REAL type. "
+                    "DECIDE variables represent tuple cardinality (count) and must be INTEGER or BOOLEAN.",
+                    name);
+            }
+            
             if (bind_context.GetMatchingBinding(name)) {
                 throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
             }
@@ -444,9 +481,35 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
             }
             decide_variable_names.emplace(name, var_names.size());
-            var_names.push_back(colref.GetColumnName());
-            // DECIDE variables represent cardinalities and must be integral by default.
-            var_types.push_back(LogicalType::INTEGER);
+            var_names.push_back(name);
+            var_types.push_back(LogicalType::INTEGER);  // All DECIDE vars are INTEGER internally
+            is_boolean_var.push_back(type_marker == "bool_variable");
+        }
+        
+        // Generate implicit bounds constraints for BOOLEAN variables: 0 <= x <= 1
+        // Prepend these to the existing constraints
+        for (idx_t i = 0; i < var_names.size(); i++) {
+            if (is_boolean_var[i]) {
+                auto x_ref = make_uniq<ColumnRefExpression>(var_names[i]);
+                auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
+                auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
+                
+                auto lower_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, x_ref->Copy(), std::move(zero));
+                auto upper_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(x_ref), std::move(one));
+                
+                auto bounds = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound), std::move(upper_bound));
+                
+                // Prepend to constraints
+                if (statement.decide_constraints) {
+                    statement.decide_constraints = make_uniq<ConjunctionExpression>(
+                        ExpressionType::CONJUNCTION_AND, 
+                        std::move(bounds), 
+                        std::move(statement.decide_constraints)
+                    );
+                } else {
+                    statement.decide_constraints = std::move(bounds);
+                }
+            }
         }
 
 
@@ -467,7 +530,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
-            var_types = decide_constraints_binder.var_types;
+            // Types are now determined from the DECIDE clause, not from constraint binding
         }
         {
             DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
@@ -475,7 +538,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             result->decide_objective = decide_objective_binder.Bind(objective);
             result->decide_sense = statement.decide_sense;
         }
-        // This is important since we can only know the right var type after constraint binding. So we change var types in bind context to reflect the output.
+        // Update types in bind context to reflect the determined types from DECIDE clause
         bind_context.GetBindingsList().back()->types = var_types;
         for (idx_t i = 0; i < var_names.size(); i++) {
             auto bound_col_ref = make_uniq<BoundColumnRefExpression>(

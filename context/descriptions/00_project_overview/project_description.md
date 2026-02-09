@@ -22,14 +22,14 @@ The core contribution is the new SQL syntax:
 SELECT select_list
 FROM table_expression
 [WHERE ...]
-DECIDE variable_list
+DECIDE variable [IS type] [, variable2 [IS type2] ...]
 SUCH THAT constraint_list
 [MAXIMIZE | MINIMIZE] objective_function
 ```
 
 ### 3.1 Key Components
--   **Decision Variables**: `DECIDE x, y` defines variables representing the quantity or selection status of rows.
--   **Variables Types**: `SUCH THAT x IS INTEGER` (or `BINARY`) enforces the domain.
+-   **Decision Variables**: `DECIDE x IS INTEGER, y IS BOOLEAN` defines variables with their types representing the quantity or selection status of rows.
+-   **Variable Types**: Specified in the DECIDE clause. `IS INTEGER` (default) or `IS BOOLEAN` enforces the domain.
 -   **Constraints**: `SUM(x * cost) <= Budget` or `x <= 1` defines the bounds.
 -   **Objective**: `MAXIMIZE SUM(x * utility)` defines the goal.
 
