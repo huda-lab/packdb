@@ -19,8 +19,9 @@ SUCH THAT
   - `x IS INTEGER`: Default if no type specified. $x \in \{0, 1, 2, ...\}$
   - `x IS BOOLEAN`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
   - `x IS REAL`: **Not Supported** (Error).
-  
+
 **Examples:**
+
 ```sql
 DECIDE x IS BOOLEAN           -- x is binary (0 or 1)
 DECIDE x IS INTEGER           -- x is non-negative integer
