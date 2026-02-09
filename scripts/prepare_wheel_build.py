@@ -42,7 +42,7 @@ def main():
     import package_build
     import amalgamation  # noqa: F401 — imported for side effects
 
-    extensions = ["core_functions", "parquet", "tpch"]
+    extensions = ["core_functions", "parquet", "tpch", "icu", "json"]
 
     if args.include_jemalloc:
         # sdist: include jemalloc so the tarball works on all platforms
