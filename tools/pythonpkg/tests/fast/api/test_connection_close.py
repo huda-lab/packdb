@@ -1,6 +1,6 @@
 # cursor description
 
-import duckdb
+import packdb
 import tempfile
 import os
 import pytest
@@ -20,7 +20,7 @@ class TestConnectionClose(object):
         fd, db = tempfile.mkstemp()
         os.close(fd)
         os.remove(db)
-        con = duckdb.connect(db)
+        con = packdb.connect(db)
         cursor = con.cursor()
         cursor.execute("create table a (i integer)")
         cursor.execute("insert into a values (42)")
@@ -29,7 +29,7 @@ class TestConnectionClose(object):
 
     def test_open_and_exit(self):
         with pytest.raises(TypeError):
-            with duckdb.connect() as connection:
+            with packdb.connect() as connection:
                 connection.execute("select 42")
                 # This exception does not get swallowed by __exit__
                 raise TypeError()
@@ -38,12 +38,12 @@ class TestConnectionClose(object):
         fd, db = tempfile.mkstemp()
         os.close(fd)
         os.remove(db)
-        con = duckdb.connect(db)
+        con = packdb.connect(db)
         cursor = con.cursor()
         cursor.execute("create table a (i integer)")
         cursor.execute("insert into a values (42)")
         con.close()
-        con = duckdb.connect(db)
+        con = packdb.connect(db)
         cursor = con.cursor()
         results = cursor.execute("select * from a").fetchall()
         assert results == [(42,)]

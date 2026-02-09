@@ -1,6 +1,6 @@
 # cursor description
 
-import duckdb
+import packdb
 import tempfile
 import os
 
@@ -21,18 +21,18 @@ class TestReadOnly(object):
         os.remove(db)
 
         # this is forbidden
-        check_exception(lambda: duckdb.connect(":memory:", True))
+        check_exception(lambda: packdb.connect(":memory:", True))
 
-        con_rw = duckdb.connect(db, False)
+        con_rw = packdb.connect(db, False)
         con_rw.cursor().execute("create table a (i integer)")
         con_rw.cursor().execute("insert into a values (42)")
         con_rw.close()
 
-        con_ro = duckdb.connect(db, True)
+        con_ro = packdb.connect(db, True)
         con_ro.cursor().execute("select * from a").fetchall()
         check_exception(lambda: con_ro.execute("delete from a"))
         con_ro.close()
 
-        con_rw = duckdb.connect(db, False)
+        con_rw = packdb.connect(db, False)
         con_rw.cursor().execute("drop table a")
         con_rw.close()

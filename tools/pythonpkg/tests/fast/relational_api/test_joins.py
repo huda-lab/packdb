@@ -1,11 +1,11 @@
-import duckdb
+import packdb
 import pytest
-from duckdb import ColumnExpression
+from packdb import ColumnExpression
 
 
 @pytest.fixture
 def con():
-    conn = duckdb.connect()
+    conn = packdb.connect()
     # Main relation
     conn.execute(
         """

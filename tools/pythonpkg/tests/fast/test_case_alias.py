@@ -1,7 +1,7 @@
 import pandas
 import numpy as np
 import datetime
-import duckdb
+import packdb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
@@ -11,9 +11,9 @@ class TestCaseAlias(object):
     def test_case_alias(self, duckdb_cursor, pandas):
         import numpy as np
         import datetime
-        import duckdb
+        import packdb
 
-        con = duckdb.connect(':memory:')
+        con = packdb.connect(':memory:')
 
         df = pandas.DataFrame([{"COL1": "val1", "CoL2": 1.05}, {"COL1": "val3", "CoL2": 17}])
 

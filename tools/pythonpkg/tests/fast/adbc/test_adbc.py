@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 import sys
 import datetime
@@ -16,8 +16,8 @@ adbc_driver_manager_lib = pytest.importorskip("adbc_driver_manager._lib")
 pyarrow = pytest.importorskip("pyarrow")
 
 # When testing local, if you build via BUILD_PYTHON=1 make, you need to manually set up the
-# dylib duckdb path.
-driver_path = duckdb.duckdb.__file__
+# dylib packdb path.
+driver_path = packdb.packdb.__file__
 
 
 @pytest.fixture

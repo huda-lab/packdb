@@ -1,10 +1,10 @@
 import platform
 import pytest
 
-_ = pytest.importorskip("duckdb.experimental.spark")
+_ = pytest.importorskip("packdb.experimental.spark")
 
-from duckdb.experimental.spark.sql.types import Row
-from duckdb.experimental.spark.sql.functions import col
+from packdb.experimental.spark.sql.types import Row
+from packdb.experimental.spark.sql.functions import col
 
 
 @pytest.fixture

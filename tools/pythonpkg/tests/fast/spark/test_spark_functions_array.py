@@ -1,7 +1,7 @@
 import pytest
 import platform
 
-_ = pytest.importorskip("duckdb.experimental.spark")
+_ = pytest.importorskip("packdb.experimental.spark")
 from spark_namespace.sql import functions as F
 from spark_namespace.sql.types import Row
 from spark_namespace import USE_ACTUAL_SPARK

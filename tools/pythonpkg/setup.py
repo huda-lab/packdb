@@ -211,7 +211,7 @@ class build_ext(CompilerLauncherMixin, _build_ext):
 
 lib_name = 'packdb'
 
-extensions = ['core_functions', 'parquet', 'tpch']
+extensions = ['core_functions', 'parquet', 'tpch', 'icu', 'json']
 
 is_android = hasattr(sys, 'getandroidapilevel')
 is_pyodide = 'PYODIDE' in os.environ

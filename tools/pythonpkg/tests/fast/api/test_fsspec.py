@@ -1,5 +1,5 @@
 import pytest
-import duckdb
+import packdb
 import io
 
 fsspec = pytest.importorskip("fsspec")

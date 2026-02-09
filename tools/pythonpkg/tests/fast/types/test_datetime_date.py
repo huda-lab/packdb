@@ -1,10 +1,10 @@
-import duckdb
+import packdb
 import datetime
 
 
 class TestDateTimeDate(object):
     def test_date_infinity(self):
-        con = duckdb.connect()
+        con = packdb.connect()
         # Positive infinity
         con.execute("SELECT 'infinity'::DATE")
         result = con.fetchall()
@@ -17,7 +17,7 @@ class TestDateTimeDate(object):
         assert result == [(datetime.date(1, 1, 1),)]
 
     def test_date_infinity_roundtrip(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         # positive infinity
         con.execute("select $1, $1 = 'infinity'::DATE", [datetime.date.max])

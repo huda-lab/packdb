@@ -1,12 +1,12 @@
-import duckdb
+import packdb
 
 
 class TestModule:
     def test_paramstyle(self):
-        assert duckdb.paramstyle == "qmark"
+        assert packdb.paramstyle == "qmark"
 
     def test_threadsafety(self):
-        assert duckdb.threadsafety == 1
+        assert packdb.threadsafety == 1
 
     def test_apilevel(self):
-        assert duckdb.apilevel == "2.0"
+        assert packdb.apilevel == "2.0"

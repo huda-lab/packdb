@@ -1,7 +1,7 @@
-import duckdb
+import packdb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
-from duckdb import Value
+from packdb import Value
 
 
 class TestDuckDBQuery(object):
@@ -24,7 +24,7 @@ class TestDuckDBQuery(object):
     def test_duckdb_from_query_multiple_statements(self, pandas):
         tst_df = pandas.DataFrame({'a': [1, 23, 3, 5]})
 
-        res = duckdb.sql(
+        res = packdb.sql(
             '''
         select 42; select *
         from tst_df
@@ -36,7 +36,7 @@ class TestDuckDBQuery(object):
         assert res == [(1,), (23,), (3,), (5,), (1,), (23,), (3,), (5,)]
 
     def test_duckdb_query_empty_result(self):
-        con = duckdb.connect()
+        con = packdb.connect()
         # show tables on empty connection does not produce any tuples
         res = con.query('show tables').fetchall()
         assert res == []
@@ -60,7 +60,7 @@ class TestDuckDBQuery(object):
         assert 'EXPLAIN_ANALYZE' in results[0][1]
 
     def test_named_param(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         original_res = con.execute(
             """
@@ -89,16 +89,16 @@ class TestDuckDBQuery(object):
         assert res == original_res
 
     def test_named_param_not_dict(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         with pytest.raises(
-            duckdb.InvalidInputException,
+            packdb.InvalidInputException,
             match="Values were not provided for the following prepared statement parameters: name1, name2, name3",
         ):
             con.execute("select $name1, $name2, $name3", ['name1', 'name2', 'name3'])
 
     def test_named_param_basic(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         res = con.execute("select $name1, $name2, $name3", {'name1': 5, 'name2': 3, 'name3': 'a'}).fetchall()
         assert res == [
@@ -106,48 +106,48 @@ class TestDuckDBQuery(object):
         ]
 
     def test_named_param_not_exhaustive(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         with pytest.raises(
-            duckdb.InvalidInputException,
+            packdb.InvalidInputException,
             match="Invalid Input Error: Values were not provided for the following prepared statement parameters: name3",
         ):
             con.execute("select $name1, $name2, $name3", {'name1': 5, 'name2': 3})
 
     def test_named_param_excessive(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         with pytest.raises(
-            duckdb.InvalidInputException,
+            packdb.InvalidInputException,
             match="Values were not provided for the following prepared statement parameters: name3",
         ):
             con.execute("select $name1, $name2, $name3", {'name1': 5, 'name2': 3, 'not_a_named_param': 5})
 
     def test_named_param_not_named(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         with pytest.raises(
-            duckdb.InvalidInputException,
+            packdb.InvalidInputException,
             match="Values were not provided for the following prepared statement parameters: 1, 2",
         ):
             con.execute("select $1, $1, $2", {'name1': 5, 'name2': 3})
 
     def test_named_param_mixed(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         with pytest.raises(
-            duckdb.NotImplementedException, match="Mixing named and positional parameters is not supported yet"
+            packdb.NotImplementedException, match="Mixing named and positional parameters is not supported yet"
         ):
             con.execute("select $name1, $1, $2", {'name1': 5, 'name2': 3})
 
     def test_named_param_strings_with_dollarsign(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         res = con.execute("select '$name1', $name1, $name1, '$name1'", {'name1': 5}).fetchall()
         assert res == [('$name1', 5, 5, '$name1')]
 
     def test_named_param_case_insensivity(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         res = con.execute(
             """
@@ -160,7 +160,7 @@ class TestDuckDBQuery(object):
         ]
 
     def test_named_param_keyword(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         result = con.execute("SELECT $val", {"val": 42}).fetchone()
         assert result == (42,)
@@ -169,7 +169,7 @@ class TestDuckDBQuery(object):
         assert result == (42,)
 
     def test_conversion_from_tuple(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         # Tuple converts to list
         result = con.execute("select $1", [(21, 22, 42)]).fetchall()
@@ -182,13 +182,13 @@ class TestDuckDBQuery(object):
         # If the amount of items in the tuple and the children of the struct don't match
         # we throw an error
         with pytest.raises(
-            duckdb.InvalidInputException,
+            packdb.InvalidInputException,
             match='Tried to create a STRUCT value from a tuple containing 3 elements, but the STRUCT consists of 2 children',
         ):
             result = con.execute("select $1", [Value(('a', 21, True), {'a': str, 'b': int})]).fetchall()
 
         # If we try to create anything other than a STRUCT or a LIST out of the tuple, we throw an error
-        with pytest.raises(duckdb.InvalidInputException, match="Can't convert tuple to a Value of type VARCHAR"):
+        with pytest.raises(packdb.InvalidInputException, match="Can't convert tuple to a Value of type VARCHAR"):
             result = con.execute("select $1", [Value((21, 42), str)])
 
     def test_column_name_behavior(self, duckdb_cursor):

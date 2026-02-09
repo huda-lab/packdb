@@ -2,7 +2,7 @@ from pytest import importorskip
 
 importorskip('pyarrow')
 
-import duckdb
+import packdb
 from pyarrow import scalar, string, large_string, list_, int32, types
 
 

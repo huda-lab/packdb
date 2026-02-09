@@ -1,10 +1,10 @@
-import duckdb
+import packdb
 import pandas as pd
 
 
 class TestUnion(object):
     def test_union_by_all(self):
-        connection = duckdb.connect()
+        connection = packdb.connect()
 
         connection.execute(
             """

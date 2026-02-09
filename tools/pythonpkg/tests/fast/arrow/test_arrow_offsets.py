@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 from pytest import mark
 import datetime

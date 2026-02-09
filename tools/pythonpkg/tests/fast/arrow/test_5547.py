@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pandas as pd
 from pandas.testing import assert_frame_equal
 import pytest
@@ -23,7 +23,7 @@ def test_5547():
         )
     )
 
-    con = duckdb.connect()
+    con = packdb.connect()
     expected = tbl.to_pandas()
     result = con.execute(
         """

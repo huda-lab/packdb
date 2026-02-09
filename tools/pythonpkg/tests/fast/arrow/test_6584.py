@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-import duckdb
+import packdb
 import pytest
 
 pyarrow = pytest.importorskip('pyarrow')
@@ -13,7 +13,7 @@ def f(cur, i, data):
 def test_6584():
     pool = ThreadPoolExecutor(max_workers=2)
     data = pyarrow.Table.from_pydict({"a": [1, 2, 3]})
-    c = duckdb.connect()
+    c = packdb.connect()
     futures = []
     for i in range(2):
         fut = pool.submit(f, c.cursor(), i, data)

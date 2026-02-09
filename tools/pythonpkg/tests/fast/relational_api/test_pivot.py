@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 import os
 import tempfile

@@ -1,7 +1,7 @@
 import pytest
 import sys
 
-_ = pytest.importorskip("duckdb.experimental.spark")
+_ = pytest.importorskip("packdb.experimental.spark")
 from spark_namespace.sql import functions as F
 
 

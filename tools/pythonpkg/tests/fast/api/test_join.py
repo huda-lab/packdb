@@ -1,10 +1,10 @@
-import duckdb
+import packdb
 import pytest
 
 
 class TestJoin(object):
     def test_alias_from_sql(self):
-        con = duckdb.connect()
+        con = packdb.connect()
         rel1 = con.sql("SELECT 1 AS col1, 2 AS col2")
         rel2 = con.sql("SELECT 1 AS col1, 3 AS col3")
 
@@ -14,7 +14,7 @@ class TestJoin(object):
         assert res == [(1, 2, 3)]
 
     def test_relational_join(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         rel1 = con.sql("SELECT 1 AS col1, 2 AS col2")
         rel2 = con.sql("SELECT 1 AS col1, 3 AS col3")
@@ -24,16 +24,16 @@ class TestJoin(object):
         assert res == [(1, 2, 3)]
 
     def test_relational_join_alias_collision(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         rel1 = con.sql("SELECT 1 AS col1, 2 AS col2").set_alias('a')
         rel2 = con.sql("SELECT 1 AS col1, 3 AS col3").set_alias('a')
 
-        with pytest.raises(duckdb.InvalidInputException, match='Both relations have the same alias'):
+        with pytest.raises(packdb.InvalidInputException, match='Both relations have the same alias'):
             rel = rel1.join(rel2, 'col1')
 
     def test_relational_join_with_condition(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         rel1 = con.sql("SELECT 1 AS col1, 2 AS col2", alias='rel1')
         rel2 = con.sql("SELECT 1 AS col1, 3 AS col3", alias='rel2')

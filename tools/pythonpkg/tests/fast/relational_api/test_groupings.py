@@ -1,10 +1,10 @@
-import duckdb
+import packdb
 import pytest
 
 
 @pytest.fixture
 def con():
-    conn = duckdb.connect()
+    conn = packdb.connect()
     conn.execute(
         """
 		create table tbl as (SELECT * FROM (VALUES

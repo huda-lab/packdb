@@ -3,7 +3,7 @@ import tempfile
 
 import os
 
-_ = pytest.importorskip("duckdb.experimental.spark")
+_ = pytest.importorskip("packdb.experimental.spark")
 
 from spark_namespace import USE_ACTUAL_SPARK
 
@@ -15,7 +15,7 @@ if USE_ACTUAL_SPARK:
         allow_module_level=True,
     )
 
-from duckdb import connect, InvalidInputException, read_csv
+from packdb import connect, InvalidInputException, read_csv
 from conftest import NumpyPandas, ArrowPandas, getTimeSeriesData
 from spark_namespace import USE_ACTUAL_SPARK
 import pandas._testing as tm

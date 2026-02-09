@@ -1,3 +1,0 @@
-adbc_driver_packdb
-packdb
-packdb-stubs

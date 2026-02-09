@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 import os
 
@@ -47,7 +47,7 @@ class TestArrowPyCapsule(object):
 
     def test_capsule_roundtrip(self, duckdb_cursor):
         def create_capsule():
-            conn = duckdb.connect()
+            conn = packdb.connect()
             rel = conn.sql("select i, i+1, -i from range(100) t(i)")
 
             capsule = rel.__arrow_c_stream__()
@@ -67,7 +67,7 @@ class TestArrowPyCapsule(object):
                 def __arrow_c_stream__(self, requested_schema=None):
                     return self.rel.__arrow_c_stream__(requested_schema=requested_schema)
 
-            conn = duckdb.connect()
+            conn = packdb.connect()
             rel = conn.sql("select i, i+1, -i from range(100) t(i)")
             return MyTable(rel, conn)
 

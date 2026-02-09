@@ -1,13 +1,13 @@
-import duckdb
+import packdb
 import pytest
 
 pa = pytest.importorskip("pyarrow")
-from duckdb.typing import *
+from packdb.typing import *
 
 
 class TestArrowBufferSize(object):
     def test_arrow_buffer_size(self):
-        con = duckdb.connect()
+        con = packdb.connect()
 
         # All small string
         res = con.query("select 'bla'").arrow()
@@ -33,7 +33,7 @@ class TestArrowBufferSize(object):
         def just_return(x):
             return x
 
-        con = duckdb.connect()
+        con = packdb.connect()
         con.create_function('just_return', just_return, [VARCHAR], VARCHAR, type='arrow')
 
         res = con.query("select just_return('bla')").arrow()

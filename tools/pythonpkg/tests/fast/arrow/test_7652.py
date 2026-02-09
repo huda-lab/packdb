@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import os
 import pytest
 import tempfile
@@ -34,8 +34,8 @@ class Test7652(object):
         assert max(read_list) == max(generated_list)
         assert read_list == generated_list
 
-        # Attempt to perform the same thing with duckdb.
-        print("Retrieving from duckdb")
+        # Attempt to perform the same thing with packdb.
+        print("Retrieving from packdb")
         duckdb_result = list(map(lambda v: v[0], duckdb_cursor.sql(f"select * from '{temp_file_name}'").fetchall()))
 
         print("DuckDB result:", duckdb_result)

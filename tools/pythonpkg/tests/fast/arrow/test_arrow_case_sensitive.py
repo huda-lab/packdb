@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 
 pa = pytest.importorskip("pyarrow")

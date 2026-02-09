@@ -1,5 +1,5 @@
 import pytest
-import duckdb
+import packdb
 
 
 class TestExplain(object):
@@ -14,10 +14,10 @@ class TestExplain(object):
         res = duckdb_cursor.sql('select 42').explain('STANDARD')
         assert isinstance(res, str)
 
-        res = duckdb_cursor.sql('select 42').explain(duckdb.STANDARD)
+        res = duckdb_cursor.sql('select 42').explain(packdb.STANDARD)
         assert isinstance(res, str)
 
-        res = duckdb_cursor.sql('select 42').explain(duckdb.ExplainType.STANDARD)
+        res = duckdb_cursor.sql('select 42').explain(packdb.ExplainType.STANDARD)
         assert isinstance(res, str)
 
         res = duckdb_cursor.sql('select 42').explain(0)
@@ -30,7 +30,7 @@ class TestExplain(object):
         res = duckdb_cursor.sql('select 42').explain('ANALYZE')
         assert isinstance(res, str)
 
-        res = duckdb_cursor.sql('select 42').explain(duckdb.ExplainType.ANALYZE)
+        res = duckdb_cursor.sql('select 42').explain(packdb.ExplainType.ANALYZE)
         assert isinstance(res, str)
 
         res = duckdb_cursor.sql('select 42').explain(1)

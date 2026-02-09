@@ -347,7 +347,7 @@ class DecimalType(FractionalType):
     """
 
     def __init__(self, precision: int = 10, scale: int = 0):
-        super().__init__(duckdb.decimal_type(precision, scale))
+        super().__init__(packdb.decimal_type(precision, scale))
         self.precision = precision
         self.scale = scale
         self.hasPrecisionInfo = True  # this is a public API
@@ -586,7 +586,7 @@ class ArrayType(DataType):
     """
 
     def __init__(self, elementType: DataType, containsNull: bool = True):
-        super().__init__(duckdb.list_type(elementType.duckdb_type))
+        super().__init__(packdb.list_type(elementType.duckdb_type))
         assert isinstance(elementType, DataType), "elementType %s should be an instance of %s" % (
             elementType,
             DataType,
@@ -641,7 +641,7 @@ class MapType(DataType):
     """
 
     def __init__(self, keyType: DataType, valueType: DataType, valueContainsNull: bool = True):
-        super().__init__(duckdb.map_type(keyType.duckdb_type, valueType.duckdb_type))
+        super().__init__(packdb.map_type(keyType.duckdb_type, valueType.duckdb_type))
         assert isinstance(keyType, DataType), "keyType %s should be an instance of %s" % (
             keyType,
             DataType,
@@ -774,7 +774,7 @@ class StructType(DataType):
     """
 
     def _update_internal_duckdb_type(self):
-        self.duckdb_type = duckdb.struct_type(dict(zip(self.names, [x.duckdb_type for x in self.fields])))
+        self.duckdb_type = packdb.struct_type(dict(zip(self.names, [x.duckdb_type for x in self.fields])))
 
     def __init__(self, fields: Optional[List[StructField]] = None):
         if not fields:
@@ -787,7 +787,7 @@ class StructType(DataType):
         # Precalculated list of fields that need conversion with fromInternal/toInternal functions
         self._needConversion = [f.needConversion() for f in self]
         self._needSerializeAnyField = any(self._needConversion)
-        super().__init__(duckdb.struct_type(dict(zip(self.names, [x.duckdb_type for x in self.fields]))))
+        super().__init__(packdb.struct_type(dict(zip(self.names, [x.duckdb_type for x in self.fields]))))
 
     @overload
     def add(

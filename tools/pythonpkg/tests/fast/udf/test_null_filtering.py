@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 
 pd = pytest.importorskip("pandas")
@@ -11,11 +11,11 @@ import numpy as np
 import cmath
 from typing import NamedTuple, Any, List
 
-from duckdb.typing import *
+from packdb.typing import *
 
 
 class Candidate(NamedTuple):
-    type: duckdb.typing.DuckDBPyType
+    type: packdb.typing.DuckDBPyType
     variant_one: Any
     variant_two: Any
 
@@ -120,11 +120,11 @@ def get_types():
             False,
         ),
         Candidate(
-            duckdb.struct_type(['BIGINT[]', 'VARCHAR[]']),
-            {'v1': [1, 2, 3], 'v2': ['a', 'non-inlined string', 'duckdb']},
-            {'v1': [5, 4, 3, 2, 1], 'v2': ['non-inlined-string', 'a', 'b', 'c', 'duckdb']},
+            packdb.struct_type(['BIGINT[]', 'VARCHAR[]']),
+            {'v1': [1, 2, 3], 'v2': ['a', 'non-inlined string', 'packdb']},
+            {'v1': [5, 4, 3, 2, 1], 'v2': ['non-inlined-string', 'a', 'b', 'c', 'packdb']},
         ),
-        Candidate(duckdb.list_type('VARCHAR'), ['the', 'duck', 'non-inlined string'], ['non-inlined-string', 'test']),
+        Candidate(packdb.list_type('VARCHAR'), ['the', 'duck', 'non-inlined string'], ['non-inlined-string', 'test']),
     ]
 
 
@@ -148,7 +148,7 @@ def construct_query(tuples) -> str:
 def construct_parameters(tuples, dbtype):
     parameters = []
     for row in tuples:
-        parameters.extend(list([duckdb.Value(x, dbtype) for x in row]))
+        parameters.extend(list([packdb.Value(x, dbtype) for x in row]))
     return parameters
 
 
@@ -214,7 +214,7 @@ class TestUDFNullFiltering(object):
         df = pd.DataFrame({'a': table_data})
         duckdb_cursor.execute("create table tbl as select * from df")
         duckdb_cursor.create_function('test', returns_null, [str], int, type='native')
-        with pytest.raises(duckdb.InvalidInputException, match='The UDF is not expected to return NULL values'):
+        with pytest.raises(packdb.InvalidInputException, match='The UDF is not expected to return NULL values'):
             result = duckdb_cursor.sql("select test(a::VARCHAR) from tbl").fetchall()
 
     @pytest.mark.parametrize(
@@ -232,6 +232,6 @@ class TestUDFNullFiltering(object):
         df = pd.DataFrame({'a': table_data})
         duckdb_cursor.execute("create table tbl as select * from df")
         duckdb_cursor.create_function('test', returns_null, [str], int, type='arrow')
-        with pytest.raises(duckdb.InvalidInputException, match='The UDF is not expected to return NULL values'):
+        with pytest.raises(packdb.InvalidInputException, match='The UDF is not expected to return NULL values'):
             result = duckdb_cursor.sql("select test(a::VARCHAR) from tbl").fetchall()
             print(result)

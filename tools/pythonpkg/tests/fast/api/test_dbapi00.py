@@ -2,7 +2,7 @@
 
 import numpy
 import pytest
-import duckdb
+import packdb
 from conftest import NumpyPandas, ArrowPandas
 
 

@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 
 
 class TestNested(object):

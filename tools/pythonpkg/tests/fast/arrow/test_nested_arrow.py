@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 
 import pytest
 
@@ -184,7 +184,7 @@ class TestArrowNested(object):
         values = [[(3, 12), (3, 21)], [(5, 42)]]
         arrow_table = pa.table({'detail': pa.array(values, map_type)})
         with pytest.raises(
-            duckdb.InvalidInputException,
+            packdb.InvalidInputException,
             match="Arrow map contains duplicate key, which isn't supported by DuckDB map type",
         ):
             rel = duckdb_cursor.from_arrow(arrow_table).fetchall()

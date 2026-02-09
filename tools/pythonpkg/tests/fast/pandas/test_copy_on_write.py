@@ -1,4 +1,4 @@
-import duckdb
+import packdb
 import pytest
 
 # https://pandas.pydata.org/docs/dev/user_guide/copy_on_write.html
@@ -34,7 +34,7 @@ class TestCopyOnWrite(object):
     )
     def test_copy_on_write(self, col):
         assert pandas.options.mode.copy_on_write == True
-        con = duckdb.connect()
+        con = packdb.connect()
         df_in = pandas.DataFrame(
             {
                 'numbers': col,

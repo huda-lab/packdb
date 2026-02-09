@@ -367,3 +367,7 @@ HiGHS.log
 
 # PackDB test results
 test/automated/results/
+
+
+# wheels for testing
+wheel-artifacts/

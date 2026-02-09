@@ -1,6 +1,6 @@
 import numpy as np
 import datetime
-import duckdb
+import packdb
 import pytest
 
 pandas = pytest.importorskip("pandas")
@@ -18,9 +18,9 @@ class TestPandasNaN(object):
         df['datetest'] = current_time
         # introduce a NaT (Not a Time value)
         df.loc[0, 'datetest'] = pandas.NaT
-        # now pass the DF through duckdb:
+        # now pass the DF through packdb:
 
-        conn = duckdb.connect(':memory:')
+        conn = packdb.connect(':memory:')
         conn.register('testing_null_values', df)
         # scan the DF and fetch the results normally
         results = conn.execute('select * from testing_null_values').fetchall()

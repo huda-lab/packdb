@@ -37,7 +37,7 @@ from .functions import _to_column_expr, col, lit
 
 
 class DataFrame:
-    def __init__(self, relation: duckdb.DuckDBPyRelation, session: "SparkSession"):
+    def __init__(self, relation: packdb.DuckDBPyRelation, session: "SparkSession"):
         self.relation = relation
         self.session = session
         self._schema = None
@@ -878,7 +878,7 @@ class DataFrame:
 
     @property
     def schema(self) -> StructType:
-        """Returns the schema of this :class:`DataFrame` as a :class:`duckdb.experimental.spark.sql.types.StructType`.
+        """Returns the schema of this :class:`DataFrame` as a :class:`packdb.experimental.spark.sql.types.StructType`.
 
         Examples
         --------
@@ -913,7 +913,7 @@ class DataFrame:
         [Row(age=5, name='Bob')]
         """
         if isinstance(item, str):
-            return Column(duckdb.ColumnExpression(self.relation.alias, item))
+            return Column(packdb.ColumnExpression(self.relation.alias, item))
         elif isinstance(item, Column):
             return self.filter(item)
         elif isinstance(item, (list, tuple)):
@@ -935,7 +935,7 @@ class DataFrame:
             raise AttributeError(
                 "'%s' object has no attribute '%s'" % (self.__class__.__name__, name)
             )
-        return Column(duckdb.ColumnExpression(self.relation.alias, name))
+        return Column(packdb.ColumnExpression(self.relation.alias, name))
 
     @overload
     def groupBy(self, *cols: "ColumnOrName") -> "GroupedData":

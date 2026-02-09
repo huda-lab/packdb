@@ -1,11 +1,17 @@
 import os
+import sys
 import pytest
 import shutil
 from os.path import abspath, join, dirname, normpath
 import glob
-import duckdb
+import packdb
 import warnings
 from importlib import import_module
+
+# The compiled C++ extension (_packdb.so) internally does `import duckdb` at
+# runtime for certain operations (e.g. Value conversion).  Register packdb
+# under the old module name so those internal imports resolve correctly.
+sys.modules['duckdb'] = packdb
 
 try:
     # need to ignore warnings that might be thrown deep inside pandas's import tree (from dateutil in this case)
@@ -63,7 +69,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="function")
 def duckdb_empty_cursor(request):
-    connection = duckdb.connect('')
+    connection = packdb.connect('')
     cursor = connection.cursor()
     return cursor
 
@@ -213,7 +219,7 @@ def require():
         for path in extension_paths_found:
             print(path)
             if path.endswith(extension_name + ".duckdb_extension"):
-                conn = duckdb.connect(db_name, config={'allow_unsigned_extensions': 'true'})
+                conn = packdb.connect(db_name, config={'allow_unsigned_extensions': 'true'})
                 conn.execute(f"LOAD '{path}'")
                 return conn
         pytest.skip(f'could not load {extension_name}')
@@ -237,7 +243,7 @@ def spark():
 
 @pytest.fixture(scope='function')
 def duckdb_cursor():
-    connection = duckdb.connect('')
+    connection = packdb.connect('')
     yield connection
     connection.close()
 
@@ -280,13 +286,13 @@ def duckdb_cursor_autocommit(request, tmp_path):
     test_dbfarm = tmp_path.resolve().as_posix()
 
     def finalizer():
-        duckdb.shutdown()
+        packdb.shutdown()
         if tmp_path.is_dir():
             shutil.rmtree(test_dbfarm)
 
     request.addfinalizer(finalizer)
 
-    connection = duckdb.connect(test_dbfarm)
+    connection = packdb.connect(test_dbfarm)
     connection.set_autocommit(True)
     cursor = connection.cursor()
     return (cursor, connection, test_dbfarm)
@@ -297,11 +303,11 @@ def initialize_duckdb(request, tmp_path):
     test_dbfarm = tmp_path.resolve().as_posix()
 
     def finalizer():
-        duckdb.shutdown()
+        packdb.shutdown()
         if tmp_path.is_dir():
             shutil.rmtree(test_dbfarm)
 
     request.addfinalizer(finalizer)
 
-    duckdb.connect(test_dbfarm)
+    packdb.connect(test_dbfarm)
     return test_dbfarm

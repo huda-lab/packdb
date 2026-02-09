@@ -127,9 +127,48 @@ jobs:
           path: tools/pythonpkg/dist/*.tar.gz
           retention-days: 7
 
+  test_wheels:
+    name: Test wheels on ${{ matrix.os }}
+    needs: [build_wheels]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+        python-version: ['3.12']
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheels
+
+      - name: Install wheel and test dependencies
+        run: |
+          pip install ./wheels/*.whl
+          pip install pytest numpy 'pandas<3.0' pyarrow pytz typing_extensions
+
+      - name: Run smoke tests
+        run: |
+          python -c "import packdb; print('Version:', packdb.__version__)"
+          python -c "import packdb; print(packdb.connect().sql('SELECT 42 AS answer').fetchall())"
+
+      - name: Run fast test suite
+        working-directory: tools/pythonpkg/tests
+        run: python -m pytest fast --verbose --continue-on-collection-errors
+
   publish_pypi:
     name: Publish to PyPI
-    needs: [build_wheels, build_sdist]
+    needs: [build_wheels, build_sdist, test_wheels]
     runs-on: ubuntu-22.04
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
     environment: pypi

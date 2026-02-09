@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("duckdb.experimental.spark")
+_ = pytest.importorskip("packdb.experimental.spark")
 
 from spark_namespace.sql.types import (
     LongType,
@@ -15,7 +15,7 @@ from spark_namespace.sql.types import (
     MapType,
 )
 from spark_namespace.sql.functions import col, struct, when, lit, array_contains
-import duckdb
+import packdb
 import re
 
 
