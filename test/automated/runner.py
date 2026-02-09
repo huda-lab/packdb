@@ -110,7 +110,7 @@ def safe_eval_arithmetic(expr_str):
 
 def run_highs_solver(mps_file, solution_file):
     """Run HiGHS solver and return status + solution"""
-    highs_bin = Path(__file__).parent.parent.parent / "build" / "release" / "bin" / "highs"
+    highs_bin = Path(__file__).parent / "highs"  # .parent gets the directory containing runner.py
     
     result = subprocess.run(
         [str(highs_bin), mps_file, f"--solution_file={solution_file}", "--time_limit=60.0"],
@@ -141,7 +141,9 @@ def run_highs_solver(mps_file, solution_file):
     
     # Parse solution file
     solution = {}
+    print(f"DEBUG - Solution file exists: {os.path.exists(solution_file)}")
     if os.path.exists(solution_file):
+        print(f"DEBUG - Reading solution file: {solution_file}")
         with open(solution_file, 'r') as f:
             lines = f.readlines()
             in_columns = False
