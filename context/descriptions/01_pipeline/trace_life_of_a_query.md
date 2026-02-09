@@ -3,7 +3,6 @@
 This document provides a low-level execution trace of a characteristic Package Query. It shows exactly how data transforms from SQL source to Final Result.
 
 ## 1. The Input Query
-
 We use a standard "Knapsack" problem: Select items to maximize value while keeping weight under limits.
 
 ```sql
@@ -11,7 +10,8 @@ SELECT id, value, weight
 FROM Items
 WHERE category = 'electronics'
 DECIDE x IS BOOLEAN
-SUCH THAT
+SUCH THAT 
+    SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);
 ```
 
@@ -24,29 +24,23 @@ MAXIMIZE SUM(x * value);
 | 4 | 50 | 50 | furniture |
 
 ## 2. Parser & Symbolic Phase
-
 **Input**: Raw SQL String.
 **Action**: The parser identifies the `DECIDE` block.
-
 1.  **Normalization**:
-    - Constraint `SUM(x * weight) <= 50` is identified.
-    - LHS `SUM(x * weight)` contains `x` (decision var).
-    - RHS `50` is constant.
-    - Constraint is valid.
+    -   Constraint `SUM(x * weight) <= 50` is identified.
+    -   LHS `SUM(x * weight)` contains `x` (decision var).
+    -   RHS `50` is constant.
+    -   Constraint is valid.
 
 ## 3. Binder Phase
-
 **Input**: Parsed Statement.
 **Action**: Validates types and names.
-
-1.  `x IS BOOLEAN`: The binder records that variable `x` has specialized domain $[0, 1]$.
 1.  `DECIDE x IS BOOLEAN`: The binder extracts the type from the DECIDE clause and records that variable `x` has specialized domain $[0, 1]$. It automatically adds implicit constraints `x >= 0 AND x <= 1`.
+2.  **Filter**: `WHERE category='electronics'` is bound to a standard Table Scan + Filter.
 3.  **Linearity Check**: `x * weight` is valid because `weight` comes from the table (constant coefficient).
 
 ## 4. Logical Planner
-
 **Output**: A Logical Operator Tree.
-
 ```
 LogicalDecide
  ├── Variables: [x]
@@ -60,11 +54,9 @@ LogicalDecide
 ## 5. Physical Execution Trace
 
 ### Step A: Materialization (Sink)
-
 The `PhysicalDecide` operator pulls from the child.
-
-- Row (id=4) is filtered out by `LogicalFilter`.
-- Rows 1, 2, 3 enter the Sink.
+-   Row (id=4) is filtered out by `LogicalFilter`.
+-   Rows 1, 2, 3 enter the Sink.
 
 **Buffered State (`DecideGlobalSinkState`)**:
 | RowIdx | id | value | weight |
@@ -74,23 +66,18 @@ The `PhysicalDecide` operator pulls from the child.
 | 2 | 3 | 120 | 30 |
 
 ### Step B: Coefficient Evaluation
-
 The operator evaluates the constraint expressions for each buffered row.
 
 **Constraint 1**: `SUM(x * weight) <= 50`
-
-- Row 0: `weight` evaluates to 20. Term: $20 \cdot x_0$.
-- Row 1: `weight` evaluates to 10. Term: $10 \cdot x_1$.
-- Row 2: `weight` evaluates to 30. Term: $30 \cdot x_2$.
+-   Row 0: `weight` evaluates to 20. Term: $20 \cdot x_0$.
+-   Row 1: `weight` evaluates to 10. Term: $10 \cdot x_1$.
+-   Row 2: `weight` evaluates to 30. Term: $30 \cdot x_2$.
 
 **Objective**: `MAX SUM(x * value)`
-
-- Coeffs: $100 \cdot x_0, 60 \cdot x_1, 120 \cdot x_2$.
+-   Coeffs: $100 \cdot x_0, 60 \cdot x_1, 120 \cdot x_2$.
 
 ### Step C: Solver Model (HiGHS)
-
 The operator builds the following ILP model (conceptually):
-
 ```
 Maximize
  obj: 100 x0 + 60 x1 + 120 x2
@@ -106,15 +93,12 @@ End
 ```
 
 ### Step D: Solving
-
 HiGHS solves the model.
-
-- **Solution**: $x_0 = 1, x_1 = 0, x_2 = 1$.
-- **Check**: Weight $20(1) + 10(0) + 30(1) = 50 \leq 50$. (Valid)
-- **Value**: $100 + 0 + 120 = 220$. (Optimal)
+-   **Solution**: $x_0 = 1, x_1 = 0, x_2 = 1$.
+-   **Check**: Weight $20(1) + 10(0) + 30(1) = 50 \leq 50$. (Valid)
+-   **Value**: $100 + 0 + 120 = 220$. (Optimal)
 
 ### Step E: Result Projection (Source)
-
 The operator re-scans the buffer and appends the solution.
 
 **Output Chunk**:

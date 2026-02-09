@@ -1,4 +1,4 @@
-# Binder & Validation
+# Implementation Part 2: Binder & Validation
 
 ## 1. Overview
 
@@ -44,7 +44,6 @@ Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x I
 | :-------------------- | :---------------------- | :-------------------- |
 | `DECIDE x IS INTEGER` | `x` (Type: Integer)     | `x >= 0`              |
 | `DECIDE x IS BOOLEAN` | `x` (Type: Integer)     | `x >= 0` AND `x <= 1` |
-| `DECIDE x`            | `x` (Type: Integer)     | `x >= 0` (default)    |
 | `DECIDE x`            | `x` (Type: Integer)     | `x >= 0` (default)    |
 
 Note: DuckDB's internal `LogicalType::INTEGER` is used for all decision variables. `IS BOOLEAN` is strictly a domain constraint, not a storage type.
