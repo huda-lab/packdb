@@ -364,6 +364,8 @@ CLAUDE.md
 
 # HiGHS solver logs
 HiGHS.log
+test/automated/highs
+test/automated/highs.log
 
 # PackDB test results
 test/automated/results/
