@@ -52,3 +52,6 @@ Constant offsets in the objective (e.g., `MAX SUM(x * p + 10)`) are dropped from
 
 ## 4. Interaction with Binder
 The Binder receives this normalized tree. It no longer needs to perform algebraic rearrangement; it simply validates that the structure matches the expectation (linear sum on LHS, scalar on RHS) and binds the column references.
+
+## 5. Future Work: `WHEN` Keyword
+The parser will need to handle a `WHEN ... THEN` construct within `SUCH THAT` constraints for conditional constraint support. This will require recognizing the `WHEN` token as introducing a conditional block (distinct from SQL's `CASE WHEN`) and parsing the condition and constrained expression as separate sub-trees.

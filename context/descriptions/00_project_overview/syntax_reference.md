@@ -53,3 +53,17 @@ Constraints must evaluate to a boolean.
 - Only `SUM()` is supported over decision variables.
 - `COUNT(x)` is **Not Supported** (Use `SUM(x)` where x is boolean).
 - `AVG(x)` is **Not Supported** (Non-linear ratio).
+
+## 6. Conditional Constraints — `WHEN` (Planned)
+
+> **Status**: Not yet implemented. This section documents the planned syntax.
+
+The `WHEN` keyword will enable conditional constraints within `SUCH THAT`, allowing constraints to apply only when a condition holds at the row-group level.
+
+**Planned syntax shape**:
+```sql
+SUCH THAT
+    WHEN condition THEN constraint_expression
+```
+
+This will allow expressing constraints like "if a row belongs to category X, then apply this bound" without needing to split the query.

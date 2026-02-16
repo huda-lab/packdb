@@ -33,3 +33,8 @@ Implementing a binder rule to "unnest" correlated subqueries into joins before t
 
 ### 2.3 Incremental Optimization
 Currently, the entire dataset is materialized. Future work could explore "Interactive Optimization," where the user provides feedback on a solution, and the solver incrementally updates the result without re-building the entire model.
+
+### 2.4 Conditional Constraints (`WHEN` Keyword)
+A `WHEN ... THEN` construct within `SUCH THAT` would enable row-group-level conditional constraints. This allows constraints to apply only when a condition holds, avoiding the need to split queries or use workarounds for conditional logic.
+-   **Example**: `WHEN category = 'perishable' THEN SUM(x * weight) <= 20`
+-   **Benefit**: More expressive constraint modeling without query decomposition.

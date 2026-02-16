@@ -47,3 +47,6 @@ Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x I
 | `DECIDE x`            | `x` (Type: Integer)     | `x >= 0` (default)    |
 
 Note: DuckDB's internal `LogicalType::INTEGER` is used for all decision variables. `IS BOOLEAN` is strictly a domain constraint, not a storage type.
+
+## 5. Future Work: `WHEN` Condition Validation
+The binder will need to validate `WHEN ... THEN` conditional constraints. This includes ensuring the `WHEN` condition references only table columns (not decision variables), and that the `THEN` body follows the same linearity rules as regular constraints.
