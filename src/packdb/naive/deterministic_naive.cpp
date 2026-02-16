@@ -37,29 +37,113 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     vector<int> a_rows;
     vector<int> a_cols;
     vector<double> a_vals;
-    vector<double> row_lower(num_constraints);
-    vector<double> row_upper(num_constraints);
+    vector<double> row_lower;
+    vector<double> row_upper;
 
-    for (idx_t c = 0; c < num_constraints; c++) {
-        auto &constr = model.constraints[c];
+    idx_t constraint_idx = 0;
+    for (auto &eval_const : input.constraints) {
+        // Use original provenance: aggregate if and only if LHS was an aggregate (e.g., SUM(...))
+        bool is_aggregate = eval_const.lhs_is_aggregate;
+        bool has_mask = !eval_const.row_mask.empty();
 
-        // Add matrix entries for this constraint
-        for (idx_t j = 0; j < constr.indices.size(); j++) {
-            a_rows.push_back((int)c);
-            a_cols.push_back(constr.indices[j]);
-            a_vals.push_back(constr.coefficients[j]);
-        }
+        if (is_aggregate) {
+            // AGGREGATE CONSTRAINT: SUM(x) <= 10 [WHEN condition]
+            // Create ONE constraint that sums across rows (only masked rows if WHEN)
+            for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
-        // Convert sense + rhs to HiGHS range bounds
-        if (constr.sense == '>') {
-            row_lower[c] = constr.rhs;
-            row_upper[c] = 1e30;
-        } else if (constr.sense == '<') {
-            row_lower[c] = -1e30;
-            row_upper[c] = constr.rhs;
-        } else { // '='
-            row_lower[c] = constr.rhs;
-            row_upper[c] = constr.rhs;
+                if (decide_var_idx != DConstants::INVALID_INDEX) {
+                    // Add entry for each row's variable with its specific coefficient
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        // PackDB WHEN: skip rows where condition is false
+                        if (has_mask && !eval_const.row_mask[row]) {
+                            continue;
+                        }
+                        double coeff = eval_const.row_coefficients[term_idx][row];
+
+                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                        a_rows.push_back(constraint_idx);
+                        a_cols.push_back(var_idx);
+                        a_vals.push_back(coeff);
+                    }
+                }
+            }
+
+            // Set constraint bounds
+            double rhs = eval_const.rhs_values[0]; // Same for all rows
+
+            if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+                row_lower.push_back(rhs);
+                row_upper.push_back(1e30);
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+                // Integer model: sum(x) > c  => sum(x) >= floor(c) + 1
+                double lb = std::floor(rhs) + 1.0;
+                row_lower.push_back(lb);
+                row_upper.push_back(1e30);
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+                row_lower.push_back(-1e30);
+                row_upper.push_back(rhs);
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+                // Integer model: sum(x) < c  => sum(x) <= ceil(c) - 1
+                double ub = std::ceil(rhs) - 1.0;
+                row_lower.push_back(-1e30);
+                row_upper.push_back(ub);
+            } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
+                row_lower.push_back(rhs);
+                row_upper.push_back(rhs);
+            }
+
+            constraint_idx++;
+
+        } else {
+            // PER-ROW CONSTRAINT: Create separate constraint for each row [WHEN condition]
+
+            for (idx_t row = 0; row < num_rows; row++) {
+                // PackDB WHEN: skip rows where condition is false
+                if (has_mask && !eval_const.row_mask[row]) {
+                    continue;
+                }
+
+                // Build constraint for this row
+                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+
+                    if (decide_var_idx != DConstants::INVALID_INDEX) {
+                        double coeff = eval_const.row_coefficients[term_idx][row];
+                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
+
+                        a_rows.push_back(constraint_idx);
+                        a_cols.push_back(var_idx);
+                        a_vals.push_back(coeff);
+                    }
+                }
+
+                // Set constraint bounds based on comparison type
+                double rhs = eval_const.rhs_values[row];
+
+                if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+                    row_lower.push_back(rhs);
+                    row_upper.push_back(1e30);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
+                    // Integer model: x > c  => x >= floor(c) + 1
+                    double lb = std::floor(rhs) + 1.0;
+                    row_lower.push_back(lb);
+                    row_upper.push_back(1e30);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+                    row_lower.push_back(-1e30);
+                    row_upper.push_back(rhs);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+                    // Integer model: x < c  => x <= ceil(c) - 1
+                    double ub = std::ceil(rhs) - 1.0;
+                    row_lower.push_back(-1e30);
+                    row_upper.push_back(ub);
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
+                    row_lower.push_back(rhs);
+                    row_upper.push_back(rhs);
+                }
+
+                constraint_idx++;
+            }
         }
     }
 

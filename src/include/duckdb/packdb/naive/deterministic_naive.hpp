@@ -14,6 +14,7 @@ struct EvaluatedConstraint {
     vector<double> rhs_values;                // [row_idx] = RHS value
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
+    vector<bool> row_mask;                    // PackDB WHEN: per-row mask (empty = unconditional)
 };
 
 //! Input for the deterministic solver

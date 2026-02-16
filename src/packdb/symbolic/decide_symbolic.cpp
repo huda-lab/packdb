@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "duckdb/packdb/symbolic/decide_symbolic.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "symbolicc++.h"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -912,6 +913,22 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
         case ExpressionClass::COMPARISON: {
             auto &cmp = expr.Cast<ComparisonExpression>();
             return NormalizeComparisonExpr(cmp, decide_variables);
+        }
+        case ExpressionClass::FUNCTION: {
+            // PackDB: Handle __when_constraint__(constraint, condition)
+            auto &func = expr.Cast<FunctionExpression>();
+            if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+                // Normalize the inner constraint (child[0]), pass through condition (child[1])
+                auto normalized_constraint = NormalizeConstraintsRecursive(*func.children[0], decide_variables);
+                auto condition_copy = func.children[1]->Copy();
+                vector<unique_ptr<ParsedExpression>> args;
+                args.push_back(std::move(normalized_constraint));
+                args.push_back(std::move(condition_copy));
+                auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(args));
+                result->is_operator = true;
+                return std::move(result);
+            }
+            return expr.Copy();
         }
         default:
             return expr.Copy();

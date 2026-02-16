@@ -193,12 +193,18 @@ public:
         // Minimal: keep constructor lean; detailed solver output comes from HiGHS
     }
 
-    void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr) {
+    void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr, unique_ptr<Expression> when_condition = nullptr) {
         auto &expr = *expr_ptr;
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
-                // Recursively analyze each conjunction child (AND expressions)
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
+                // PackDB: Check if this is a WHEN constraint wrapper
+                if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+                    // child[0] = the actual constraint, child[1] = the WHEN condition
+                    AnalyzeConstraint(conj.children[0], conj.children[1]->Copy());
+                    break;
+                }
+                // Regular conjunction: recursively analyze each child
                 for (auto &child : conj.children) {
                     AnalyzeConstraint(child);
                 }
@@ -211,6 +217,11 @@ public:
                 auto constraint = make_uniq<LinearConstraint>();
                 constraint->comparison_type = comp.type;
                 constraint->rhs_expr = comp.right->Copy();
+
+                // PackDB: Store WHEN condition if present
+                if (when_condition) {
+                    constraint->when_condition = std::move(when_condition);
+                }
 
                 // Extract terms from LHS
                 Expression *lhs = comp.left.get();
@@ -225,8 +236,6 @@ public:
                     constraint->lhs_is_aggregate = true;
                 } else {
                     // Simple variable constraint (e.g., x <= 5)
-                    // Note: We use the original comp.left here to find variables, 
-                    // but we should probably use the unwrapped lhs or handle casts in FindDecideVariable (which we do)
                     idx_t var_idx = op.FindDecideVariable(*comp.left);
                     if (var_idx != DConstants::INVALID_INDEX) {
                         constraint->lhs_terms.push_back(LinearTerm{
@@ -274,8 +283,13 @@ public:
                                    vector<double> &upper_bounds) {
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
-                // AND expression - recurse on all children
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
+                // PackDB WHEN: only recurse into the constraint (child[0]), skip the condition
+                if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+                    TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
+                    break;
+                }
+                // AND expression - recurse on all children
                 for (auto &child : conj.children) {
                     TraverseBoundsConstraints(*child, lower_bounds, upper_bounds);
                 }
@@ -657,6 +671,81 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
 
                     eval_const.rhs_values.push_back(double_val);
+                }
+            }
+        }
+
+        // PackDB: Evaluate WHEN condition if present
+        if (constraint->when_condition) {
+            // Transform condition expression (BoundColumnRef → BoundReference)
+            std::function<unique_ptr<Expression>(const Expression&)> TransformCondExpr;
+            TransformCondExpr = [&](const Expression &cond_expr) -> unique_ptr<Expression> {
+                if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    auto &colref = cond_expr.Cast<BoundColumnRefExpression>();
+                    return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                    auto &func = cond_expr.Cast<BoundFunctionExpression>();
+                    vector<unique_ptr<Expression>> new_children;
+                    for (auto &child : func.children) {
+                        new_children.push_back(TransformCondExpr(*child));
+                    }
+                    unique_ptr<FunctionData> new_bind_info;
+                    if (func.bind_info) {
+                        new_bind_info = func.bind_info->Copy();
+                    }
+                    return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    auto &cast = cond_expr.Cast<BoundCastExpression>();
+                    auto transformed_child = TransformCondExpr(*cast.child);
+                    return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+                    auto &comp = cond_expr.Cast<BoundComparisonExpression>();
+                    auto left = TransformCondExpr(*comp.left);
+                    auto right = TransformCondExpr(*comp.right);
+                    return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+                    auto &conj = cond_expr.Cast<BoundConjunctionExpression>();
+                    auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
+                    for (auto &child : conj.children) {
+                        result->children.push_back(TransformCondExpr(*child));
+                    }
+                    return std::move(result);
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+                    auto &op_expr = cond_expr.Cast<BoundOperatorExpression>();
+                    auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
+                    for (auto &child : op_expr.children) {
+                        result->children.push_back(TransformCondExpr(*child));
+                    }
+                    return std::move(result);
+                } else {
+                    return cond_expr.Copy();
+                }
+            };
+
+            auto transformed_condition = TransformCondExpr(*constraint->when_condition);
+
+            ExpressionExecutor cond_executor(context);
+            cond_executor.AddExpression(*transformed_condition);
+
+            eval_const.row_mask.reserve(num_rows);
+
+            ColumnDataScanState cond_scan_state;
+            gstate.data.InitializeScan(cond_scan_state);
+            DataChunk cond_chunk;
+            cond_chunk.Initialize(context, gstate.data.Types());
+
+            while (gstate.data.Scan(cond_scan_state, cond_chunk)) {
+                DataChunk cond_result;
+                vector<LogicalType> result_types = {LogicalType::BOOLEAN};
+                cond_result.Initialize(context, result_types);
+                cond_executor.Execute(cond_chunk, cond_result);
+
+                auto &vec = cond_result.data[0];
+                for (idx_t row_in_chunk = 0; row_in_chunk < cond_chunk.size(); row_in_chunk++) {
+                    Value val = vec.GetValue(row_in_chunk);
+                    // NULL treated as false: constraint does not apply to this row
+                    bool condition_met = val.IsNull() ? false : val.GetValue<bool>();
+                    eval_const.row_mask.push_back(condition_met);
                 }
             }
         }

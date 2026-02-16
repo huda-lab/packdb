@@ -53,5 +53,15 @@ Constant offsets in the objective (e.g., `MAX SUM(x * p + 10)`) are dropped from
 ## 4. Interaction with Binder
 The Binder receives this normalized tree. It no longer needs to perform algebraic rearrangement; it simply validates that the structure matches the expectation (linear sum on LHS, scalar on RHS) and binds the column references.
 
-## 5. Future Work: `WHEN` Keyword
-The parser will need to handle a `WHEN ... THEN` construct within `SUCH THAT` constraints for conditional constraint support. This will require recognizing the `WHEN` token as introducing a conditional block (distinct from SQL's `CASE WHEN`) and parsing the condition and constrained expression as separate sub-trees.
+## 5. `WHEN` Keyword (Conditional Constraints)
+
+The parser handles the `WHEN` postfix keyword for conditional constraints via a DECIDE-scoped grammar rule. WHEN is **not** added to the global `a_expr` production (which would conflict with `CASE expr WHEN`), but instead lives in a dedicated `decide_constraint_item` non-terminal:
+
+```yacc
+decide_constraint_item:
+    a_expr WHEN a_expr    /* constraint WHEN condition */
+    | a_expr              /* unconditional constraint */
+    ;
+```
+
+The parser emits a `PG_AEXPR_WHEN_CONSTRAINT` node, which the transformer converts to a `FunctionExpression("__when_constraint__", [constraint, condition])`. The symbolic layer normalizes the constraint child while passing through the condition unchanged.

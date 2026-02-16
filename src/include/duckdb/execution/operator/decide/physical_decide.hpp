@@ -26,6 +26,7 @@ struct LinearConstraint {
     unique_ptr<Expression> rhs_expr;    // RHS expression (may contain aggregates)
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
+    unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
 
     LinearConstraint() = default;
 };

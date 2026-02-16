@@ -1117,7 +1117,7 @@ typedef union YYSTYPE
 	PGLoadInstallType loadinstalltype;
 	PGTransactionStmtType transactiontype;
 }
-/* Line 1529 of yacc.c.  */
+/* Line 1489 of yacc.c.  */
 #line 1122 "third_party/libpg_query/grammar/grammar_out.hpp"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */

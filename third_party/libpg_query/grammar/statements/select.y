@@ -208,7 +208,7 @@ typed_decide_variable_list:
 		;
 
 decide_clause:
-			DECIDE typed_decide_variable_list SUCH THAT a_expr MAXIMIZE a_expr							
+			DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list MAXIMIZE a_expr
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     n->variables = $2;
@@ -217,7 +217,7 @@ decide_clause:
                     n->objective = $7;
                     $$ = (PGNode *)n;
                 }
-			| DECIDE typed_decide_variable_list SUCH THAT a_expr MINIMIZE a_expr							
+			| DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list MINIMIZE a_expr
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     n->variables = $2;
@@ -227,6 +227,23 @@ decide_clause:
                     $$ = (PGNode *)n;
                 }
 			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+decide_constraint_list:
+			decide_constraint_item
+				{ $$ = $1; }
+			| decide_constraint_list ',' decide_constraint_item
+				{ $$ = makeAndExpr($1, $3, @2); }
+		;
+
+decide_constraint_item:
+			a_expr WHEN a_expr
+				{
+					/* PackDB: constraint WHEN condition */
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+				}
+			| a_expr
+				{ $$ = $1; }
 		;
 
 simple_select:

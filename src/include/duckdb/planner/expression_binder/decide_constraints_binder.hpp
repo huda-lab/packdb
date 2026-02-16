@@ -19,6 +19,7 @@ class DecideConstraintsBinder : public DecideBinder {
 public:
     DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
     vector<LogicalType> var_types;
+    bool binding_when_condition = false;
 
 protected:
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
@@ -29,6 +30,7 @@ private:
     BindResult BindOperator(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    BindResult BindWhenConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 };
 
 } // namespace duckdb

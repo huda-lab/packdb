@@ -1,3 +1,4 @@
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/between_expression.hpp"
 #include "duckdb/parser/expression/case_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -205,6 +206,17 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		auto right_expr = TransformExpression(root.rexpr);
 		return make_uniq<ComparisonExpression>(ExpressionType::COMPARE_DISTINCT_FROM, std::move(left_expr),
 		                                       std::move(right_expr));
+	}
+	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT: {
+		// PackDB: constraint WHEN condition
+		auto constraint_expr = TransformExpression(root.lexpr);
+		auto condition_expr = TransformExpression(root.rexpr);
+		vector<unique_ptr<ParsedExpression>> children;
+		children.push_back(std::move(constraint_expr));
+		children.push_back(std::move(condition_expr));
+		auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(children));
+		result->is_operator = true;
+		return std::move(result);
 	}
 
 	default:

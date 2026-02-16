@@ -255,7 +255,57 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
     return BindResult(std::move(result));
 }
 
+BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+    auto &func = expr_ptr->Cast<FunctionExpression>();
+    D_ASSERT(func.children.size() == 2);
+
+    // Validate: WHEN condition (child[1]) cannot reference DECIDE variables
+    if (ExpressionContainsDecideVariable(*func.children[1], variables)) {
+        return BindResult(BinderException::Unsupported(*expr_ptr,
+            "WHEN conditions cannot reference DECIDE variables. "
+            "The WHEN condition must only reference table columns."));
+    }
+
+    // Bind the constraint (child[0]) through normal DECIDE constraint dispatch
+    is_top_expression = true;
+    ErrorData constraint_error;
+    BindChild(func.children[0], depth, constraint_error);
+    if (constraint_error.HasError()) {
+        return BindResult(std::move(constraint_error));
+    }
+
+    // Bind the condition (child[1]) using the base ExpressionBinder (not DECIDE-specific)
+    // RAII guard ensures flag is reset even if BindChild throws
+    is_top_expression = false;
+    binding_when_condition = true;
+    ErrorData condition_error;
+    try {
+        BindChild(func.children[1], depth, condition_error);
+    } catch (...) {
+        binding_when_condition = false;
+        throw;
+    }
+    binding_when_condition = false;
+    if (condition_error.HasError()) {
+        return BindResult(std::move(condition_error));
+    }
+
+    // Construct bound result: tagged BoundConjunctionExpression
+    // child[0] = bound constraint, child[1] = bound condition (cast to BOOLEAN)
+    auto &bound_constraint = BoundExpression::GetExpression(*func.children[0]);
+    auto &bound_condition = BoundExpression::GetExpression(*func.children[1]);
+
+    auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+    result->children.push_back(std::move(bound_constraint));
+    result->children.push_back(BoundCastExpression::AddCastToType(context, std::move(bound_condition), LogicalType::BOOLEAN));
+    result->alias = WHEN_CONSTRAINT_TAG;
+    return BindResult(std::move(result));
+}
+
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+	if (binding_when_condition) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
+	}
 	auto &expr = *expr_ptr;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
@@ -266,6 +316,11 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
         break;
     }
     case ExpressionClass::FUNCTION: {
+        // PackDB: Check for __when_constraint__ operator
+        auto &func = expr.Cast<FunctionExpression>();
+        if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+            return BindWhenConstraint(expr_ptr, depth);
+        }
         if (!is_top_expression) {
             return BindFunction(expr_ptr, depth);
         }

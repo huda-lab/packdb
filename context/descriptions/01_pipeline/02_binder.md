@@ -48,5 +48,11 @@ Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x I
 
 Note: DuckDB's internal `LogicalType::INTEGER` is used for all decision variables. `IS BOOLEAN` is strictly a domain constraint, not a storage type.
 
-## 5. Future Work: `WHEN` Condition Validation
-The binder will need to validate `WHEN ... THEN` conditional constraints. This includes ensuring the `WHEN` condition references only table columns (not decision variables), and that the `THEN` body follows the same linearity rules as regular constraints.
+## 5. `WHEN` Condition Validation
+
+The `DecideConstraintsBinder` handles WHEN constraints via `BindWhenConstraint`:
+
+1. **Validation**: The WHEN condition (child[1]) is checked with `ExpressionContainsDecideVariable` — it must reference only table columns, not decision variables.
+2. **Constraint binding**: The constraint (child[0]) is bound through normal DECIDE constraint dispatch (linearity validation, etc.).
+3. **Condition binding**: The condition (child[1]) is bound using the base `ExpressionBinder` (via `binding_when_condition` flag), bypassing DECIDE-specific validation since the condition is a data filter, not an optimization constraint.
+4. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG` carries both the bound constraint and bound condition downstream to the execution layer.

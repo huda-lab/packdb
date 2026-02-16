@@ -7,7 +7,7 @@ SELECT ...
 DECIDE variable_name [IS type] [, variable_name2 [IS type2] ...]
 SUCH THAT
     constraint_expression
-    [, constraint_expression2 ...]
+    [AND constraint_expression2 ...]
 [MAXIMIZE | MINIMIZE] objective_expression
 ```
 
@@ -31,7 +31,7 @@ DECIDE x IS BOOLEAN, y IS INTEGER  -- multiple typed variables
 
 ## 3. Constraints
 
-Constraints must evaluate to a boolean.
+Constraints must evaluate to a boolean. Multiple constraints are separated by `AND`.
 
 - **Supported Operators**: `=`, `<>`, `<`, `<=`, `>`, `>=`.
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
@@ -54,16 +54,27 @@ Constraints must evaluate to a boolean.
 - `COUNT(x)` is **Not Supported** (Use `SUM(x)` where x is boolean).
 - `AVG(x)` is **Not Supported** (Non-linear ratio).
 
-## 6. Conditional Constraints — `WHEN` (Planned)
+## 6. Conditional Constraints — `WHEN`
 
-> **Status**: Not yet implemented. This section documents the planned syntax.
+The `WHEN` keyword enables conditional constraints within `SUCH THAT`. A constraint with `WHEN` only applies to rows where the condition evaluates to true. Rows where the condition is false or NULL are excluded from that constraint.
 
-The `WHEN` keyword will enable conditional constraints within `SUCH THAT`, allowing constraints to apply only when a condition holds at the row-group level.
+**Syntax**: `constraint_expression WHEN condition`
 
-**Planned syntax shape**:
 ```sql
 SUCH THAT
-    WHEN condition THEN constraint_expression
+    SUM(x * weight) <= 50 WHEN category = 'electronics' AND
+    SUM(x * weight) <= 30 WHEN category = 'clothing' AND
+    x <= 1
 ```
 
-This will allow expressing constraints like "if a row belongs to category X, then apply this bound" without needing to split the query.
+**Rules**:
+- `WHEN` is postfix: the constraint comes first, then `WHEN condition`.
+- The `WHEN` condition must reference only table columns, **not** decision variables.
+- NULL conditions are treated as false (constraint does not apply for that row).
+- When a `WHEN` condition contains `AND`/`OR`, parentheses are required:
+  ```sql
+  SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
+  ```
+- Constraints without `WHEN` apply unconditionally to all rows.
+
+**Execution**: WHEN conditions create per-row boolean masks. For aggregate constraints (`SUM`), masked-out rows are excluded from the summation. For per-row constraints, masked-out rows skip constraint generation entirely.
