@@ -17,7 +17,7 @@ pyarrow = pytest.importorskip("pyarrow")
 
 # When testing local, if you build via BUILD_PYTHON=1 make, you need to manually set up the
 # dylib packdb path.
-driver_path = packdb.packdb.__file__
+driver_path = packdb._packdb.__file__
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def example_table():
     )
 
 
-@pytest.mark.xfail
+# @pytest.mark.xfail
 def test_connection_get_info(duck_conn):
     assert duck_conn.adbc_get_info() != {}
 

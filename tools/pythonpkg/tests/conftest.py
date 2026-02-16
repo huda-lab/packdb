@@ -11,7 +11,7 @@ from importlib import import_module
 # The compiled C++ extension (_packdb.so) internally does `import duckdb` at
 # runtime for certain operations (e.g. Value conversion).  Register packdb
 # under the old module name so those internal imports resolve correctly.
-sys.modules['duckdb'] = packdb
+# sys.modules['duckdb'] = packdb
 
 try:
     # need to ignore warnings that might be thrown deep inside pandas's import tree (from dateutil in this case)

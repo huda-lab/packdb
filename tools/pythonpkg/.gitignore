@@ -19,4 +19,5 @@ tests/unsigned.parquet
 tests/userdata1.parquet
 
 # wheels for testing
-wheels/
+wheel-artifacts/
+test-env/
