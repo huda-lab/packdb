@@ -93,6 +93,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
 
     for (auto &eval_const : input.constraints) {
         bool is_aggregate = eval_const.lhs_is_aggregate;
+        bool has_mask = !eval_const.row_mask.empty();
 
         if (is_aggregate) {
             // AGGREGATE CONSTRAINT: one constraint summing across all rows
@@ -103,6 +104,9 @@ ILPModel ILPModel::Build(const SolverInput &input) {
 
                 if (decide_var_idx != DConstants::INVALID_INDEX) {
                     for (idx_t row = 0; row < num_rows; row++) {
+                        if (has_mask && !eval_const.row_mask[row]) {
+                            continue;
+                        }
                         double coeff = eval_const.row_coefficients[term_idx][row];
                         idx_t var_idx = row * num_decide_vars + decide_var_idx;
                         constr.indices.push_back((int)var_idx);
@@ -137,6 +141,9 @@ ILPModel ILPModel::Build(const SolverInput &input) {
         } else {
             // PER-ROW CONSTRAINT: one constraint per row
             for (idx_t row = 0; row < num_rows; row++) {
+                if (has_mask && !eval_const.row_mask[row]) {
+                    continue;
+                }
                 ILPConstraint constr;
 
                 for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {

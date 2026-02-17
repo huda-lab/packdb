@@ -19,6 +19,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 
 #include "duckdb/packdb/naive/deterministic_naive.hpp"
+#include "duckdb/packdb/gurobi/gurobi_solver.hpp"
 
 namespace duckdb {
 
@@ -885,8 +886,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
     solver_input.sense = decide_sense;
     
-    // Solve
-    gstate.ilp_solution = DeterministicNaive::Solve(solver_input);
+    // Solve (prefer Gurobi if available, fall back to HiGHS)
+    if (GurobiSolver::IsAvailable()) {
+        gstate.ilp_solution = GurobiSolver::Solve(solver_input);
+    } else {
+        gstate.ilp_solution = DeterministicNaive::Solve(solver_input);
+    }
 
     return SinkFinalizeType::READY;
 }

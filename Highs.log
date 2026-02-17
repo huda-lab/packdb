@@ -1,0 +1,1598 @@
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201152/q01_knapsack_binary/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 105
+MIP model has 1 row; 105 cols; 105 nonzeros; 105 integer variables (105 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 105 cols, 105 nonzeros  0s
+1 rows, 105 cols, 105 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 105(-0); nonzeros 105(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   105 cols (105 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   105 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3786957.89     -146097.52      2492.08%        0      0      0         0     0.0s
+         0       0         0   0.00%   -186994.42      -146097.52        27.99%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -186994.42      -185070.34         1.04%        2      1      0         0     0.0s
+ L       0       0         0 100.00%   -186919.28      -186771.13         0.08%        2      1      2         1     0.0s
+         1       0         1 100.00%   -186771.13      -186771.13         0.00%        2      1      2         5     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -186771.13
+  Dual bound        -186771.13
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.031109323377
+  Solution status   feasible
+                    -186771.13 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.02
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     5
+                    0 (strong br.)
+                    1 (separation)
+                    4 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201152/q01_knapsack_binary/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/tmp/test_highs.sol"
+Number of BV entries in BOUNDS section is 105
+MIP model has 1 row; 105 cols; 105 nonzeros; 105 integer variables (105 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 105 cols, 105 nonzeros  0s
+1 rows, 105 cols, 105 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 105(-0); nonzeros 105(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   105 cols (105 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   105 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3786957.89     -146097.52      2492.08%        0      0      0         0     0.0s
+         0       0         0   0.00%   -186994.42      -146097.52        27.99%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -186994.42      -185070.34         1.04%        2      1      0         0     0.0s
+ L       0       0         0 100.00%   -186919.28      -186771.13         0.08%        2      1      2         1     0.0s
+         1       0         1 100.00%   -186771.13      -186771.13         0.00%        2      1      2         5     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -186771.13
+  Dual bound        -186771.13
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0256492705858
+  Solution status   feasible
+                    -186771.13 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.02
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     5
+                    0 (strong br.)
+                    1 (separation)
+                    4 (heuristics)
+Writing the solution to /tmp/test_highs.sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201244/q01_knapsack_binary/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 105
+MIP model has 1 row; 105 cols; 105 nonzeros; 105 integer variables (105 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 105 cols, 105 nonzeros  0s
+1 rows, 105 cols, 105 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 105(-0); nonzeros 105(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   105 cols (105 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   105 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3786957.89     -146097.52      2492.08%        0      0      0         0     0.0s
+         0       0         0   0.00%   -186994.42      -146097.52        27.99%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -186994.42      -185070.34         1.04%        2      1      0         0     0.0s
+ L       0       0         0 100.00%   -186919.28      -186771.13         0.08%        2      1      2         1     0.0s
+         1       0         1 100.00%   -186771.13      -186771.13         0.00%        2      1      2         5     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -186771.13
+  Dual bound        -186771.13
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0250227222653
+  Solution status   feasible
+                    -186771.13 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.02
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     5
+                    0 (strong br.)
+                    1 (separation)
+                    4 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201244/q01_knapsack_binary/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/knapsack_lineitem/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 110
+MIP model has 1 row; 110 cols; 110 nonzeros; 110 integer variables (110 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+02, 5e+02]
+Presolving model
+1 rows, 110 cols, 110 nonzeros  0s
+1 rows, 110 cols, 110 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 110(-0); nonzeros 110(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   110 cols (110 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   110 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3986635.86     -897927.57       343.98%        0      0      0         0     0.0s
+
+40.0% inactive integer columns, restarting
+Model after restart has 1 row, 66 cols (66 bin., 0 int., 0 impl., 0 cont., 0 dom.fix.), and 66 nonzeros
+
+         0       0         0   0.00%   -906591.72      -897927.57         0.96%        0      0      0         0     0.0s
+         0       0         0   0.00%   -906591.72      -897927.57         0.96%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -906216.191111  -899628.36         0.73%      130     12      8        22     0.0s
+ L       0       0         0 100.00%   -906116.22      -906116.22         0.00%      203     16      8        34     0.0s
+         1       0         1 100.00%   -906116.22      -906116.22         0.00%      203     16      8        42     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -906116.22
+  Dual bound        -906116.22
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0255629016591
+  Solution status   feasible
+                    -906116.22 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.04
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     42
+                    0 (strong br.)
+                    34 (separation)
+                    8 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/knapsack_lineitem/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/min_cost_supplier/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 200
+MIP model has 1 row; 200 cols; 200 nonzeros; 200 integer variables (200 binary)
+Coefficient ranges:
+  Matrix  [4e+01, 1e+04]
+  Cost    [1e+01, 1e+03]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+03, 1e+03]
+Presolving model
+1 rows, 200 cols, 200 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-200); nonzeros 0(-200) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   14.78           14.78              0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      14.78
+  Dual bound        14.78
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    14.78 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/min_cost_supplier/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/order_selection/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 165
+MIP model has 1 row; 165 cols; 165 nonzeros; 165 integer variables (165 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 1e+00]
+  Cost    [7e+03, 3e+05]
+  Bound   [1e+00, 1e+00]
+  RHS     [3e+02, 3e+02]
+Presolving model
+0 rows, 0 cols, 0 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-165); nonzeros 0(-165) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -23852700.49    -23852700.49       0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -23852700.49
+  Dual bound        -23852700.49
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -23852700.49 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/order_selection/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q01_knapsack_binary/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 105
+MIP model has 1 row; 105 cols; 105 nonzeros; 105 integer variables (105 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 105 cols, 105 nonzeros  0s
+1 rows, 105 cols, 105 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 105(-0); nonzeros 105(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   105 cols (105 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   105 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3786957.89     -146097.52      2492.08%        0      0      0         0     0.0s
+         0       0         0   0.00%   -186994.42      -146097.52        27.99%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -186994.42      -185070.34         1.04%        2      1      0         0     0.0s
+ L       0       0         0 100.00%   -186919.28      -186771.13         0.08%        2      1      2         1     0.0s
+         1       0         1 100.00%   -186771.13      -186771.13         0.00%        2      1      2         5     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -186771.13
+  Dual bound        -186771.13
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0301313564696
+  Solution status   feasible
+                    -186771.13 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.02
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     5
+                    0 (strong br.)
+                    1 (separation)
+                    4 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q01_knapsack_binary/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q02_integer_procurement/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 196
+MIP model has 1 row; 196 cols; 196 nonzeros; 196 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [1e+01, 1e+03]
+  Cost    [1e+00, 1e+00]
+  Bound   [2e+09, 2e+09]
+  RHS     [1e+04, 1e+04]
+WARNING: Problem has some excessively large column bounds
+Presolving model
+1 rows, 196 cols, 196 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-196); nonzeros 0(-196) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -676            -676               0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -676
+  Dual bound        -676
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -676 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q02_integer_procurement/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q03_complex_coeffs/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 55
+MIP model has 1 row; 55 cols; 55 nonzeros; 55 integer variables (55 binary)
+Coefficient ranges:
+  Matrix  [2e+03, 8e+04]
+  Cost    [1e+00, 1e+00]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+04, 5e+04]
+Presolving model
+1 rows, 42 cols, 42 nonzeros  0s
+1 rows, 16 cols, 16 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 16(-39); nonzeros 16(-39) 
+Objective function is integral with scale 1
+
+Solving MIP model with:
+   1 row
+   16 cols (16 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   16 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -1                 Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -16             -8               100.00%        0      0      0         0     0.0s
+         1       0         1 100.00%   -8.395678141    -8                 4.95%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -8
+  Dual bound        -8
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0054642429976
+  Solution status   feasible
+                    -8 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q03_complex_coeffs/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q04_subquery_rhs/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 27
+MIP model has 1 row; 27 cols; 27 nonzeros; 27 integer variables (27 binary)
+Coefficient ranges:
+  Matrix  [4e+04, 3e+05]
+  Cost    [4e+04, 3e+05]
+  Bound   [1e+00, 1e+00]
+  RHS     [4e+03, 4e+03]
+Presolving model
+0 rows, 0 cols, 0 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-27); nonzeros 0(-27) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   0               0                  0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      0
+  Dual bound        0
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    0 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q04_subquery_rhs/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q05_join_decide/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 75
+MIP model has 1 row; 75 cols; 75 nonzeros; 75 integer variables (75 binary)
+Coefficient ranges:
+  Matrix  [1e+03, 4e+05]
+  Cost    [1e+03, 4e+05]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+05, 1e+05]
+Presolving model
+1 rows, 28 cols, 28 nonzeros  0s
+1 rows, 28 cols, 28 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 28(-47); nonzeros 28(-47) 
+
+Solving MIP model with:
+   1 row
+   28 cols (28 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   28 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -95867.7           Large        0      0      0         0     0.0s
+         0       0         0   0.00%   -100000         -95867.7           4.31%        0      0      2         0     0.0s
+ S       0       0         0   0.00%   -100000         -97490.82          2.57%       16      4      2         4     0.0s
+ L       0       0         0   0.00%   -100000         -99587.8           0.41%       61     10      4        15     0.0s
+ S      36       2        17  68.75%   -100000         -99938.66          0.06%       63      8     84       162     0.1s
+ T      58       4        27  75.00%   -100000         -99947.01          0.05%       65      8    126       218     0.1s
+ T      71       0        33  96.88%   -100000         -99998.64          0.00%       73      9    154       274     0.1s
+        72       0        34 100.00%   -100000         -99998.64          0.00%       74      9    154       283     0.1s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -99998.64
+  Dual bound        -100000
+  Gap               0.00136% (tolerance: 0.01%)
+  P-D integral      0.00376488560305
+  Solution status   feasible
+                    -99998.64 (objective)
+                    0 (bound viol.)
+                    1.12612618912e-14 (int. viol.)
+                    0 (row viol.)
+  Timing            0.06
+  Max sub-MIP depth 2
+  Nodes             72
+  Repair LPs        0
+  LP iterations     283
+                    4 (strong br.)
+                    19 (separation)
+                    89 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q05_join_decide/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q06_multi_constraint/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 55
+MIP model has 2 rows; 55 cols; 110 nonzeros; 55 integer variables (55 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+00, 1e+00]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+02, 1e+03]
+Presolving model
+2 rows, 55 cols, 110 nonzeros  0s
+2 rows, 53 cols, 106 nonzeros  0s
+Presolve reductions: rows 2(-0); columns 53(-2); nonzeros 106(-4) 
+Objective function is integral with scale 1
+
+Solving MIP model with:
+   2 rows
+   53 cols (51 binary, 2 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   106 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -2                 Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -55             -28               96.43%        0      0      0         0     0.0s
+         1       0         1 100.00%   -28.61290323    -28                2.19%        0      0      0         1     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -28
+  Dual bound        -28
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0148677347992
+  Solution status   feasible
+                    -28 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     1
+                    0 (strong br.)
+                    0 (separation)
+                    0 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q06_multi_constraint/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q07_row_wise_bounds/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 76
+MIP model has 1 row; 76 cols; 76 nonzeros; 76 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 1e+00]
+  Cost    [4e+02, 1e+04]
+  Bound   [5e+00, 5e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 76 cols, 76 nonzeros  0s
+1 rows, 75 cols, 75 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 75(-1); nonzeros 75(-1) 
+Objective function is integral with scale 1
+
+Solving MIP model with:
+   1 row
+   75 cols (0 binary, 75 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   75 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -49710             Large        0      0      0         0     0.0s
+ T       0       0         0   0.00%   -1882375        -866060          117.35%        0      0      0         1     0.0s
+         1       0         1 100.00%   -866060         -866060            0.00%        0      0      0         1     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -866060
+  Dual bound        -866060
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0201026653925
+  Solution status   feasible
+                    -866060 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     1
+                    0 (strong br.)
+                    0 (separation)
+                    0 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q07_row_wise_bounds/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q08_marketing_campaign/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 59
+MIP model has 1 row; 59 cols; 59 nonzeros; 59 integer variables (59 binary)
+Coefficient ranges:
+  Matrix  [1e+01, 1e+01]
+  Cost    [1e+02, 1e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+02, 5e+02]
+Presolving model
+1 rows, 55 cols, 55 nonzeros  0s
+1 rows, 55 cols, 55 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 55(-4); nonzeros 55(-4) 
+Objective function is integral with scale 100
+
+Solving MIP model with:
+   1 row
+   55 cols (55 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   55 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -9860.22           Large        0      0      0         0     0.0s
+ T       0       0         0   0.00%   -288404.2       -284179.93         1.49%        0      0      0         1     0.0s
+         1       0         1 100.00%   -284179.93      -284179.93         0.00%        0      0      0         1     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -284179.93
+  Dual bound        -284179.93
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0184288409526
+  Solution status   feasible
+                    -284179.93 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     1
+                    0 (strong br.)
+                    0 (separation)
+                    0 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q08_marketing_campaign/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q09_minimize_cost/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 3
+MIP model has 1 row; 3 cols; 3 nonzeros; 3 integer variables (3 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 1e+00]
+  Cost    [1e+03, 6e+03]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+01, 1e+01]
+Presolving model
+Presolve: Infeasible
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -inf            inf                  inf        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Infeasible
+  Primal bound      inf
+  Dual bound        -inf
+  Gap               inf
+  P-D integral      0
+  Solution status   -
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q09_minimize_cost/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q10_logic_dependency/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 25
+MIP model has 1 row; 25 cols; 25 nonzeros; 25 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [2e+03, 9e+04]
+  Cost    [1e+00, 1e+00]
+  Bound   [5e+00, 5e+00]
+  RHS     [1e+04, 1e+04]
+Presolving model
+1 rows, 2 cols, 2 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-25); nonzeros 0(-25) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -4              -4                 0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -4
+  Dual bound        -4
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -4 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/q10_logic_dependency/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/simple_test/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 17
+MIP model has 1 row; 17 cols; 17 nonzeros; 17 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [2e+03, 6e+04]
+  Cost    [2e+03, 6e+04]
+  Bound   [2e+09, 2e+09]
+  RHS     [1e+04, 1e+04]
+WARNING: Problem has some excessively large column bounds
+Presolving model
+1 rows, 0 cols, 0 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-17); nonzeros 0(-17) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -9554.32        -9554.32           0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -9554.32
+  Dual bound        -9554.32
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -9554.32 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201303/simple_test/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/knapsack_lineitem/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 110
+MIP model has 1 row; 110 cols; 110 nonzeros; 110 integer variables (110 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+02, 5e+02]
+Presolving model
+1 rows, 110 cols, 110 nonzeros  0s
+1 rows, 110 cols, 110 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 110(-0); nonzeros 110(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   110 cols (110 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   110 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3986635.86     -897927.57       343.98%        0      0      0         0     0.0s
+
+40.0% inactive integer columns, restarting
+Model after restart has 1 row, 66 cols (66 bin., 0 int., 0 impl., 0 cont., 0 dom.fix.), and 66 nonzeros
+
+         0       0         0   0.00%   -906591.72      -897927.57         0.96%        0      0      0         0     0.0s
+         0       0         0   0.00%   -906591.72      -897927.57         0.96%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -906216.191111  -899628.36         0.73%      130     12      8        22     0.0s
+ L       0       0         0 100.00%   -906116.22      -906116.22         0.00%      203     16      8        34     0.1s
+         1       0         1 100.00%   -906116.22      -906116.22         0.00%      203     16      8        42     0.1s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -906116.22
+  Dual bound        -906116.22
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0329895408098
+  Solution status   feasible
+                    -906116.22 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.05
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     42
+                    0 (strong br.)
+                    34 (separation)
+                    8 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/knapsack_lineitem/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/min_cost_supplier/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 200
+MIP model has 1 row; 200 cols; 200 nonzeros; 200 integer variables (200 binary)
+Coefficient ranges:
+  Matrix  [4e+01, 1e+04]
+  Cost    [1e+01, 1e+03]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+03, 1e+03]
+Presolving model
+1 rows, 200 cols, 200 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-200); nonzeros 0(-200) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   14.78           14.78              0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      14.78
+  Dual bound        14.78
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    14.78 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/min_cost_supplier/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/order_selection/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 165
+MIP model has 1 row; 165 cols; 165 nonzeros; 165 integer variables (165 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 1e+00]
+  Cost    [7e+03, 3e+05]
+  Bound   [1e+00, 1e+00]
+  RHS     [3e+02, 3e+02]
+Presolving model
+0 rows, 0 cols, 0 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-165); nonzeros 0(-165) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -23852700.49    -23852700.49       0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -23852700.49
+  Dual bound        -23852700.49
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -23852700.49 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/order_selection/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q01_knapsack_binary/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 105
+MIP model has 1 row; 105 cols; 105 nonzeros; 105 integer variables (105 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+03, 9e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 105 cols, 105 nonzeros  0s
+1 rows, 105 cols, 105 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 105(-0); nonzeros 105(-0) - Not reduced
+
+Solving MIP model with:
+   1 row
+   105 cols (105 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   105 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -85051.24          Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -3786957.89     -146097.52      2492.08%        0      0      0         0     0.0s
+         0       0         0   0.00%   -186994.42      -146097.52        27.99%        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -186994.42      -185070.34         1.04%        2      1      0         0     0.0s
+ L       0       0         0 100.00%   -186919.28      -186771.13         0.08%        2      1      2         1     0.0s
+         1       0         1 100.00%   -186771.13      -186771.13         0.00%        2      1      2         5     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -186771.13
+  Dual bound        -186771.13
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0230467953402
+  Solution status   feasible
+                    -186771.13 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.02
+  Max sub-MIP depth 2
+  Nodes             1
+  Repair LPs        0
+  LP iterations     5
+                    0 (strong br.)
+                    1 (separation)
+                    4 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q01_knapsack_binary/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q02_integer_procurement/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 196
+MIP model has 1 row; 196 cols; 196 nonzeros; 196 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [1e+01, 1e+03]
+  Cost    [1e+00, 1e+00]
+  Bound   [2e+09, 2e+09]
+  RHS     [1e+04, 1e+04]
+WARNING: Problem has some excessively large column bounds
+Presolving model
+1 rows, 196 cols, 196 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-196); nonzeros 0(-196) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -676            -676               0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -676
+  Dual bound        -676
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -676 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q02_integer_procurement/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q03_complex_coeffs/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 55
+MIP model has 1 row; 55 cols; 55 nonzeros; 55 integer variables (55 binary)
+Coefficient ranges:
+  Matrix  [2e+03, 8e+04]
+  Cost    [1e+00, 1e+00]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+04, 5e+04]
+Presolving model
+1 rows, 42 cols, 42 nonzeros  0s
+1 rows, 16 cols, 16 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 16(-39); nonzeros 16(-39) 
+Objective function is integral with scale 1
+
+Solving MIP model with:
+   1 row
+   16 cols (16 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   16 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -1                 Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -16             -8               100.00%        0      0      0         0     0.0s
+         1       0         1 100.00%   -8.395678141    -8                 4.95%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -8
+  Dual bound        -8
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.00694913966853
+  Solution status   feasible
+                    -8 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q03_complex_coeffs/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q04_subquery_rhs/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 27
+MIP model has 1 row; 27 cols; 27 nonzeros; 27 integer variables (27 binary)
+Coefficient ranges:
+  Matrix  [4e+04, 3e+05]
+  Cost    [4e+04, 3e+05]
+  Bound   [1e+00, 1e+00]
+  RHS     [4e+03, 4e+03]
+Presolving model
+0 rows, 0 cols, 0 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-27); nonzeros 0(-27) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   0               0                  0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      0
+  Dual bound        0
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    0 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q04_subquery_rhs/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q05_join_decide/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 75
+MIP model has 1 row; 75 cols; 75 nonzeros; 75 integer variables (75 binary)
+Coefficient ranges:
+  Matrix  [1e+03, 4e+05]
+  Cost    [1e+03, 4e+05]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+05, 1e+05]
+Presolving model
+1 rows, 28 cols, 28 nonzeros  0s
+1 rows, 28 cols, 28 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 28(-47); nonzeros 28(-47) 
+
+Solving MIP model with:
+   1 row
+   28 cols (28 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   28 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -95867.7           Large        0      0      0         0     0.0s
+         0       0         0   0.00%   -100000         -95867.7           4.31%        0      0      2         0     0.0s
+ S       0       0         0   0.00%   -100000         -97490.82          2.57%       16      4      2         4     0.0s
+ L       0       0         0   0.00%   -100000         -99587.8           0.41%       61     10      4        15     0.0s
+ S      36       2        17  68.75%   -100000         -99938.66          0.06%       63      8     84       162     0.1s
+ T      58       4        27  75.00%   -100000         -99947.01          0.05%       65      8    126       218     0.1s
+ T      71       0        33  96.88%   -100000         -99998.64          0.00%       73      9    154       274     0.1s
+        72       0        34 100.00%   -100000         -99998.64          0.00%       74      9    154       283     0.1s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -99998.64
+  Dual bound        -100000
+  Gap               0.00136% (tolerance: 0.01%)
+  P-D integral      0.00393596640002
+  Solution status   feasible
+                    -99998.64 (objective)
+                    0 (bound viol.)
+                    1.12612618912e-14 (int. viol.)
+                    0 (row viol.)
+  Timing            0.08
+  Max sub-MIP depth 2
+  Nodes             72
+  Repair LPs        0
+  LP iterations     283
+                    4 (strong br.)
+                    19 (separation)
+                    89 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q05_join_decide/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q06_multi_constraint/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 55
+MIP model has 2 rows; 55 cols; 110 nonzeros; 55 integer variables (55 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+01]
+  Cost    [1e+00, 1e+00]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+02, 1e+03]
+Presolving model
+2 rows, 55 cols, 110 nonzeros  0s
+2 rows, 53 cols, 106 nonzeros  0s
+Presolve reductions: rows 2(-0); columns 53(-2); nonzeros 106(-4) 
+Objective function is integral with scale 1
+
+Solving MIP model with:
+   2 rows
+   53 cols (51 binary, 2 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   106 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -2                 Large        0      0      0         0     0.0s
+ S       0       0         0   0.00%   -55             -28               96.43%        0      0      0         0     0.0s
+         1       0         1 100.00%   -28.61290323    -28                2.19%        0      0      0         1     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -28
+  Dual bound        -28
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0156195993248
+  Solution status   feasible
+                    -28 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     1
+                    0 (strong br.)
+                    0 (separation)
+                    0 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q06_multi_constraint/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q07_row_wise_bounds/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 76
+MIP model has 1 row; 76 cols; 76 nonzeros; 76 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 1e+00]
+  Cost    [4e+02, 1e+04]
+  Bound   [5e+00, 5e+00]
+  RHS     [1e+02, 1e+02]
+Presolving model
+1 rows, 76 cols, 76 nonzeros  0s
+1 rows, 75 cols, 75 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 75(-1); nonzeros 75(-1) 
+Objective function is integral with scale 1
+
+Solving MIP model with:
+   1 row
+   75 cols (0 binary, 75 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   75 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -49710             Large        0      0      0         0     0.0s
+ T       0       0         0   0.00%   -1882375        -866060          117.35%        0      0      0         1     0.0s
+         1       0         1 100.00%   -866060         -866060            0.00%        0      0      0         1     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -866060
+  Dual bound        -866060
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0254276107066
+  Solution status   feasible
+                    -866060 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     1
+                    0 (strong br.)
+                    0 (separation)
+                    0 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q07_row_wise_bounds/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q08_marketing_campaign/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 59
+MIP model has 1 row; 59 cols; 59 nonzeros; 59 integer variables (59 binary)
+Coefficient ranges:
+  Matrix  [1e+01, 1e+01]
+  Cost    [1e+02, 1e+04]
+  Bound   [1e+00, 1e+00]
+  RHS     [5e+02, 5e+02]
+Presolving model
+1 rows, 55 cols, 55 nonzeros  0s
+1 rows, 55 cols, 55 nonzeros  0s
+Presolve reductions: rows 1(-0); columns 55(-4); nonzeros 55(-4) 
+Objective function is integral with scale 100
+
+Solving MIP model with:
+   1 row
+   55 cols (55 binary, 0 integer, 0 implied int., 0 continuous, 0 domain fixed)
+   55 nonzeros
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+ z       0       0         0   0.00%   -inf            0                  Large        0      0      0         0     0.0s
+ J       0       0         0   0.00%   -inf            -9860.22           Large        0      0      0         0     0.0s
+ T       0       0         0   0.00%   -288404.2       -284179.93         1.49%        0      0      0         1     0.0s
+         1       0         1 100.00%   -284179.93      -284179.93         0.00%        0      0      0         1     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -284179.93
+  Dual bound        -284179.93
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0.0174186818741
+  Solution status   feasible
+                    -284179.93 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.01
+  Max sub-MIP depth 0
+  Nodes             1
+  Repair LPs        0
+  LP iterations     1
+                    0 (strong br.)
+                    0 (separation)
+                    0 (heuristics)
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q08_marketing_campaign/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q09_minimize_cost/highs_solution.csv.highs_sol"
+Number of BV entries in BOUNDS section is 3
+MIP model has 1 row; 3 cols; 3 nonzeros; 3 integer variables (3 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 1e+00]
+  Cost    [1e+03, 6e+03]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+01, 1e+01]
+Presolving model
+Presolve: Infeasible
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -inf            inf                  inf        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Infeasible
+  Primal bound      inf
+  Dual bound        -inf
+  Gap               inf
+  P-D integral      0
+  Solution status   -
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q09_minimize_cost/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q10_logic_dependency/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 25
+MIP model has 1 row; 25 cols; 25 nonzeros; 25 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [2e+03, 9e+04]
+  Cost    [1e+00, 1e+00]
+  Bound   [5e+00, 5e+00]
+  RHS     [1e+04, 1e+04]
+Presolving model
+1 rows, 2 cols, 2 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-25); nonzeros 0(-25) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -4              -4                 0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -4
+  Dual bound        -4
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -4 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/q10_logic_dependency/highs_solution.csv.highs_sol
+Running HiGHS 1.13.0 (git hash: 1bce6d5): Copyright (c) 2026 under MIT licence terms
+Command line parsed using CLI11 2.5.0: Copyright (c) 2017-2025 University of Cincinnati
+Set option time_limit to 60
+Set option solution_file to "/home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/simple_test/highs_solution.csv.highs_sol"
+Number of UI entries in BOUNDS section is 17
+MIP model has 1 row; 17 cols; 17 nonzeros; 17 integer variables (0 binary)
+Coefficient ranges:
+  Matrix  [2e+03, 6e+04]
+  Cost    [2e+03, 6e+04]
+  Bound   [2e+09, 2e+09]
+  RHS     [1e+04, 1e+04]
+WARNING: Problem has some excessively large column bounds
+Presolving model
+1 rows, 0 cols, 0 nonzeros  0s
+0 rows, 0 cols, 0 nonzeros  0s
+Presolve reductions: rows 0(-1); columns 0(-17); nonzeros 0(-17) - Reduced to empty
+Presolve: Optimal
+
+Src: B => Branching; C => Central rounding; F => Feasibility pump; H => Heuristic;
+     I => Shifting; J => Feasibility jump; L => Sub-MIP; P => Empty MIP; R => Randomized rounding;
+     S => Solve LP; T => Evaluate node; U => Unbounded; X => User solution; Y => HiGHS solution;
+     Z => ZI Round; l => Trivial lower; p => Trivial point; u => Trivial upper; z => Trivial zero
+
+        Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work      
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+
+         0       0         0   0.00%   -9554.32        -9554.32           0.00%        0      0      0         0     0.0s
+
+Solving report
+  Model             model
+  Status            Optimal
+  Primal bound      -9554.32
+  Dual bound        -9554.32
+  Gap               0% (tolerance: 0.01%)
+  P-D integral      0
+  Solution status   feasible
+                    -9554.32 (objective)
+                    0 (bound viol.)
+                    0 (int. viol.)
+                    0 (row viol.)
+  Timing            0.00
+  Max sub-MIP depth 0
+  Nodes             0
+  Repair LPs        0
+  LP iterations     0
+Writing the solution to /home/hqr9411/working_code/packdb/test/automated/results/20260217_201341/simple_test/highs_solution.csv.highs_sol

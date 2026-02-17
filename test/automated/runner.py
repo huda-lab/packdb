@@ -111,74 +111,151 @@ def safe_eval_arithmetic(expr_str):
         return None
 
 
-def run_highs_solver(mps_file, solution_file):
-    """Run Gurobi solver and return status + solution (function name kept for compatibility)"""
-    # Use gurobi_cl from system PATH
+def _is_gurobi_available():
+    """Check if gurobi_cl is available in PATH"""
+    import shutil
+    return shutil.which("gurobi_cl") is not None
+
+
+def _run_gurobi(mps_file, solution_file):
+    """Run Gurobi solver and return status, objective, solution dict"""
     result = subprocess.run(
         ["gurobi_cl", f"ResultFile={solution_file}", f"TimeLimit=60", mps_file],
         capture_output=True,
         text=True
     )
-    
+
     output = result.stdout + result.stderr
-    
-    # Parse status and objective from Gurobi output
+
     status = "UNKNOWN"
     objective = None
-    
+
     for line in output.split('\n'):
-        # Gurobi outputs: "Best objective 1.234567890123e+02, ..."
         if 'Best objective' in line:
             try:
-                # Extract the number after "Best objective"
                 parts = line.split('Best objective')[1].split(',')[0].strip()
                 objective = float(parts)
             except (ValueError, IndexError):
                 pass
-        
-        # Gurobi status messages
+
         if 'Optimal solution found' in line:
             status = 'OPTIMAL'
         elif 'Model is infeasible' in line or 'infeasible' in line.lower():
             status = 'INFEASIBLE'
         elif 'Model is unbounded' in line or 'unbounded' in line.lower():
             status = 'UNBOUNDED'
-    
-    # Parse Gurobi solution file (.sol format)
+
+    # Parse Gurobi .sol file
     solution = {}
-    print(f"DEBUG - Solution file exists: {os.path.exists(solution_file)}")
     if os.path.exists(solution_file):
-        print(f"DEBUG - Reading solution file: {solution_file}")
         with open(solution_file, 'r') as f:
-            lines = f.readlines()
-            for line in lines:
+            for line in f:
                 line = line.strip()
-                # Gurobi .sol format: "# Objective value = 123.456" or "varname value"
                 if line.startswith('#') or not line:
-                    # Extract objective from comment if available
                     if 'Objective value' in line:
                         try:
                             obj_str = line.split('=')[1].strip()
-                            if objective is None:  # Only set if not already parsed from output
+                            if objective is None:
                                 objective = float(obj_str)
                         except (ValueError, IndexError):
                             pass
                     continue
-                
-                # Variable lines: "varname value"
+
                 parts = line.split()
                 if len(parts) >= 2:
                     try:
                         var_name = parts[0]
                         var_value = float(parts[1])
-                        # Round to int if very close to an integer
                         if abs(var_value - round(var_value)) < 1e-6:
                             var_value = int(round(var_value))
                         solution[var_name] = var_value
                     except (ValueError, IndexError):
                         continue
-    
+
     return status, objective, solution
+
+
+def _run_highs(mps_file, solution_file):
+    """Run HiGHS solver and return status, objective, solution dict"""
+    highs_bin = Path(__file__).parent / "highs"
+
+    sol_file = str(solution_file) + ".highs_sol"
+    result = subprocess.run(
+        [str(highs_bin), "--model_file", str(mps_file),
+         "--solution_file", sol_file,
+         "--time_limit", "60"],
+        capture_output=True,
+        text=True
+    )
+
+    output = result.stdout + result.stderr
+
+    status = "UNKNOWN"
+    objective = None
+
+    for line in output.split('\n'):
+        stripped = line.strip()
+        # HiGHS status line: "  Status            Optimal"
+        if stripped.startswith('Status') and 'Optimal' in stripped:
+            status = 'OPTIMAL'
+        elif 'Infeasible' in stripped:
+            status = 'INFEASIBLE'
+        elif 'Unbounded' in stripped:
+            status = 'UNBOUNDED'
+        # HiGHS objective: "                    -186771.13 (objective)"
+        if '(objective)' in stripped:
+            try:
+                obj_str = stripped.split('(objective)')[0].strip()
+                objective = float(obj_str)
+            except (ValueError, IndexError):
+                pass
+
+    # Parse HiGHS solution file
+    # Format: header lines, then "# Columns N", then "varname value" lines
+    solution = {}
+    if os.path.exists(sol_file):
+        with open(sol_file, 'r') as f:
+            in_columns = False
+            for line in f:
+                line = line.strip()
+                # "Objective -186771.13"
+                if line.startswith('Objective'):
+                    try:
+                        obj_str = line.split()[1]
+                        if objective is None:
+                            objective = float(obj_str)
+                    except (ValueError, IndexError):
+                        pass
+                    continue
+                if line.startswith('# Columns'):
+                    in_columns = True
+                    continue
+                if line.startswith('# Rows') or line.startswith('Rows'):
+                    in_columns = False
+                    continue
+                if in_columns and line and not line.startswith('#'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            var_name = parts[0]
+                            var_value = float(parts[1])
+                            if abs(var_value - round(var_value)) < 1e-6:
+                                var_value = int(round(var_value))
+                            solution[var_name] = var_value
+                        except (ValueError, IndexError):
+                            continue
+
+    return status, objective, solution
+
+
+def run_highs_solver(mps_file, solution_file):
+    """Run reference solver: try Gurobi first, fall back to HiGHS"""
+    if _is_gurobi_available():
+        print("ℹ Using Gurobi as reference solver")
+        return _run_gurobi(mps_file, solution_file)
+    else:
+        print("ℹ Gurobi not available, using HiGHS as reference solver")
+        return _run_highs(mps_file, solution_file)
 
 
 def run_packdb_query(query_file, db_file):

@@ -12,7 +12,8 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     ILPModel model = ILPModel::Build(input);
 
     idx_t total_vars = model.num_vars;
-    idx_t num_constraints = model.constraints.size();
+    idx_t num_rows = input.num_rows;
+    idx_t num_decide_vars = input.num_decide_vars;
 
     //===--------------------------------------------------------------------===//
     // 1. Create HiGHS model and set up variables
@@ -146,6 +147,8 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
             }
         }
     }
+
+    idx_t num_constraints = static_cast<idx_t>(row_lower.size());
 
     //===--------------------------------------------------------------------===//
     // 3. Build HighsLp and convert COO to CSR
