@@ -501,12 +501,20 @@ spark_packages = [
 
 packages.extend(spark_packages)
 
+# Read README.md with proper file handling
+try:
+    with open('README.md', encoding='utf-8') as f:
+        long_description_text = f.read()
+except FileNotFoundError:
+    long_description_text = 'PackDB - Optimization-enabled SQL queries with the DECIDE clause'
+
 setup(
     name=lib_name,
-    description='PackDB - DuckDB with DECIDE clause for optimization queries',
-    keywords='PackDB DuckDB Database SQL OLAP Optimization ILP',
+    description='PackDB - Optimization-enabled SQL queries with the DECIDE clause',
+    keywords='PackDB SQL Optimization ILP Integer-Linear-Programming DECIDE Package-Queries',
     url="https://huda-lab.github.io/packdb",
-    long_description='PackDB extends DuckDB with native support for Package Queries using the DECIDE clause. See: https://huda-lab.github.io/packdb',
+    long_description=long_description_text,
+    long_description_content_type='text/markdown',
     license='MIT',
     data_files=data_files,
     # NOTE: might need to be find_packages() ?

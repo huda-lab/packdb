@@ -1,146 +1,147 @@
-# DuckDB Python package
+# PackDB
 
-## Default installation
+**Optimization, Native in SQL**
 
-You would normally install the DuckDB released version using pip as follows:
+PackDB extends SQL with the `DECIDE` clause for declarative in-database optimization. Express Integer Linear Programming (ILP) problems directly in SQL — no external solvers, no data export, no context switching.
+
+A research project by [HUDA Lab](https://huda-lab.github.io/) at NYU Abu Dhabi.
+
+## Quick Example
+
+**Traditional approach** — export data, build a model in Python, solve, map results back:
+
+```python
+import duckdb, pulp
+
+items = conn.execute("SELECT id, value, weight FROM Items").fetchall()
+prob = pulp.LpProblem("knapsack", pulp.LpMaximize)
+x = [pulp.LpVariable(f"x_{i}", cat='Binary') for i in range(len(items))]
+prob += pulp.lpSum(x[i] * items[i][2] for i in range(len(items))) <= 50
+prob += pulp.lpSum(x[i] * items[i][1] for i in range(len(items)))
+prob.solve()
+# ... then map results back to database
+```
+
+**With PackDB** — one SQL query:
+
+```sql
+SELECT id, value, weight, x
+FROM Items
+WHERE category = 'electronics'
+DECIDE x IS BOOLEAN
+SUCH THAT
+    SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
+```
+
+Same result, a fraction of the code.
+
+## Installation
 
 ```bash
-pip install duckdb
+pip install packdb
 ```
 
-## Installing locally for development
+## Usage
 
-For development, you may need a DuckDB Python package that is installed from source. Make sure you have the dependencies installed:
+```python
+import packdb
 
-```bash
-pip install -r requirements-dev.txt
+# Connect (in-memory or file-based)
+conn = packdb.connect()
+
+# Create data
+conn.execute("""
+    CREATE TABLE Items (id INTEGER, value INTEGER, weight INTEGER);
+    INSERT INTO Items VALUES (1, 100, 20), (2, 60, 10), (3, 120, 30);
+""")
+
+# Run an optimization query
+result = conn.execute("""
+    SELECT id, value, weight, x
+    FROM Items
+    DECIDE x IS BOOLEAN
+    SUCH THAT
+        SUM(x * weight) <= 50
+    MAXIMIZE SUM(x * value)
+""").fetchall()
+
+print(result)
 ```
 
-### Installing with pip
+## The DECIDE Clause
 
-In order to install from source, the simplest way is to install by cloning the Git repository and using pip:
+PackDB adds the `DECIDE` clause to standard SQL:
 
-```bash
-cd tools/pythonpkg
-python3 -m pip install .
+```sql
+SELECT columns
+FROM table
+DECIDE variable [IS type], ...
+SUCH THAT
+    constraint AND ...
+MAXIMIZE | MINIMIZE SUM(objective)
 ```
 
-To install in debug mode, set the environment variable `$DUCKDEBUG=1` (or some other non-zero value).
+### Decision Variable Types
 
-Note that this will override any existing DuckDB installation you might have. You might also run into conflicts depending on your Python environment. In order to remedy that, it is possible to use virtualenv for installation, e.g. by running the following commands:
+| Type | Domain | Example |
+|------|--------|---------|
+| `IS BOOLEAN` | {0, 1} | Select/skip an item |
+| `IS INTEGER` | {0, 1, 2, ...} | Quantity to assign |
 
-```bash
-cd tools/pythonpkg
-virtualenv .venv --python=python3.12
-source .venv/bin/activate
-python3 -m pip install .
+`IS INTEGER` is the default if no type is specified.
+
+### Constraints
+
+- Arithmetic: `SUM(x * weight) <= 50`
+- Multiple constraints separated by `AND`
+- Conditional constraints: `SUM(x * weight) <= 50 WHEN category = 'A'`
+- Supported operators: `=`, `<>`, `<`, `<=`, `>`, `>=`
+
+### Objective
+
+```sql
+MAXIMIZE SUM(x * value)
+MINIMIZE SUM(x * cost)
 ```
 
-To test, run:
+All expressions involving decision variables must be **linear**.
 
-```bash
-cd ../..
-python3 -c "import duckdb; duckdb.sql('SELECT version() AS version').show()"
-```
+## Use Cases
 
-### Installing with make
+- **Knapsack / inventory selection** — maximize value under weight or budget constraints
+- **Portfolio optimization** — select assets maximizing return under risk limits
+- **Resource allocation** — assign resources to tasks within capacity constraints
+- **Meal planning** — choose items optimizing nutrition within calorie budgets
 
-You can build using the make command with `BUILD_PYTHON` flag set. For example:
+## Key Features
 
-```bash
-BUILD_PYTHON=1 make debug
-```
+- **Native SQL** — no context switching between query and optimization languages
+- **Zero data movement** — solve directly on database buffers
+- **Declarative** — define what to optimize, not how
+- **Embedded solver** — powered by [HiGHS](https://highs.dev/), a high-performance LP/MIP solver
 
-### Setup for cloud storage
+## Documentation
 
-Alternatively, you may need the package files to reside under the same
-prefix where the library is installed; e.g., when installing to cloud
-storage from a notebook.
+- [Getting Started](https://huda-lab.github.io/packdb/getting-started.html)
+- [Syntax Reference](https://huda-lab.github.io/packdb/documentation.html)
+- [Examples](https://huda-lab.github.io/packdb/examples.html)
 
-First, get the repository based version number and extract the source distribution.
+## Research
 
-```bash
-python3 -m pip install build # required for PEP 517 compliant source dists
-cd tools/pythonpkg
-export SETUPTOOLS_SCM_PRETEND_VERSION=$(python3 -m setuptools_scm)
-pyproject-build . --sdist
-cd ../..
-```
+PackDB builds on the **Package Queries** framework:
 
-Next, copy over the python package related files, and install the package.
+- *Scalable Package Queries in Relational Database Systems* — Brucato, Abouzied, Meliou (VLDB 2016)
+- *Scalable Computation of High-Order Optimization Queries* — Brucato, Abouzied, Meliou (CACM 2019)
+- *Scaling Package Queries to a Billion Tuples* — Mai, Wang, Abouzied, Brucato, Haas, Meliou (VLDB 2024)
 
-```bash
-mkdir -p $DUCKDB_PREFIX/src/duckdb-pythonpkg
-tar --directory=$DUCKDB_PREFIX/src/duckdb-pythonpkg -xzpf tools/pythonpkg/dist/duckdb-${SETUPTOOLS_SCM_PRETEND_VERSION}.tar.gz
-pip install --prefix $DUCKDB_PREFIX -e $DUCKDB_PREFIX/src/duckdb-pythonpkg/duckdb-${SETUPTOOLS_SCM_PRETEND_VERSION}
-```
+## License
 
-## Development and Stubs
+MIT License. See [LICENSE](https://github.com/huda-lab/packdb/blob/main/LICENSE) for details.
 
-`*.pyi` stubs in `duckdb-stubs` are manually maintained. The connection-related stubs are generated using dedicated scripts in `tools/pythonpkg/scripts/`:
-- `generate_connection_stubs.py`
-- `generate_connection_wrapper_stubs.py`
+## Links
 
-These stubs are important for autocomplete in many IDEs, as static-analysis based language servers can't introspect `duckdb`'s binary module.
-
-To verify the stubs match the actual implementation:
-```bash
-python3 -m pytest tests/stubs
-```
-
-If you add new methods to the DuckDB Python API, you'll need to manually add corresponding type hints to the stub files.
-
-## Frequently encountered issue with extensions
-
-If you are faced with an error on `import duckdb`:
-
-```console
-Traceback (most recent call last):
-  File "<stdin>", line 1, in <module>
-  File "/usr/bin/python3/site-packages/duckdb/__init__.py", line 4, in <module>
-    import duckdb.functional as functional
-  File "/usr/bin/python3/site-packages/duckdb/functional/__init__.py", line 1, in <module>
-    from duckdb.duckdb.functional import (
-ImportError: dlopen(/usr/bin/python3/site-packages/duckdb/duckdb.cpython-311-darwin.so, 0x0002): symbol not found in flat namespace '_MD5_Final'
-```
-
-When building DuckDB it outputs which extensions are linked into DuckDB, the python package does not deal with linked in extensions very well.
-The output looks something like this:
-`-- Extensions linked into DuckDB: [json, fts, tpcds, tpch, parquet, icu, httpfs]`
-
-`httpfs` should not be in that list, among others.
-Refer to `extension/extension_config_local.cmake` or the other `*.cmake` files and make sure you add DONT_LINK to the problematic extension.
-`tools/pythonpkg/duckdb_extension_config.cmake` contains the default list of extensions built for the python package
-Anything that is linked that is not listed there should be considered problematic.
-
-## Clang-tidy and CMakeLists
-
-The pythonpkg does not use the CMakeLists for compilation, for that it uses pip and `package_build.py` mostly.
-But we still have CMakeLists in the pythonpkg, for tidy-check and intellisense purposes.
-For this reason it might not be instantly apparent that the CMakeLists are incorrectly set up, and will only result in a very confusing CI failure of TidyCheck.
-
-To prevent this, or to help you when you encounter said CI failure, here are a couple of things to note about the CMakeLists in here.
-
-The pythonpkg depends on `PythonLibs`, and `pybind11`, for some reason `PythonLibs` can not be found by clang-tidy when generating the `compile_commands.json` file
-So the reason for clang-tidy failing is likely that there is no entry for a file in the `compile_commands.json`, check the CMakeLists to see why cmake did not register it.
-
-Helpful information:
-`clang-tidy` is not a standard binary on MacOS, and can not be installed with brew directly (doing so will try to install clang-format, and they are not the same thing)
-Instead clang-tidy is part of `llvm`, so you'll need to install that (`brew install llvm`), after installing llvm you'll likely have to add the llvm binaries folder to your PATH variable to use clang-tidy
-For example:
-
-```bash
-export PATH="$PATH:/opt/homebrew/Cellar/llvm/15.0.2/bin"
-```
-
-# What are py::objects and a py::handles??
-
-These are classes provided by pybind11, the library we use to manage our interaction with the python environment.
-py::handle is a direct wrapper around a raw PyObject* and does not manage any references.
-py::object is similar to py::handle but it can handle refcounts.
-
-I say *can* because it doesn't have to, using `py::reinterpret_borrow<py::object>(...)` we can create a non-owning py::object, this is essentially just a py::handle but py::handle can't be used if the prototype requires a py::object.
-
-`py::reinterpret_steal<py::object>(...)` creates an owning py::object, this will increase the refcount of the python object and will decrease the refcount when the py::object goes out of scope.
-
-When directly interacting with python functions that return a `PyObject*`, such as `PyDateTime_DATE_GET_TZINFO`, you should generally wrap the call in `py::reinterpret_steal` to take ownership of the returned object.
+- [Website](https://huda-lab.github.io/packdb)
+- [GitHub](https://github.com/huda-lab/packdb)
+- [Issue Tracker](https://github.com/huda-lab/packdb/issues)
+- [HUDA Lab](https://huda-lab.github.io/)
