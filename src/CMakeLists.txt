@@ -134,12 +134,18 @@ else()
 
   target_link_libraries(duckdb ${DUCKDB_LINK_LIBS})
   target_link_libraries(duckdb duckdb_highs)
+  if(PACKDB_GUROBI_FOUND AND GUROBI_LIBRARY)
+    target_link_libraries(duckdb ${GUROBI_LIBRARY})
+  endif()
   link_threads(duckdb)
   link_extension_libraries(duckdb)
 
   add_library(duckdb_static STATIC ${ALL_OBJECT_FILES})
   target_link_libraries(duckdb_static ${DUCKDB_LINK_LIBS})
   target_link_libraries(duckdb_static duckdb_highs)
+  if(PACKDB_GUROBI_FOUND AND GUROBI_LIBRARY)
+    target_link_libraries(duckdb_static ${GUROBI_LIBRARY})
+  endif()
   link_threads(duckdb_static)
   link_extension_libraries(duckdb_static)
 

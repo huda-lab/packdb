@@ -5,7 +5,10 @@ Automated Testing Framework for PackDB - Refactored
 This framework tests PackDB's DECIDE clause by:
 1. Auto-discovering all queries in test/automated/queries/
 2. Using the real packdb.db database
-3. Comparing HiGHS solver results with PackDB results in matching table formats
+3. Comparing Gurobi solver results with PackDB results in matching table formats
+
+Note: This runner uses gurobi_cl as the reference solver (must be in PATH).
+PackDB internally may use either Gurobi or HiGHS depending on availability.
 """
 
 import subprocess
@@ -109,66 +112,71 @@ def safe_eval_arithmetic(expr_str):
 
 
 def run_highs_solver(mps_file, solution_file):
-    """Run HiGHS solver and return status + solution"""
-    highs_bin = Path(__file__).parent / "highs"  # .parent gets the directory containing runner.py
-    
+    """Run Gurobi solver and return status + solution (function name kept for compatibility)"""
+    # Use gurobi_cl from system PATH
     result = subprocess.run(
-        [str(highs_bin), mps_file, f"--solution_file={solution_file}", "--time_limit=60.0"],
+        ["gurobi_cl", f"ResultFile={solution_file}", f"TimeLimit=60", mps_file],
         capture_output=True,
         text=True
     )
     
     output = result.stdout + result.stderr
     
-    # Parse status and objective
+    # Parse status and objective from Gurobi output
     status = "UNKNOWN"
     objective = None
     
     for line in output.split('\n'):
-        if 'Status' in line and 'Optimal' in line:
+        # Gurobi outputs: "Best objective 1.234567890123e+02, ..."
+        if 'Best objective' in line:
+            try:
+                # Extract the number after "Best objective"
+                parts = line.split('Best objective')[1].split(',')[0].strip()
+                objective = float(parts)
+            except (ValueError, IndexError):
+                pass
+        
+        # Gurobi status messages
+        if 'Optimal solution found' in line:
             status = 'OPTIMAL'
-        elif 'Infeasible' in line and 'Status' in line:
+        elif 'Model is infeasible' in line or 'infeasible' in line.lower():
             status = 'INFEASIBLE'
-        elif 'Primal bound' in line:
-            parts = line.split()
-            for i, part in enumerate(parts):
-                if part == 'bound' and i + 1 < len(parts):
-                    try:
-                        objective = float(parts[i + 1])
-                        break
-                    except ValueError:
-                        pass
+        elif 'Model is unbounded' in line or 'unbounded' in line.lower():
+            status = 'UNBOUNDED'
     
-    # Parse solution file
+    # Parse Gurobi solution file (.sol format)
     solution = {}
     print(f"DEBUG - Solution file exists: {os.path.exists(solution_file)}")
     if os.path.exists(solution_file):
         print(f"DEBUG - Reading solution file: {solution_file}")
         with open(solution_file, 'r') as f:
             lines = f.readlines()
-            in_columns = False
             for line in lines:
                 line = line.strip()
-                if 'Columns' in line or 'Column' in line:
-                    in_columns = True
-                    continue
-                if 'Rows' in line: # Stop if we hit Rows section
-                    in_columns = False
-                    continue
-                    
-                if in_columns and line and not line.startswith('#'):
-                    parts = line.split()
-                    if len(parts) >= 2:
+                # Gurobi .sol format: "# Objective value = 123.456" or "varname value"
+                if line.startswith('#') or not line:
+                    # Extract objective from comment if available
+                    if 'Objective value' in line:
                         try:
-                            var_name = parts[0]
-                            var_value = float(parts[1])
-                            # If integer, convert to int? Or keep as float?
-                            # PackDB output might be float. Let's keep as float or round if close to int.
-                            if abs(var_value - round(var_value)) < 1e-6:
-                                var_value = int(round(var_value))
-                            solution[var_name] = var_value
+                            obj_str = line.split('=')[1].strip()
+                            if objective is None:  # Only set if not already parsed from output
+                                objective = float(obj_str)
                         except (ValueError, IndexError):
-                            continue
+                            pass
+                    continue
+                
+                # Variable lines: "varname value"
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        var_name = parts[0]
+                        var_value = float(parts[1])
+                        # Round to int if very close to an integer
+                        if abs(var_value - round(var_value)) < 1e-6:
+                            var_value = int(round(var_value))
+                        solution[var_name] = var_value
+                    except (ValueError, IndexError):
+                        continue
     
     return status, objective, solution
 

@@ -367,6 +367,10 @@ HiGHS.log
 test/automated/highs
 test/automated/highs.log
 
+# Gurobi solver logs
+gurobi.log
+test/automated/gurobi.log
+
 # PackDB test results
 test/automated/results/
 

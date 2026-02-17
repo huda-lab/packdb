@@ -665,6 +665,33 @@ include_directories(third_party/symboliccpp)
 include_directories(third_party/highs)
 include_directories(third_party/highs/highs)
 
+# Gurobi solver (optional) — set GUROBI_HOME env variable to enable
+option(PACKDB_USE_GUROBI "Use Gurobi solver if available" ON)
+set(PACKDB_GUROBI_FOUND FALSE CACHE BOOL "Whether Gurobi was found" FORCE)
+if(PACKDB_USE_GUROBI)
+  if(DEFINED ENV{GUROBI_HOME})
+    set(GUROBI_HOME_PATH "$ENV{GUROBI_HOME}")
+  elseif(DEFINED GUROBI_HOME)
+    set(GUROBI_HOME_PATH "${GUROBI_HOME}")
+  endif()
+  if(DEFINED GUROBI_HOME_PATH AND EXISTS "${GUROBI_HOME_PATH}/include/gurobi_c.h")
+    set(GUROBI_INCLUDE_DIR "${GUROBI_HOME_PATH}/include" CACHE PATH "Gurobi include dir" FORCE)
+    find_library(GUROBI_LIBRARY
+      NAMES gurobi120 gurobi110 gurobi100 gurobi95 gurobi gurobi130
+      PATHS "${GUROBI_HOME_PATH}/lib"
+      NO_DEFAULT_PATH)
+    if(GUROBI_LIBRARY)
+      set(PACKDB_GUROBI_FOUND TRUE CACHE BOOL "Whether Gurobi was found" FORCE)
+      message(STATUS "Gurobi found: ${GUROBI_HOME_PATH}")
+      message(STATUS "Gurobi library: ${GUROBI_LIBRARY}")
+    else()
+      message(STATUS "Gurobi include found but library not found in ${GUROBI_HOME_PATH}/lib")
+    endif()
+  else()
+    message(STATUS "Gurobi not found (set GUROBI_HOME environment variable to enable)")
+  endif()
+endif()
+
 # todo only regenerate ub file if one of the input files changed hack alert
 function(enable_unity_build UB_SUFFIX SOURCE_VARIABLE_NAME)
   set(files ${${SOURCE_VARIABLE_NAME}})
