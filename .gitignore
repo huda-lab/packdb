@@ -377,3 +377,10 @@ test/automated/results/
 
 # wheels for testing
 wheel-artifacts/
+wheels-macos-14/
+
+# Python egg-info
+*.egg-info/
+
+# Stray files from shell redirects
+test/automated/=
