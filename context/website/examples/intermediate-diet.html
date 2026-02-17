@@ -3,67 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PackDB Example: Diet Planning - Select meals to minimize cost while meeting nutritional requirements.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, diet problem, nutrition optimization, multiple constraints">
   <title>Diet Planning - PackDB Examples</title>
-
-  <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
-
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Inter Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
-
-  <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
   <link rel="stylesheet" href="../assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="../assets/js/main.js" defer></script>
-
   <style>
-    body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background-color: #0d1117;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
   </style>
 </head>
 <body class="min-h-screen">
 
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
       <a href="../index.html" class="flex items-center space-x-2">
         <img src="../assets/images/logo.svg" alt="PackDB" class="h-8">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#8b949e]">by HUDA Lab</div>
+          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
-
-      <!-- Desktop Navigation -->
       <div class="hidden md:flex items-center space-x-6">
         <a href="../index.html" class="nav-link">Home</a>
         <a href="../getting-started.html" class="nav-link">Getting Started</a>
@@ -71,313 +37,187 @@
         <a href="../examples.html" class="nav-link active">Examples</a>
         <a href="../about.html" class="nav-link">About</a>
       </div>
-
-      <!-- CTA Buttons -->
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="../getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i> GitHub
         </a>
       </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#30363d]"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6 text-[#e6edf3]"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden text-[#e6edf3]"></i>
-      </button>
     </nav>
-
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="../index.html" class="block py-2 nav-link">Home</a>
-        <a href="../getting-started.html" class="block py-2 nav-link">Getting Started</a>
-        <a href="../documentation.html" class="block py-2 nav-link">Docs</a>
-        <a href="../examples.html" class="block py-2 nav-link active">Examples</a>
-        <a href="../about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#30363d]">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="../getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-      </div>
-    </div>
   </header>
 
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content" class="pt-20">
+  <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
-    <!-- ============================================
-         CONTENT
-         ============================================ -->
-    <section class="py-12">
-      <div class="container mx-auto px-4">
-        <div class="max-w-4xl mx-auto">
+    <div class="breadcrumb mb-8">
+      <a href="../examples.html">Examples</a>
+      <span class="separator">/</span>
+      <span>Diet Planning</span>
+    </div>
 
-          <!-- Breadcrumb -->
-          <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
-            <a href="../index.html">Home</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <a href="../examples.html">Examples</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <span class="text-[#e6edf3] font-medium">Diet Planning</span>
-          </nav>
+    <div class="mb-10">
+      <div class="flex items-center gap-3 mb-3">
+        <h1 class="text-4xl text-[#e2e8f0]">Diet Planning</h1>
+        <span class="badge badge-intermediate">Intermediate</span>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Binary Variables</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Multiple Constraints</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Lower+Upper Bounds</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">MINIMIZE</span>
+      </div>
+    </div>
 
-          <!-- Problem Definition -->
-          <div class="mb-8">
-            <div class="flex items-start gap-4 mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.1)">
-                <i data-lucide="utensils" class="w-6 h-6 text-[#58a6ff]"></i>
-              </div>
-              <div class="flex-1">
-                <div class="flex items-center gap-3 mb-2">
-                  <h1 class="text-3xl font-bold text-[#e6edf3]">Diet Planning</h1>
-                  <span class="badge badge-intermediate">Intermediate</span>
-                </div>
-                <p class="text-[#8b949e]">
-                  Select meals to minimize cost while meeting nutritional requirements for protein, carbs, and fat.
-                </p>
-              </div>
-            </div>
+    <section class="example-section">
+      <div class="example-section-label">THE PROBLEM</div>
+      <p class="text-[#c9d1d9] leading-relaxed">
+        A meal planning service needs to assemble a daily meal plan from available options. Each meal provides protein, carbs, fat, and calories at a given cost. The plan must meet minimum protein (50g) and carbs (100g) requirements, stay under maximum fat (50g) and calorie (1500 cal) limits, and minimize total cost. This multi-constraint problem shows how PackDB handles both lower-bound (&ge;) and upper-bound (&le;) constraints simultaneously.
+      </p>
+    </section>
 
-            <!-- Tags -->
-            <div class="flex flex-wrap gap-2">
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Binary Variables</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Multiple Constraints</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Lower+Upper Bounds</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">MINIMIZE</span>
-            </div>
-          </div>
-
-          <!-- Sample Data -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Sample Data</h2>
-            <div class="code-block">
-              <div class="code-header">
-                <span class="language-label">SQL</span>
-                <button class="copy-button" data-clipboard-target="#code-setup">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-sql"><code id="code-setup">CREATE TABLE Meals (
-    id INTEGER,
-    name VARCHAR,
-    protein INTEGER,
-    carbs INTEGER,
-    fat INTEGER,
-    calories INTEGER,
-    cost DOUBLE
+    <section class="example-section">
+      <div class="example-section-label">SAMPLE DATA</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>CREATE TABLE Meals (
+    id INTEGER, name VARCHAR, protein INTEGER, carbs INTEGER,
+    fat INTEGER, calories INTEGER, cost DOUBLE
 );
-
 INSERT INTO Meals VALUES
-    (1, 'Grilled Chicken',    35, 20, 12, 420, 8.50),
-    (2, 'Caesar Salad',       10, 15,  8, 220, 6.00),
-    (3, 'Beef Stew',          30, 25, 18, 480, 9.00),
-    (4, 'Veggie Stir Fry',    15, 40, 10, 350, 5.50),
-    (5, 'Fish Tacos',         28, 30, 14, 400, 7.50),
-    (6, 'Greek Yogurt Bowl',  20, 30,  8, 280, 4.00),
-    (7, 'Turkey Sandwich',    25, 35, 10, 380, 5.00),
-    (8, 'Lentil Soup',        18, 45,  6, 320, 4.50);</code></pre>
-            </div>
-          </div>
+    (1, 'Grilled Chicken', 35, 20, 12, 420, 8.50),
+    (2, 'Caesar Salad', 10, 15, 8, 220, 6.00),
+    (3, 'Beef Stew', 30, 25, 18, 480, 9.00),
+    (4, 'Veggie Stir Fry', 15, 40, 10, 350, 5.50),
+    (5, 'Fish Tacos', 28, 30, 14, 400, 7.50),
+    (6, 'Greek Yogurt Bowl', 20, 30, 8, 280, 4.00),
+    (7, 'Turkey Sandwich', 25, 35, 10, 380, 5.00),
+    (8, 'Lentil Soup', 18, 45, 6, 320, 4.50);</code></pre>
+      </div>
+    </section>
 
-          <!-- Query -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Query</h2>
-            <div class="code-block">
-              <div class="code-header">
-                <span class="language-label">SQL</span>
-                <button class="copy-button" data-clipboard-target="#code-query">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-sql"><code id="code-query">SELECT
-    id,
-    name,
-    protein,
-    carbs,
-    fat,
-    calories,
-    cost,
-    x as selected
+    <section class="example-section">
+      <div class="example-section-label">THE QUERY</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>SELECT id, name, protein, carbs, fat, calories, cost, x as selected
 FROM Meals
-DECIDE x
+DECIDE x IS BOOLEAN
 SUCH THAT
-    x IS BINARY,
-    -- Minimum protein: 50g
-    SUM(x * protein) >= 50,
-    -- Minimum carbs: 100g
-    SUM(x * carbs) >= 100,
-    -- Maximum fat: 50g
-    SUM(x * fat) <= 50,
-    -- Maximum calories: 1500
+    SUM(x * protein) >= 50 AND
+    SUM(x * carbs) >= 100 AND
+    SUM(x * fat) <= 50 AND
     SUM(x * calories) <= 1500
 MINIMIZE SUM(x * cost);</code></pre>
-            </div>
-          </div>
+      </div>
+    </section>
 
-          <!-- Expected Output -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Expected Output</h2>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>id</th>
-                    <th>name</th>
-                    <th>protein</th>
-                    <th>carbs</th>
-                    <th>fat</th>
-                    <th>calories</th>
-                    <th>cost</th>
-                    <th>selected</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>6</td>
-                    <td>Greek Yogurt Bowl</td>
-                    <td>20</td>
-                    <td>30</td>
-                    <td>8</td>
-                    <td>280</td>
-                    <td>4.00</td>
-                    <td>1</td>
-                  </tr>
-                  <tr>
-                    <td>7</td>
-                    <td>Turkey Sandwich</td>
-                    <td>25</td>
-                    <td>35</td>
-                    <td>10</td>
-                    <td>380</td>
-                    <td>5.00</td>
-                    <td>1</td>
-                  </tr>
-                  <tr>
-                    <td>8</td>
-                    <td>Lentil Soup</td>
-                    <td>18</td>
-                    <td>45</td>
-                    <td>6</td>
-                    <td>320</td>
-                    <td>4.50</td>
-                    <td>1</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Navigation -->
-          <div class="pt-8 border-t border-[#30363d]">
-            <a href="../examples.html" class="btn btn-secondary">
-              <i data-lucide="arrow-left" class="w-4 h-4"></i>
-              Back to Examples
-            </a>
-          </div>
-
+    <section class="example-section">
+      <div class="example-section-label">QUERY BREAKDOWN</div>
+      <div class="space-y-1">
+        <div class="query-annotation">
+          <span class="annotation-marker">1</span>
+          <div><code>DECIDE x IS BOOLEAN</code> — For each meal: include (x=1) or skip (x=0).</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">2</span>
+          <div><code>SUM(x * protein) &gt;= 50</code> — Selected meals must provide at least 50g protein.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">3</span>
+          <div><code>SUM(x * carbs) &gt;= 100</code> — At least 100g carbs.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">4</span>
+          <div><code>SUM(x * fat) &lt;= 50</code> — No more than 50g fat.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">5</span>
+          <div><code>SUM(x * calories) &lt;= 1500</code> — Stay under 1500 calories.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">6</span>
+          <div><code>MINIMIZE SUM(x * cost)</code> — Find the cheapest combination meeting all nutritional requirements.</div>
         </div>
       </div>
     </section>
 
+    <section class="example-section">
+      <div class="example-section-label">RESULT</div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>name</th>
+              <th>protein</th>
+              <th>carbs</th>
+              <th>fat</th>
+              <th>calories</th>
+              <th>cost</th>
+              <th>selected</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Grilled Chicken</td><td>35</td><td>20</td><td>12</td><td>420</td><td>8.50</td><td>0</td></tr>
+            <tr><td>2</td><td>Caesar Salad</td><td>10</td><td>15</td><td>8</td><td>220</td><td>6.00</td><td>0</td></tr>
+            <tr><td>3</td><td>Beef Stew</td><td>30</td><td>25</td><td>18</td><td>480</td><td>9.00</td><td>0</td></tr>
+            <tr><td>4</td><td>Veggie Stir Fry</td><td>15</td><td>40</td><td>10</td><td>350</td><td>5.50</td><td>0</td></tr>
+            <tr><td>5</td><td>Fish Tacos</td><td>28</td><td>30</td><td>14</td><td>400</td><td>7.50</td><td>0</td></tr>
+            <tr><td>6</td><td>Greek Yogurt Bowl</td><td>20</td><td>30</td><td>8</td><td>280</td><td>4.00</td><td class="selected-row">1</td></tr>
+            <tr><td>7</td><td>Turkey Sandwich</td><td>25</td><td>35</td><td>10</td><td>380</td><td>5.00</td><td class="selected-row">1</td></tr>
+            <tr><td>8</td><td>Lentil Soup</td><td>18</td><td>45</td><td>6</td><td>320</td><td>4.50</td><td class="selected-row">1</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="example-section">
+      <div class="example-section-label">INTERPRETATION</div>
+      <div class="interpretation-box">
+        The solver selects Greek Yogurt Bowl ($4.00), Turkey Sandwich ($5.00), and Lentil Soup ($4.50) for a total cost of $13.50. This combination provides 63g protein (&ge;50), 110g carbs (&ge;100), 24g fat (&le;50), and 980 calories (&le;1500) — meeting all four constraints at the lowest possible cost.
+      </div>
+    </section>
+
+    <div class="flex justify-between pt-8 border-t border-[#262c36]">
+      <a href="basic-filtering.html" class="text-[#58a6ff] hover:text-[#79c0ff]">&larr; Item Filtering</a>
+      <a href="intermediate-assignment.html" class="text-[#58a6ff] hover:text-[#79c0ff]">Next: Task Assignment &rarr;</a>
+    </div>
   </main>
 
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-[#010409] text-gray-300">
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-
-        <!-- Col 1: Branding -->
         <div>
           <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-gray-400 mb-4">
-            Optimization-enabled SQL queries for DuckDB
-          </p>
-          <p class="text-xs text-gray-500">
-            &copy; 2025 HUDA Lab<br>
-            NYU Abu Dhabi
-          </p>
+          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
-
-        <!-- Col 2: Documentation -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="../getting-started.html" class="text-gray-400 hover:text-white transition-colors">Getting Started</a></li>
-            <li><a href="../documentation.html" class="text-gray-400 hover:text-white transition-colors">Syntax Reference</a></li>
-            <li><a href="../examples.html" class="text-gray-400 hover:text-white transition-colors">Examples</a></li>
+            <li><a href="../getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
+            <li><a href="../documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
+            <li><a href="../examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
           </ul>
         </div>
-
-        <!-- Col 3: Resources -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li>
-              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                <i data-lucide="github" class="w-4 h-4"></i>
-                GitHub Repository
-              </a>
-            </li>
-            <li>
-              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">Issue Tracker</a>
-            </li>
-            <li><a href="../about.html#research" class="text-gray-400 hover:text-white transition-colors">Research Papers</a></li>
-            <li>
-              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">HUDA Lab</a>
-            </li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
+            <li><a href="../about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
           </ul>
         </div>
-
-        <!-- Col 4: Contact -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Contact</h4>
-          <ul class="space-y-2 text-sm text-gray-400">
-            <li>NYU Abu Dhabi</li>
-            <li>Saadiyat Island</li>
-            <li>Abu Dhabi, UAE</li>
-            <li>
-              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
-                huda-lab@nyu.edu
-              </a>
-            </li>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#6e7681]">
+            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
-
       </div>
-
-      <!-- Bottom Bar -->
-      <div class="mt-8 pt-8 border-t border-[#30363d] text-center text-sm text-gray-500">
-        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>
   </footer>
 
-  <!-- Initialize Lucide Icons -->
-  <script>
-    lucide.createIcons();
-  </script>
-
+  <script>lucide.createIcons();</script>
 </body>
 </html>

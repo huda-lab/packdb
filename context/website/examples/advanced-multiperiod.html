@@ -3,33 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PackDB Example: Multi-Period Planning - Plan production across multiple time periods with complex expressions.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, multi-period, production planning, optimization">
   <title>Multi-Period Planning - PackDB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <link rel="stylesheet" href="../assets/css/custom.css">
-  <script src="../assets/js/main.js" defer></script>
   <style>
-    body { font-family: 'Inter', system-ui, sans-serif; background-color: #0d1117; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
     code, pre { font-family: 'JetBrains Mono', monospace; }
   </style>
 </head>
 <body class="min-h-screen">
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
         <img src="../assets/images/logo.svg" alt="PackDB" class="h-8">
-        <div class="hidden sm:block"><div class="text-xs text-[#8b949e]">by HUDA Lab</div></div>
+        <div class="hidden sm:block">
+          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
+        </div>
       </a>
       <div class="hidden md:flex items-center space-x-6">
         <a href="../index.html" class="nav-link">Home</a>
@@ -39,171 +38,175 @@
         <a href="../about.html" class="nav-link">About</a>
       </div>
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" class="btn btn-secondary text-sm">
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
           <i data-lucide="github" class="w-4 h-4"></i> GitHub
         </a>
-        <a href="../getting-started.html" class="btn btn-primary text-sm">
-          Get Started <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
       </div>
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#30363d]" aria-label="Toggle menu">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6 text-[#e6edf3]"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden text-[#e6edf3]"></i>
-      </button>
     </nav>
   </header>
 
-  <main id="main-content" class="pt-20">
-    <section class="py-12">
-      <div class="container mx-auto px-4">
-        <div class="max-w-4xl mx-auto">
-          <nav class="breadcrumb mb-8">
-            <a href="../index.html">Home</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <a href="../examples.html">Examples</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <span class="text-[#e6edf3] font-medium">Multi-Period Planning</span>
-          </nav>
+  <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
-          <div class="mb-8">
-            <div class="flex items-start gap-4 mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(248, 81, 73, 0.1)">
-                <i data-lucide="layers" class="w-6 h-6 text-[#f85149]"></i>
-              </div>
-              <div class="flex-1">
-                <div class="flex items-center gap-3 mb-2">
-                  <h1 class="text-3xl font-bold text-[#e6edf3]">Multi-Period Planning</h1>
-                  <span class="badge badge-advanced">Advanced</span>
-                  <span class="text-xs px-3 py-1 rounded-full font-medium" style="background-color: rgba(234, 88, 12, 0.15); color: #f97316; border: 1px solid rgba(234, 88, 12, 0.3);">Coming Soon</span>
-                </div>
-                <p class="text-[#8b949e]">
-                  Plan production across multiple time periods with inventory and complex expressions.
-                </p>
-              </div>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Multiple Variables</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Complex Expressions</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Linearized Ratios</span>
-            </div>
-          </div>
+    <div class="breadcrumb mb-8">
+      <a href="../examples.html">Examples</a>
+      <span class="separator">/</span>
+      <span>Multi-Period Planning</span>
+    </div>
 
-          <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#d29922] rounded-lg p-4 mb-6">
-            <p class="text-[#8b949e] text-sm flex items-start gap-2">
-              <i data-lucide="clock" class="w-5 h-5 text-[#d29922] flex-shrink-0 mt-0.5"></i>
-              <span><strong class="text-[#d29922]">Coming Soon:</strong> This example uses window functions (LAG) over decision variables to model temporal dependencies across periods. Window functions on DECIDE variables are a planned feature and are not yet available in the current build.</span>
-            </p>
-          </div>
+    <div class="mb-10">
+      <div class="flex items-center gap-3 mb-3">
+        <h1 class="text-4xl text-[#e2e8f0]">Multi-Period Planning</h1>
+        <span class="badge badge-advanced">Advanced</span>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Multiple Integer Variables</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Window Functions</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Inventory Balance</span>
+      </div>
+    </div>
 
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Query</h2>
-            <div class="code-block">
-              <div class="code-header">
-                <span class="language-label">SQL</span>
-                <button class="copy-button" data-clipboard-target="#code-query">
-                  <i data-lucide="copy" class="w-4 h-4"></i> Copy
-                </button>
-              </div>
-              <pre class="language-sql"><code id="code-query">SELECT
-    period,
-    demand,
-    production_cost,
-    holding_cost,
-    produce,
-    inventory
+    <section class="example-section">
+      <div class="example-section-label">THE PROBLEM</div>
+      <p class="text-[#c9d1d9] leading-relaxed">
+        A manufacturer plans production across 4 time periods with varying demand. Each period has a production cost, a per-unit holding cost for inventory, and a maximum production capacity. The key constraint is inventory balance: ending inventory in each period equals starting inventory plus production minus demand. The goal is to minimize total production and holding costs. This example shows integer decision variables (produce and inventory) with window function-based constraints (LAG for previous period's inventory).
+      </p>
+    </section>
+
+    <section class="example-section">
+      <div class="example-section-label">SAMPLE DATA</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>CREATE TABLE Periods (
+    period INTEGER, demand INTEGER, production_cost INTEGER,
+    holding_cost INTEGER, max_capacity INTEGER
+);
+INSERT INTO Periods VALUES
+    (1, 100, 10, 2, 200),
+    (2, 150, 10, 2, 200),
+    (3, 120, 10, 2, 200),
+    (4, 180, 10, 2, 200);</code></pre>
+      </div>
+    </section>
+
+    <section class="example-section">
+      <div class="example-section-label">THE QUERY</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>SELECT period, demand, production_cost, holding_cost, produce, inventory
 FROM Periods
 DECIDE produce, inventory
 SUCH THAT
-    produce IS INTEGER,
-    inventory IS INTEGER,
-    -- Non-negative inventory
-    inventory >= 0,
-    -- Meet demand each period (inventory balance)
+    produce IS INTEGER AND inventory IS INTEGER AND
+    inventory >= 0 AND
     inventory = COALESCE(LAG(inventory) OVER (ORDER BY period), 0)
-                + produce - demand,
-    -- Maximum production capacity per period
-    produce <= max_capacity,
-    -- Linearized constraint: average inventory <= 20% of total production
-    -- Instead of: AVG(inventory) <= 0.2 * SUM(produce) / COUNT(*)
-    -- We use: SUM(inventory) <= 0.2 * SUM(produce)
+                + produce - demand AND
+    produce <= max_capacity AND
     SUM(inventory) <= 0.2 * SUM(produce)
 MINIMIZE SUM(produce * production_cost + inventory * holding_cost);</code></pre>
-            </div>
-          </div>
+      </div>
+    </section>
 
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Expected Output</h2>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>period</th>
-                    <th>demand</th>
-                    <th>production_cost</th>
-                    <th>holding_cost</th>
-                    <th>produce</th>
-                    <th>inventory</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td>1</td><td>100</td><td>10</td><td>2</td><td>120</td><td>20</td></tr>
-                  <tr><td>2</td><td>150</td><td>10</td><td>2</td><td>140</td><td>10</td></tr>
-                  <tr><td>3</td><td>120</td><td>10</td><td>2</td><td>110</td><td>0</td></tr>
-                  <tr><td>4</td><td>180</td><td>10</td><td>2</td><td>180</td><td>0</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="pt-8 border-t border-[#30363d]">
-            <a href="../examples.html" class="btn btn-secondary">
-              <i data-lucide="arrow-left" class="w-4 h-4"></i> Back to Examples
-            </a>
-          </div>
+    <section class="example-section">
+      <div class="example-section-label">QUERY BREAKDOWN</div>
+      <div class="space-y-1">
+        <div class="query-annotation">
+          <span class="annotation-marker">1</span>
+          <div><code>DECIDE produce, inventory</code> — Two integer decision variables per row: how much to produce and how much inventory to carry.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">2</span>
+          <div><code>inventory &gt;= 0</code> — Inventory cannot go negative.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">3</span>
+          <div><code>inventory = COALESCE(LAG(inventory) OVER (ORDER BY period), 0) + produce - demand</code> — Inventory balance: each period's ending inventory = previous inventory + production - demand. COALESCE handles period 1 (no previous inventory).</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">4</span>
+          <div><code>produce &lt;= max_capacity</code> — Production limited by factory capacity.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">5</span>
+          <div><code>SUM(inventory) &lt;= 0.2 * SUM(produce)</code> — Total inventory held across all periods cannot exceed 20% of total production (lean manufacturing constraint).</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">6</span>
+          <div><code>MINIMIZE SUM(produce * production_cost + inventory * holding_cost)</code> — Minimize combined production and holding costs.</div>
         </div>
       </div>
     </section>
+
+    <section class="example-section">
+      <div class="example-section-label">RESULT</div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>period</th>
+              <th>demand</th>
+              <th>produce</th>
+              <th>inventory</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>100</td><td class="selected-row">120</td><td>20</td></tr>
+            <tr><td>2</td><td>150</td><td class="selected-row">140</td><td>10</td></tr>
+            <tr><td>3</td><td>120</td><td class="selected-row">110</td><td>0</td></tr>
+            <tr><td>4</td><td>180</td><td class="selected-row">180</td><td>0</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="example-section">
+      <div class="example-section-label">INTERPRETATION</div>
+      <div class="interpretation-box">
+        The solver slightly overproduces in periods 1 and 2 (120 and 140 vs demand of 100 and 150), building small inventory buffers of 20 and 10 units. By period 3, inventory drops to 0, and period 4 produces exactly its demand (180). Total production cost: (120+140+110+180)&times;10 = $5,500. Total holding cost: (20+10+0+0)&times;2 = $60. Grand total: $5,560. The lean manufacturing constraint (total inventory &le; 20% of total production = 110) is satisfied with total inventory of 30.
+      </div>
+    </section>
+
+    <div class="flex justify-between pt-8 border-t border-[#262c36]">
+      <a href="advanced-scheduling.html" class="text-[#58a6ff] hover:text-[#79c0ff]">&larr; Resource Scheduling</a>
+      <a href="../examples.html" class="text-[#58a6ff] hover:text-[#79c0ff]">Back to Examples &rarr;</a>
+    </div>
   </main>
 
-  <footer class="bg-[#010409] text-gray-300">
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
           <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-gray-400 mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-gray-500">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi</p>
+          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
-          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="../getting-started.html" class="text-gray-400 hover:text-white transition-colors">Getting Started</a></li>
-            <li><a href="../documentation.html" class="text-gray-400 hover:text-white transition-colors">Syntax Reference</a></li>
-            <li><a href="../examples.html" class="text-gray-400 hover:text-white transition-colors">Examples</a></li>
+            <li><a href="../getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
+            <li><a href="../documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
+            <li><a href="../examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" class="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-              <i data-lucide="github" class="w-4 h-4"></i> GitHub Repository
-            </a></li>
-            <li><a href="https://huda-lab.github.io/" target="_blank" class="text-gray-400 hover:text-white transition-colors">HUDA Lab</a></li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
+            <li><a href="../about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-white mb-3">Contact</h4>
-          <ul class="space-y-2 text-sm text-gray-400">
-            <li>NYU Abu Dhabi</li>
-            <li>Abu Dhabi, UAE</li>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#6e7681]">
+            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
             <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
       </div>
-      <div class="mt-8 pt-8 border-t border-[#30363d] text-center text-sm text-gray-500">
-        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>
   </footer>
+
   <script>lucide.createIcons();</script>
 </body>
 </html>

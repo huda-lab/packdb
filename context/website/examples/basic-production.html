@@ -3,67 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PackDB Example: Production Planning - Determine how many units of each product to manufacture within capacity constraints.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, production planning, integer variables, optimization">
   <title>Production Planning - PackDB Examples</title>
-
-  <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
-
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Inter Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
-
-  <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
   <link rel="stylesheet" href="../assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="../assets/js/main.js" defer></script>
-
   <style>
-    body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background-color: #0d1117;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
   </style>
 </head>
 <body class="min-h-screen">
 
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+  <!-- Header -->
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
       <a href="../index.html" class="flex items-center space-x-2">
         <img src="../assets/images/logo.svg" alt="PackDB" class="h-8">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#8b949e]">by HUDA Lab</div>
+          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
-
-      <!-- Desktop Navigation -->
       <div class="hidden md:flex items-center space-x-6">
         <a href="../index.html" class="nav-link">Home</a>
         <a href="../getting-started.html" class="nav-link">Getting Started</a>
@@ -71,267 +38,192 @@
         <a href="../examples.html" class="nav-link active">Examples</a>
         <a href="../about.html" class="nav-link">About</a>
       </div>
-
-      <!-- CTA Buttons -->
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="../getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i> GitHub
         </a>
       </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#30363d]"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6 text-[#e6edf3]"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden text-[#e6edf3]"></i>
-      </button>
     </nav>
-
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="../index.html" class="block py-2 nav-link">Home</a>
-        <a href="../getting-started.html" class="block py-2 nav-link">Getting Started</a>
-        <a href="../documentation.html" class="block py-2 nav-link">Docs</a>
-        <a href="../examples.html" class="block py-2 nav-link active">Examples</a>
-        <a href="../about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#30363d]">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="../getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-      </div>
-    </div>
   </header>
 
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content" class="pt-20">
+  <!-- Main Content -->
+  <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
-    <!-- ============================================
-         CONTENT
-         ============================================ -->
-    <section class="py-12">
-      <div class="container mx-auto px-4">
-        <div class="max-w-4xl mx-auto">
+    <div class="breadcrumb mb-8">
+      <a href="../examples.html">Examples</a>
+      <span class="separator">/</span>
+      <span>Production Planning</span>
+    </div>
 
-          <!-- Breadcrumb -->
-          <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
-            <a href="../index.html">Home</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <a href="../examples.html">Examples</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <span class="text-[#e6edf3] font-medium">Production Planning</span>
-          </nav>
+    <div class="mb-10">
+      <div class="flex items-center gap-3 mb-3">
+        <h1 class="text-4xl text-[#e2e8f0]">Production Planning</h1>
+        <span class="badge badge-basic">Basic</span>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Integer Variables</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Row-Level Bounds</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">MINIMIZE</span>
+      </div>
+    </div>
 
-          <!-- Problem Definition -->
-          <div class="mb-8">
-            <div class="flex items-start gap-4 mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(63, 185, 80, 0.1)">
-                <i data-lucide="factory" class="w-6 h-6 text-[#3fb950]"></i>
-              </div>
-              <div class="flex-1">
-                <div class="flex items-center gap-3 mb-2">
-                  <h1 class="text-3xl font-bold text-[#e6edf3]">Production Planning</h1>
-                  <span class="badge badge-basic">Basic</span>
-                </div>
-                <p class="text-[#8b949e]">
-                  Determine how many units of each product to manufacture within capacity constraints.
-                </p>
-              </div>
-            </div>
+    <section class="example-section">
+      <div class="example-section-label">THE PROBLEM</div>
+      <p class="text-[#c9d1d9] leading-relaxed">
+        A factory produces three products. Each has a per-unit production cost, a minimum order quantity (contractual obligation), and a maximum production capacity. The goal is to find how many units of each product to manufacture while meeting minimum orders, not exceeding capacity, and keeping total production cost within a $50,000 budget. Unlike the knapsack problem, here the decision variable x is an integer (not binary) — it represents a quantity, not a yes/no choice.
+      </p>
+    </section>
 
-            <!-- Tags -->
-            <div class="flex flex-wrap gap-2">
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Integer Variables</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Row-Level Bounds</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">MINIMIZE</span>
-            </div>
-          </div>
+    <section class="example-section">
+      <div class="example-section-label">SAMPLE DATA</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>CREATE TABLE Products (
+    product_id INTEGER, name VARCHAR, cost_per_unit INTEGER,
+    min_quantity INTEGER, max_capacity INTEGER
+);
+INSERT INTO Products VALUES
+    (1, 'Widget A', 10, 100, 500),
+    (2, 'Widget B', 15, 50, 300),
+    (3, 'Widget C', 20, 75, 200);</code></pre>
+      </div>
+    </section>
 
-          <!-- Query -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Query</h2>
-            <div class="code-block">
-              <div class="code-header">
-                <span class="language-label">SQL</span>
-                <button class="copy-button" data-clipboard-target="#code-query">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-sql"><code id="code-query">SELECT
-    product_id,
-    name,
-    cost_per_unit,
-    min_quantity,
-    max_capacity,
-    x as quantity_to_produce
+    <section class="example-section">
+      <div class="example-section-label">THE QUERY</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>SELECT product_id, name, cost_per_unit, min_quantity, max_capacity, x as quantity_to_produce
 FROM Products
-DECIDE x
+DECIDE x IS INTEGER
 SUCH THAT
-    x IS INTEGER,
-    -- Row-level constraint: minimum production quantity
-    x >= min_quantity,
-    -- Row-level constraint: maximum capacity
-    x <= max_capacity,
-    -- Aggregate constraint: total production cost within budget
+    x >= min_quantity AND
+    x <= max_capacity AND
     SUM(x * cost_per_unit) <= 50000
 MINIMIZE SUM(x * cost_per_unit);</code></pre>
-            </div>
-          </div>
+      </div>
+    </section>
 
-          <!-- Expected Output -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Expected Output</h2>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>product_id</th>
-                    <th>name</th>
-                    <th>cost_per_unit</th>
-                    <th>min_quantity</th>
-                    <th>max_capacity</th>
-                    <th>quantity_to_produce</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>1</td>
-                    <td>Widget A</td>
-                    <td>10</td>
-                    <td>100</td>
-                    <td>500</td>
-                    <td>100</td>
-                  </tr>
-                  <tr>
-                    <td>2</td>
-                    <td>Widget B</td>
-                    <td>15</td>
-                    <td>50</td>
-                    <td>300</td>
-                    <td>50</td>
-                  </tr>
-                  <tr>
-                    <td>3</td>
-                    <td>Widget C</td>
-                    <td>20</td>
-                    <td>75</td>
-                    <td>200</td>
-                    <td>75</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Navigation -->
-          <div class="pt-8 border-t border-[#30363d]">
-            <a href="../examples.html" class="btn btn-secondary">
-              <i data-lucide="arrow-left" class="w-4 h-4"></i>
-              Back to Examples
-            </a>
-          </div>
-
+    <section class="example-section">
+      <div class="example-section-label">QUERY BREAKDOWN</div>
+      <div class="space-y-1">
+        <div class="query-annotation">
+          <span class="annotation-marker">1</span>
+          <div><code>DECIDE x IS INTEGER</code> — x is a non-negative integer for each row, representing how many units to produce.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">2</span>
+          <div><code>x &gt;= min_quantity</code> — Row-level constraint: each product must meet its minimum order.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">3</span>
+          <div><code>x &lt;= max_capacity</code> — Row-level constraint: production cannot exceed factory capacity.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">4</span>
+          <div><code>SUM(x * cost_per_unit) &lt;= 50000</code> — Aggregate constraint: total cost stays within budget.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">5</span>
+          <div><code>MINIMIZE SUM(x * cost_per_unit)</code> — Find the cheapest production plan that satisfies all constraints.</div>
         </div>
       </div>
     </section>
 
+    <section class="example-section">
+      <div class="example-section-label">RESULT</div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>product_id</th>
+              <th>name</th>
+              <th>cost_per_unit</th>
+              <th>min_quantity</th>
+              <th>max_capacity</th>
+              <th>quantity_to_produce</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Widget A</td>
+              <td>10</td>
+              <td>100</td>
+              <td>500</td>
+              <td class="selected-row">100</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Widget B</td>
+              <td>15</td>
+              <td>50</td>
+              <td>300</td>
+              <td class="selected-row">50</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Widget C</td>
+              <td>20</td>
+              <td>75</td>
+              <td>200</td>
+              <td class="selected-row">75</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="example-section">
+      <div class="example-section-label">INTERPRETATION</div>
+      <div class="interpretation-box">
+        The solver produces exactly the minimum required quantity for each product: 100 of Widget A, 50 of Widget B, and 75 of Widget C. Total cost: (100&times;10) + (50&times;15) + (75&times;20) = $3,250 — well under the $50,000 budget. Since we are minimizing cost, producing more than the minimum would only increase the total, so the optimal solution is to meet the minimums and stop.
+      </div>
+    </section>
+
+    <div class="flex justify-between pt-8 border-t border-[#262c36]">
+      <a href="basic-knapsack.html" class="text-[#58a6ff] hover:text-[#79c0ff]">&larr; Knapsack Problem</a>
+      <a href="basic-filtering.html" class="text-[#58a6ff] hover:text-[#79c0ff]">Next: Item Filtering &rarr;</a>
+    </div>
   </main>
 
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-[#010409] text-gray-300">
+  <!-- Footer -->
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-
-        <!-- Col 1: Branding -->
         <div>
           <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-gray-400 mb-4">
-            Optimization-enabled SQL queries for DuckDB
-          </p>
-          <p class="text-xs text-gray-500">
-            &copy; 2025 HUDA Lab<br>
-            NYU Abu Dhabi
-          </p>
+          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
-
-        <!-- Col 2: Documentation -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="../getting-started.html" class="text-gray-400 hover:text-white transition-colors">Getting Started</a></li>
-            <li><a href="../documentation.html" class="text-gray-400 hover:text-white transition-colors">Syntax Reference</a></li>
-            <li><a href="../examples.html" class="text-gray-400 hover:text-white transition-colors">Examples</a></li>
+            <li><a href="../getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
+            <li><a href="../documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
+            <li><a href="../examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
           </ul>
         </div>
-
-        <!-- Col 3: Resources -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li>
-              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                <i data-lucide="github" class="w-4 h-4"></i>
-                GitHub Repository
-              </a>
-            </li>
-            <li>
-              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">Issue Tracker</a>
-            </li>
-            <li><a href="../about.html#research" class="text-gray-400 hover:text-white transition-colors">Research Papers</a></li>
-            <li>
-              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">HUDA Lab</a>
-            </li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
+            <li><a href="../about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
           </ul>
         </div>
-
-        <!-- Col 4: Contact -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Contact</h4>
-          <ul class="space-y-2 text-sm text-gray-400">
-            <li>NYU Abu Dhabi</li>
-            <li>Saadiyat Island</li>
-            <li>Abu Dhabi, UAE</li>
-            <li>
-              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
-                huda-lab@nyu.edu
-              </a>
-            </li>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#6e7681]">
+            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
-
       </div>
-
-      <!-- Bottom Bar -->
-      <div class="mt-8 pt-8 border-t border-[#30363d] text-center text-sm text-gray-500">
-        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>
   </footer>
 
-  <!-- Initialize Lucide Icons -->
-  <script>
-    lucide.createIcons();
-  </script>
-
+  <script>lucide.createIcons();</script>
 </body>
 </html>

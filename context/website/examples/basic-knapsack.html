@@ -3,67 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PackDB Example: Knapsack Problem - Select items to maximize value while staying within a weight limit.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, knapsack problem, optimization example">
   <title>Knapsack Problem - PackDB Examples</title>
-
-  <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
-
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Inter Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
-
-  <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
   <link rel="stylesheet" href="../assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="../assets/js/main.js" defer></script>
-
   <style>
-    body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background-color: #0d1117;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
   </style>
 </head>
 <body class="min-h-screen">
 
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+  <!-- Header -->
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
       <a href="../index.html" class="flex items-center space-x-2">
         <img src="../assets/images/logo.svg" alt="PackDB" class="h-8">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#8b949e]">by HUDA Lab</div>
+          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
-
-      <!-- Desktop Navigation -->
       <div class="hidden md:flex items-center space-x-6">
         <a href="../index.html" class="nav-link">Home</a>
         <a href="../getting-started.html" class="nav-link">Getting Started</a>
@@ -71,258 +38,188 @@
         <a href="../examples.html" class="nav-link active">Examples</a>
         <a href="../about.html" class="nav-link">About</a>
       </div>
-
-      <!-- CTA Buttons -->
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="../getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
+          <i data-lucide="github" class="w-4 h-4"></i> GitHub
         </a>
       </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#30363d]"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6 text-[#e6edf3]"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden text-[#e6edf3]"></i>
-      </button>
     </nav>
-
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="../index.html" class="block py-2 nav-link">Home</a>
-        <a href="../getting-started.html" class="block py-2 nav-link">Getting Started</a>
-        <a href="../documentation.html" class="block py-2 nav-link">Docs</a>
-        <a href="../examples.html" class="block py-2 nav-link active">Examples</a>
-        <a href="../about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#30363d]">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="../getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-      </div>
-    </div>
   </header>
 
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content" class="pt-20">
+  <!-- Main Content -->
+  <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
-    <!-- ============================================
-         CONTENT
-         ============================================ -->
-    <section class="py-12">
-      <div class="container mx-auto px-4">
-        <div class="max-w-4xl mx-auto">
+    <!-- Breadcrumb -->
+    <div class="breadcrumb mb-8">
+      <a href="../examples.html">Examples</a>
+      <span class="separator">/</span>
+      <span>Knapsack Problem</span>
+    </div>
 
-          <!-- Breadcrumb -->
-          <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
-            <a href="../index.html">Home</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <a href="../examples.html">Examples</a>
-            <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-            <span class="text-[#e6edf3] font-medium">Knapsack Problem</span>
-          </nav>
+    <!-- Title -->
+    <div class="mb-10">
+      <div class="flex items-center gap-3 mb-3">
+        <h1 class="text-4xl text-[#e2e8f0]">Knapsack Problem</h1>
+        <span class="badge badge-basic">Basic</span>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Binary Variables</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Single Constraint</span>
+        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">MAXIMIZE</span>
+      </div>
+    </div>
 
-          <!-- Problem Definition -->
-          <div class="mb-8">
-            <div class="flex items-start gap-4 mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(63, 185, 80, 0.1)">
-                <i data-lucide="package" class="w-6 h-6 text-[#3fb950]"></i>
-              </div>
-              <div class="flex-1">
-                <div class="flex items-center gap-3 mb-2">
-                  <h1 class="text-3xl font-bold text-[#e6edf3]">Knapsack Problem</h1>
-                  <span class="badge badge-basic">Basic</span>
-                </div>
-                <p class="text-[#8b949e]">
-                  Select items to maximize total value while staying within a weight limit.
-                </p>
-              </div>
-            </div>
+    <!-- The Problem -->
+    <section class="example-section">
+      <div class="example-section-label">THE PROBLEM</div>
+      <p class="text-[#c9d1d9] leading-relaxed">
+        You're packing for a trip with limited luggage space. Each item has a value (how much you need it) and a weight. You want to maximize the total value of what you bring without exceeding a 50-unit weight limit. This is the classic 0/1 knapsack problem — for each item, you either take it (x=1) or leave it (x=0).
+      </p>
+    </section>
 
-            <!-- Tags -->
-            <div class="flex flex-wrap gap-2">
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Binary Variables</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">Single Constraint</span>
-              <span class="text-xs px-3 py-1 bg-[#21262d] rounded-full text-[#8b949e] border border-[#30363d]">MAXIMIZE</span>
-            </div>
-          </div>
+    <!-- Sample Data -->
+    <section class="example-section">
+      <div class="example-section-label">SAMPLE DATA</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>CREATE TABLE Items (
+    id INTEGER, name VARCHAR, value INTEGER,
+    weight INTEGER, category VARCHAR
+);
+INSERT INTO Items VALUES
+    (1, 'Laptop', 100, 20, 'electronics'),
+    (2, 'Mouse', 60, 10, 'electronics'),
+    (3, 'Monitor', 120, 30, 'electronics');</code></pre>
+      </div>
+    </section>
 
-          <!-- Query -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Query</h2>
-            <div class="code-block">
-              <div class="code-header">
-                <span class="language-label">SQL</span>
-                <button class="copy-button" data-clipboard-target="#code-query">
-                  <i data-lucide="copy" class="w-4 h-4"></i>
-                  Copy
-                </button>
-              </div>
-              <pre class="language-sql"><code id="code-query">SELECT
-    id,
-    name,
-    value,
-    weight,
-    x as selected
+    <!-- The Query -->
+    <section class="example-section">
+      <div class="example-section-label">THE QUERY</div>
+      <div class="code-block">
+        <pre class="language-sql"><code>SELECT id, name, value, weight, x as selected
 FROM Items
 WHERE category = 'electronics'
-DECIDE x
+DECIDE x IS BOOLEAN
 SUCH THAT
-    x IS BINARY,
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
-            </div>
-          </div>
+      </div>
+    </section>
 
-          <!-- Expected Output -->
-          <div class="mb-12">
-            <h2 class="text-xl font-semibold text-[#e6edf3] mb-4">Expected Output</h2>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>id</th>
-                    <th>name</th>
-                    <th>value</th>
-                    <th>weight</th>
-                    <th>selected</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>1</td>
-                    <td>Laptop</td>
-                    <td>100</td>
-                    <td>20</td>
-                    <td>1</td>
-                  </tr>
-                  <tr>
-                    <td>2</td>
-                    <td>Mouse</td>
-                    <td>60</td>
-                    <td>10</td>
-                    <td>0</td>
-                  </tr>
-                  <tr>
-                    <td>3</td>
-                    <td>Monitor</td>
-                    <td>120</td>
-                    <td>30</td>
-                    <td>1</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Navigation -->
-          <div class="pt-8 border-t border-[#30363d]">
-            <a href="../examples.html" class="btn btn-secondary">
-              <i data-lucide="arrow-left" class="w-4 h-4"></i>
-              Back to Examples
-            </a>
-          </div>
-
+    <!-- Query Breakdown -->
+    <section class="example-section">
+      <div class="example-section-label">QUERY BREAKDOWN</div>
+      <div class="space-y-1">
+        <div class="query-annotation">
+          <span class="annotation-marker">1</span>
+          <div><code>DECIDE x IS BOOLEAN</code> — Creates a binary decision variable x for each row. x=1 means "select this item", x=0 means "skip it".</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">2</span>
+          <div><code>SUM(x * weight) &lt;= 50</code> — The total weight of selected items must not exceed 50 units.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">3</span>
+          <div><code>MAXIMIZE SUM(x * value)</code> — Among all valid selections, pick the one with the highest total value.</div>
         </div>
       </div>
     </section>
 
+    <!-- Result -->
+    <section class="example-section">
+      <div class="example-section-label">RESULT</div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>name</th>
+              <th>value</th>
+              <th>weight</th>
+              <th>selected</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Laptop</td>
+              <td>100</td>
+              <td>20</td>
+              <td class="selected-row">1</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Mouse</td>
+              <td>60</td>
+              <td>10</td>
+              <td>0</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Monitor</td>
+              <td>120</td>
+              <td>30</td>
+              <td class="selected-row">1</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Interpretation -->
+    <section class="example-section">
+      <div class="example-section-label">INTERPRETATION</div>
+      <div class="interpretation-box">
+        PackDB selected the Laptop (value 100, weight 20) and Monitor (value 120, weight 30) for a total value of 220 and total weight of 50. The Mouse was excluded — including all three would bring the total weight to 60, exceeding the limit. Dropping the Mouse (value 60) loses less value than dropping either the Laptop or Monitor.
+      </div>
+    </section>
+
+    <!-- Navigation -->
+    <div class="flex justify-between pt-8 border-t border-[#262c36]">
+      <a href="../examples.html" class="text-[#58a6ff] hover:text-[#79c0ff]">&larr; Back to Examples</a>
+      <a href="basic-production.html" class="text-[#58a6ff] hover:text-[#79c0ff]">Next: Production Planning &rarr;</a>
+    </div>
   </main>
 
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-[#010409] text-gray-300">
+  <!-- Footer -->
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-
-        <!-- Col 1: Branding -->
         <div>
           <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-gray-400 mb-4">
-            Optimization-enabled SQL queries for DuckDB
-          </p>
-          <p class="text-xs text-gray-500">
-            &copy; 2025 HUDA Lab<br>
-            NYU Abu Dhabi
-          </p>
+          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
-
-        <!-- Col 2: Documentation -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="../getting-started.html" class="text-gray-400 hover:text-white transition-colors">Getting Started</a></li>
-            <li><a href="../documentation.html" class="text-gray-400 hover:text-white transition-colors">Syntax Reference</a></li>
-            <li><a href="../examples.html" class="text-gray-400 hover:text-white transition-colors">Examples</a></li>
+            <li><a href="../getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
+            <li><a href="../documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
+            <li><a href="../examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
           </ul>
         </div>
-
-        <!-- Col 3: Resources -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li>
-              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                <i data-lucide="github" class="w-4 h-4"></i>
-                GitHub Repository
-              </a>
-            </li>
-            <li>
-              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">Issue Tracker</a>
-            </li>
-            <li><a href="../about.html#research" class="text-gray-400 hover:text-white transition-colors">Research Papers</a></li>
-            <li>
-              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">HUDA Lab</a>
-            </li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
+            <li><a href="../about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
           </ul>
         </div>
-
-        <!-- Col 4: Contact -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Contact</h4>
-          <ul class="space-y-2 text-sm text-gray-400">
-            <li>NYU Abu Dhabi</li>
-            <li>Saadiyat Island</li>
-            <li>Abu Dhabi, UAE</li>
-            <li>
-              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
-                huda-lab@nyu.edu
-              </a>
-            </li>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#6e7681]">
+            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
-
       </div>
-
-      <!-- Bottom Bar -->
-      <div class="mt-8 pt-8 border-t border-[#30363d] text-center text-sm text-gray-500">
-        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi | Built with DuckDB and HiGHS</p>
+      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>
   </footer>
 
-  <!-- Initialize Lucide Icons -->
-  <script>
-    lucide.createIcons();
-  </script>
-
+  <script>lucide.createIcons();</script>
 </body>
 </html>
