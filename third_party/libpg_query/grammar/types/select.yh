@@ -3,6 +3,7 @@
 %type <list> typed_decide_variable_list
 %type <node> decide_constraint_list
 %type <node> decide_constraint_item
+%type <node> decide_objective_item
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause values_clause_opt_comma

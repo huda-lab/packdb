@@ -384,3 +384,7 @@ wheels-macos-14/
 
 # Stray files from shell redirects
 test/automated/=
+
+
+# highs log
+highs.log
