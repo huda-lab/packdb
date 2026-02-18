@@ -7,13 +7,8 @@
 
 namespace duckdb {
 
-vector<double> DeterministicNaive::Solve(const SolverInput& input) {
-    // Build solver-agnostic ILP model (shared logic)
-    ILPModel model = ILPModel::Build(input);
-
+vector<double> DeterministicNaive::Solve(const ILPModel &model) {
     idx_t total_vars = model.num_vars;
-    idx_t num_rows = input.num_rows;
-    idx_t num_decide_vars = input.num_decide_vars;
 
     //===--------------------------------------------------------------------===//
     // 1. Create HiGHS model and set up variables
@@ -22,7 +17,6 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     Highs highs;
     highs.setOptionValue("log_to_console", false);
 
-    // Convert ILPModel types to HiGHS types
     vector<HighsVarType> var_types(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {
         var_types[i] = model.is_integer[i] ? HighsVarType::kInteger : HighsVarType::kContinuous;
@@ -31,8 +25,7 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
 
     //===--------------------------------------------------------------------===//
-    // 2. Convert constraints to HiGHS range format (row_lower, row_upper)
-    //    and build COO constraint matrix
+    // 2. Convert ILPModel constraints to HiGHS range format + COO matrix
     //===--------------------------------------------------------------------===//
 
     vector<int> a_rows;
@@ -42,110 +35,25 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     vector<double> row_upper;
 
     idx_t constraint_idx = 0;
-    for (auto &eval_const : input.constraints) {
-        // Use original provenance: aggregate if and only if LHS was an aggregate (e.g., SUM(...))
-        bool is_aggregate = eval_const.lhs_is_aggregate;
-        bool has_mask = !eval_const.row_mask.empty();
-
-        if (is_aggregate) {
-            // AGGREGATE CONSTRAINT: SUM(x) <= 10 [WHEN condition]
-            // Create ONE constraint that sums across rows (only masked rows if WHEN)
-            for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                if (decide_var_idx != DConstants::INVALID_INDEX) {
-                    // Add entry for each row's variable with its specific coefficient
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        // PackDB WHEN: skip rows where condition is false
-                        if (has_mask && !eval_const.row_mask[row]) {
-                            continue;
-                        }
-                        double coeff = eval_const.row_coefficients[term_idx][row];
-
-                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
-                        a_rows.push_back(constraint_idx);
-                        a_cols.push_back(var_idx);
-                        a_vals.push_back(coeff);
-                    }
-                }
-            }
-
-            // Set constraint bounds
-            double rhs = eval_const.rhs_values[0]; // Same for all rows
-
-            if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                row_lower.push_back(rhs);
-                row_upper.push_back(1e30);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-                // Integer model: sum(x) > c  => sum(x) >= floor(c) + 1
-                double lb = std::floor(rhs) + 1.0;
-                row_lower.push_back(lb);
-                row_upper.push_back(1e30);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                row_lower.push_back(-1e30);
-                row_upper.push_back(rhs);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-                // Integer model: sum(x) < c  => sum(x) <= ceil(c) - 1
-                double ub = std::ceil(rhs) - 1.0;
-                row_lower.push_back(-1e30);
-                row_upper.push_back(ub);
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                row_lower.push_back(rhs);
-                row_upper.push_back(rhs);
-            }
-
-            constraint_idx++;
-
-        } else {
-            // PER-ROW CONSTRAINT: Create separate constraint for each row [WHEN condition]
-
-            for (idx_t row = 0; row < num_rows; row++) {
-                // PackDB WHEN: skip rows where condition is false
-                if (has_mask && !eval_const.row_mask[row]) {
-                    continue;
-                }
-
-                // Build constraint for this row
-                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                    if (decide_var_idx != DConstants::INVALID_INDEX) {
-                        double coeff = eval_const.row_coefficients[term_idx][row];
-                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
-
-                        a_rows.push_back(constraint_idx);
-                        a_cols.push_back(var_idx);
-                        a_vals.push_back(coeff);
-                    }
-                }
-
-                // Set constraint bounds based on comparison type
-                double rhs = eval_const.rhs_values[row];
-
-                if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                    row_lower.push_back(rhs);
-                    row_upper.push_back(1e30);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-                    // Integer model: x > c  => x >= floor(c) + 1
-                    double lb = std::floor(rhs) + 1.0;
-                    row_lower.push_back(lb);
-                    row_upper.push_back(1e30);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                    row_lower.push_back(-1e30);
-                    row_upper.push_back(rhs);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-                    // Integer model: x < c  => x <= ceil(c) - 1
-                    double ub = std::ceil(rhs) - 1.0;
-                    row_lower.push_back(-1e30);
-                    row_upper.push_back(ub);
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                    row_lower.push_back(rhs);
-                    row_upper.push_back(rhs);
-                }
-
-                constraint_idx++;
-            }
+    for (auto &constr : model.constraints) {
+        for (idx_t j = 0; j < constr.indices.size(); j++) {
+            a_rows.push_back(static_cast<int>(constraint_idx));
+            a_cols.push_back(constr.indices[j]);
+            a_vals.push_back(constr.coefficients[j]);
         }
+
+        if (constr.sense == '>') {
+            row_lower.push_back(constr.rhs);
+            row_upper.push_back(1e30);
+        } else if (constr.sense == '<') {
+            row_lower.push_back(-1e30);
+            row_upper.push_back(constr.rhs);
+        } else {
+            row_lower.push_back(constr.rhs);
+            row_upper.push_back(constr.rhs);
+        }
+
+        constraint_idx++;
     }
 
     idx_t num_constraints = static_cast<idx_t>(row_lower.size());
@@ -165,7 +73,6 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     lp.row_lower_ = row_lower;
     lp.row_upper_ = row_upper;
 
-    // Convert COO to CSR format
     lp.a_matrix_.format_ = MatrixFormat::kRowwise;
     vector<HighsInt> row_starts(num_constraints + 1, 0);
 
@@ -192,7 +99,6 @@ vector<double> DeterministicNaive::Solve(const SolverInput& input) {
     lp.a_matrix_.index_ = col_indices;
     lp.a_matrix_.value_ = values;
 
-    // Set integrality
     lp.integrality_.resize(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {
         lp.integrality_[i] = var_types[i];

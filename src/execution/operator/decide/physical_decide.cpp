@@ -6,6 +6,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/packdb/ilp_solver.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -17,9 +18,6 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
-
-#include "duckdb/packdb/naive/deterministic_naive.hpp"
-#include "duckdb/packdb/gurobi/gurobi_solver.hpp"
 
 namespace duckdb {
 
@@ -852,7 +850,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     //===--------------------------------------------------------------------===//
-    // PHASE 3: Build and Solve ILP with DeterministicNaive
+    // PHASE 3: Build and Solve ILP
     //===--------------------------------------------------------------------===//
 
     // Construct SolverInput (num_decide_vars already declared above)
@@ -886,12 +884,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
     solver_input.sense = decide_sense;
     
-    // Solve (prefer Gurobi if available, fall back to HiGHS)
-    if (GurobiSolver::IsAvailable()) {
-        gstate.ilp_solution = GurobiSolver::Solve(solver_input);
-    } else {
-        gstate.ilp_solution = DeterministicNaive::Solve(solver_input);
-    }
+    gstate.ilp_solution = SolveILP(solver_input);
 
     return SinkFinalizeType::READY;
 }

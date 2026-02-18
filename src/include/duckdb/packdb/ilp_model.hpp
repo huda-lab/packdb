@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "duckdb/packdb/naive/deterministic_naive.hpp"
+#include "duckdb/packdb/solver_input.hpp"
 
 namespace duckdb {
 

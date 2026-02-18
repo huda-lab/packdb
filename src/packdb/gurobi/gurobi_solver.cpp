@@ -30,7 +30,6 @@ struct GurobiGuard {
 
 bool GurobiSolver::IsAvailable() {
 #if PACKDB_HAS_GUROBI
-    // Thread-safe one-time initialization (C++11 guarantees)
     static bool available = []() {
         GRBenv *env = nullptr;
         int error = GRBloadenv(&env, nullptr);
@@ -46,11 +45,8 @@ bool GurobiSolver::IsAvailable() {
 #endif
 }
 
-vector<double> GurobiSolver::Solve(const SolverInput &input) {
+vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
 #if PACKDB_HAS_GUROBI
-    // Build solver-agnostic ILP model (shared logic)
-    ILPModel ilp = ILPModel::Build(input);
-
     idx_t total_vars = ilp.num_vars;
 
     //===--------------------------------------------------------------------===//
@@ -71,7 +67,6 @@ vector<double> GurobiSolver::Solve(const SolverInput &input) {
     // 2. Create model with variables
     //===--------------------------------------------------------------------===//
 
-    // Convert ILPModel types to Gurobi types
     vector<char> var_types(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {
         if (ilp.is_binary[i]) {
@@ -84,15 +79,16 @@ vector<double> GurobiSolver::Solve(const SolverInput &input) {
     }
 
     error = GRBnewmodel(guard.env, &guard.model, "packdb_decide",
-                         (int)total_vars, ilp.obj_coeffs.data(),
-                         ilp.col_lower.data(), ilp.col_upper.data(),
+                         (int)total_vars,
+                         const_cast<double *>(ilp.obj_coeffs.data()),
+                         const_cast<double *>(ilp.col_lower.data()),
+                         const_cast<double *>(ilp.col_upper.data()),
                          var_types.data(), nullptr);
     if (error) {
         throw InternalException("Failed to create Gurobi model: %s",
                                 GRBgeterrormsg(guard.env));
     }
 
-    // Set optimization sense
     int grb_sense = ilp.maximize ? GRB_MAXIMIZE : GRB_MINIMIZE;
     error = GRBsetintattr(guard.model, GRB_INT_ATTR_MODELSENSE, grb_sense);
     if (error) {
@@ -105,8 +101,6 @@ vector<double> GurobiSolver::Solve(const SolverInput &input) {
     //===--------------------------------------------------------------------===//
 
     for (auto &constr : ilp.constraints) {
-        // ILPModel uses '<' for <=, '>' for >=, '=' for ==
-        // Gurobi uses the same characters
         error = GRBaddconstr(guard.model, (int)constr.indices.size(),
                              const_cast<int *>(constr.indices.data()),
                              const_cast<double *>(constr.coefficients.data()),
@@ -196,7 +190,7 @@ vector<double> GurobiSolver::Solve(const SolverInput &input) {
     return result;
 
 #else
-    (void)input;
+    (void)ilp;
     throw InternalException("Gurobi solver requested but PackDB was built without Gurobi support. "
                             "Set GUROBI_HOME and rebuild to enable Gurobi.");
 #endif
