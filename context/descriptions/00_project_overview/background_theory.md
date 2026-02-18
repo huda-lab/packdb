@@ -22,6 +22,7 @@ PackDB maps these queries to ILP problems.
     -   $\mathbf{c}$: The coefficients of the objective function (derived from row values).
     -   $A, \mathbf{b}$: The constraint matrix and bounds.
 
-## 4. Why DuckDB + HiGHS?
+## 4. Why DuckDB + Gurobi/HiGHS?
 -   **DuckDB**: Columnar, vectorized execution makes it fast to compute the coefficients ($\mathbf{c}$ and $A$) over large datasets.
--   **HiGHS**: A modern, open-source C++ solver with reliable performance for mixed-integer problems. Embedding it creates a zero-copy (or near zero-copy) path from DB memory to Solver memory.
+-   **Gurobi**: A state-of-the-art commercial solver with excellent performance on large-scale mixed-integer problems. Used as the primary solver when a license is available.
+-   **HiGHS**: A modern, open-source C++ solver bundled as the fallback. Embedding it creates a zero-copy (or near zero-copy) path from DB memory to Solver memory, ensuring PackDB works out of the box without any commercial dependencies.

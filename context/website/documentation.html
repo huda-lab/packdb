@@ -57,7 +57,7 @@
   <!-- ============================================
        HEADER / NAVIGATION
        ============================================ -->
-  <header class="fixed top-0 w-full bg-[#161b22]/95 backdrop-blur-sm border-b border-[#30363d] z-50">
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
@@ -90,7 +90,7 @@
       </div>
 
       <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#21262d]"
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#1c2028]"
               aria-label="Toggle menu" aria-expanded="false">
         <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
         <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
@@ -98,14 +98,14 @@
     </nav>
 
     <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#30363d] bg-[#161b22]" aria-hidden="true">
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#262c36] bg-[#0d1117]" aria-hidden="true">
       <div class="container mx-auto px-4 py-4 space-y-4">
         <a href="index.html" class="block py-2 nav-link">Home</a>
         <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
         <a href="documentation.html" class="block py-2 nav-link active">Docs</a>
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#30363d]">
+        <hr class="border-[#262c36]">
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
            class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
           <i data-lucide="github" class="w-5 h-5"></i>
@@ -127,17 +127,17 @@
     <!-- ============================================
          HERO SECTION
          ============================================ -->
-    <section class="py-12 bg-gradient-to-b from-[#161b22] to-[#0d1117]">
+    <section class="py-12 bg-gradient-to-b from-[#0d1117] to-[#0d1117]">
       <div class="container mx-auto px-4">
         <!-- Breadcrumb -->
         <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
           <a href="index.html">Home</a>
           <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          <span class="text-[#e6edf3] font-medium">Documentation</span>
+          <span class="text-[#e2e8f0] font-medium">Documentation</span>
         </nav>
 
         <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl font-bold text-[#e6edf3] mb-4">
+          <h1 class="text-4xl md:text-5xl font-bold text-[#e2e8f0] mb-4">
             PackDB Documentation
           </h1>
           <p class="text-xl text-[#8b949e]">
@@ -157,7 +157,7 @@
           <!-- Sidebar Navigation -->
           <aside class="lg:w-64 flex-shrink-0">
             <nav class="sidebar-nav lg:sticky lg:top-24">
-              <h3 class="text-sm font-semibold text-[#e6edf3] uppercase tracking-wider mb-4">Reference</h3>
+              <h3 class="text-sm font-semibold text-[#e2e8f0] uppercase tracking-wider mb-4">Reference</h3>
               <ul class="space-y-1">
                 <li><a href="#syntax" class="sidebar-link active">Syntax Overview</a></li>
                 <li><a href="#variables" class="sidebar-link">Decision Variables</a></li>
@@ -177,13 +177,13 @@
                  SYNTAX OVERVIEW
                  ============================================ -->
             <section id="syntax" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Syntax Overview</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Syntax Overview</h2>
 
               <p class="text-[#8b949e] mb-6">
-                PackDB extends standard SQL with a <code class="bg-[#21262d] px-2 py-0.5 rounded">DECIDE</code> clause that appears after <code class="bg-[#21262d] px-2 py-0.5 rounded">WHERE</code> and before the final projection.
+                PackDB extends standard SQL with a <code class="bg-[#1c2028] px-2 py-0.5 rounded">DECIDE</code> clause that appears after <code class="bg-[#1c2028] px-2 py-0.5 rounded">WHERE</code> and before the final projection.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Complete Syntax</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Complete Syntax</h3>
               <div class="code-block mb-8">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -203,49 +203,49 @@ SUCH THAT
 </code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Execution Order</h3>
-              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6 mb-8">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Execution Order</h3>
+              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6 mb-8">
                 <ol class="space-y-3">
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">1</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">1</span>
                     <div>
-                      <span class="font-semibold text-[#e6edf3]">FROM + WHERE</span>
+                      <span class="font-semibold text-[#e2e8f0]">FROM + WHERE</span>
                       <span class="text-[#8b949e]"> — Standard SQL filtering produces candidate rows</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">2</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">2</span>
                     <div>
-                      <span class="font-semibold text-[#e6edf3]">DECIDE</span>
+                      <span class="font-semibold text-[#e2e8f0]">DECIDE</span>
                       <span class="text-[#8b949e]"> — Creates decision variables (one per candidate row)</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">3</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">3</span>
                     <div>
-                      <span class="font-semibold text-[#e6edf3]">SUCH THAT</span>
+                      <span class="font-semibold text-[#e2e8f0]">SUCH THAT</span>
                       <span class="text-[#8b949e]"> — Defines optimization constraints</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">4</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">4</span>
                     <div>
-                      <span class="font-semibold text-[#e6edf3]">MAXIMIZE/MINIMIZE</span>
+                      <span class="font-semibold text-[#e2e8f0]">MAXIMIZE/MINIMIZE</span>
                       <span class="text-[#8b949e]"> — Specifies objective function</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">5</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">5</span>
                     <div>
-                      <span class="font-semibold text-[#e6edf3]">SELECT</span>
+                      <span class="font-semibold text-[#e2e8f0]">SELECT</span>
                       <span class="text-[#8b949e]"> — Projects results including decision variable values</span>
                     </div>
                   </li>
                 </ol>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Execution Pipeline</h3>
-              <div class="mermaid bg-[#161b22] rounded-lg border border-[#30363d] p-6">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Execution Pipeline</h3>
+              <div class="mermaid bg-[#161b22] rounded-lg border border-[#262c36] p-6">
 graph LR
     A[SQL Text] --> B[Parse & Normalize]
     B --> C[Bind & Validate]
@@ -268,13 +268,13 @@ graph LR
                  DECISION VARIABLES
                  ============================================ -->
             <section id="variables" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Decision Variables</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Decision Variables</h2>
 
               <p class="text-[#8b949e] mb-6">
-                Variables declared in the <code class="bg-[#21262d] px-2 py-0.5 rounded">DECIDE</code> clause represent choices to be made for each candidate row.
+                Variables declared in the <code class="bg-[#1c2028] px-2 py-0.5 rounded">DECIDE</code> clause represent choices to be made for each candidate row.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Syntax</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Syntax</h3>
               <div class="code-block mb-8">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -286,12 +286,12 @@ graph LR
                 <pre class="language-sql"><code id="code-decide">DECIDE variable_name [, variable_name2 ...]</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Variable Types</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Variable Types</h3>
 
               <div class="grid gap-6 mb-8">
                 <!-- Binary Variables -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="toggle-left" class="w-5 h-5 text-[#8b949e]"></i>
                     Binary Variables
                   </h4>
@@ -315,7 +315,7 @@ SUCH THAT x IS BINARY</code></pre>
 
                 <!-- Integer Variables -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="hash" class="w-5 h-5 text-[#8b949e]"></i>
                     Integer Variables
                   </h4>
@@ -333,20 +333,20 @@ SUCH THAT x IS INTEGER</code></pre>
                   <ul class="text-[#8b949e] space-y-1 text-sm">
                     <li><strong>Domain:</strong> Non-negative integers only: {0, 1, 2, 3, ...}</li>
                     <li><strong>Use case:</strong> Quantity decisions ("how many of this item")</li>
-                    <li><strong>Bounds:</strong> <code class="bg-[#30363d] px-1 rounded">x >= 0</code> is automatically applied</li>
+                    <li><strong>Bounds:</strong> <code class="bg-[#262c36] px-1 rounded">x >= 0</code> is automatically applied</li>
                     <li><strong>Note:</strong> Negative values are not allowed by default</li>
                   </ul>
                 </div>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Variable Scope</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Variable Scope</h3>
               <p class="text-[#8b949e] mb-4">
                 Decision variables are available in:
               </p>
               <ul class="list-disc list-inside text-[#8b949e] mb-6 space-y-1">
-                <li><code class="bg-[#21262d] px-1 rounded">SUCH THAT</code> clause (constraints)</li>
-                <li><code class="bg-[#21262d] px-1 rounded">MAXIMIZE</code>/<code class="bg-[#21262d] px-1 rounded">MINIMIZE</code> clause (objective)</li>
-                <li><code class="bg-[#21262d] px-1 rounded">SELECT</code> clause (output projection)</li>
+                <li><code class="bg-[#1c2028] px-1 rounded">SUCH THAT</code> clause (constraints)</li>
+                <li><code class="bg-[#1c2028] px-1 rounded">MAXIMIZE</code>/<code class="bg-[#1c2028] px-1 rounded">MINIMIZE</code> clause (objective)</li>
+                <li><code class="bg-[#1c2028] px-1 rounded">SELECT</code> clause (output projection)</li>
               </ul>
 
               <div class="code-block mb-8">
@@ -365,7 +365,7 @@ SUCH THAT x IS BINARY
 MAXIMIZE SUM(x * profit);</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Multiple Variables</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Multiple Variables</h3>
               <div class="code-block mb-6">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -382,8 +382,8 @@ SUCH THAT
     AND x + y <= 10</code></pre>
               </div>
 
-              <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#58a6ff] rounded-lg p-6">
-                <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+              <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#58a6ff] rounded-lg p-6">
+                <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
                   <i data-lucide="info" class="w-5 h-5 text-[#8b949e]"></i>
                   Important Notes
                 </h4>
@@ -399,18 +399,18 @@ SUCH THAT
                  CONSTRAINTS
                  ============================================ -->
             <section id="constraints" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Constraints</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Constraints</h2>
 
               <p class="text-[#8b949e] mb-6">
-                Constraints in the <code class="bg-[#21262d] px-2 py-0.5 rounded">SUCH THAT</code> clause define feasible solutions.
+                Constraints in the <code class="bg-[#1c2028] px-2 py-0.5 rounded">SUCH THAT</code> clause define feasible solutions.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Constraint Types</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Constraint Types</h3>
 
               <div class="grid gap-6 mb-8">
                 <!-- Row-Level Constraints -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="font-semibold text-[#e6edf3] mb-3">Row-Level Constraints</h4>
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3">Row-Level Constraints</h4>
                   <p class="text-[#8b949e] text-sm mb-4">Applied independently to each row.</p>
                   <div class="code-block">
                     <div class="code-header">
@@ -429,7 +429,7 @@ SUCH THAT
 
                 <!-- Aggregate Constraints -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="font-semibold text-[#e6edf3] mb-3">Aggregate Constraints</h4>
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3">Aggregate Constraints</h4>
                   <p class="text-[#8b949e] text-sm mb-4">Applied to the collection of selected rows.</p>
                   <div class="code-block">
                     <div class="code-header">
@@ -446,44 +446,44 @@ SUCH THAT
                 </div>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Supported Operators</h3>
-              <div class="table-wrapper rounded-lg border border-[#30363d] overflow-hidden mb-8">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Supported Operators</h3>
+              <div class="table-wrapper rounded-lg border border-[#262c36] overflow-hidden mb-8">
                 <table class="w-full">
                   <thead>
-                    <tr class="bg-[#21262d]">
-                      <th class="text-left px-4 py-3 text-[#e6edf3]">Operator</th>
-                      <th class="text-left px-4 py-3 text-[#e6edf3]">Meaning</th>
-                      <th class="text-left px-4 py-3 text-[#e6edf3]">Example</th>
+                    <tr class="bg-[#1c2028]">
+                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Operator</th>
+                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Meaning</th>
+                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Example</th>
                     </tr>
                   </thead>
                   <tbody class="text-[#8b949e]">
                     <tr>
-                      <td class="px-4 py-3"><code class="bg-[#21262d] px-2 py-0.5 rounded">=</code></td>
+                      <td class="px-4 py-3"><code class="bg-[#1c2028] px-2 py-0.5 rounded">=</code></td>
                       <td class="px-4 py-3">Equality</td>
                       <td class="px-4 py-3"><code class="text-sm">x = 1</code></td>
                     </tr>
                     <tr>
-                      <td class="px-4 py-3"><code class="bg-[#21262d] px-2 py-0.5 rounded">&lt;&gt;</code></td>
+                      <td class="px-4 py-3"><code class="bg-[#1c2028] px-2 py-0.5 rounded">&lt;&gt;</code></td>
                       <td class="px-4 py-3">Not equal (BINARY variables only)</td>
                       <td class="px-4 py-3"><code class="text-sm">x &lt;&gt; 0</code></td>
                     </tr>
                     <tr>
-                      <td class="px-4 py-3"><code class="bg-[#21262d] px-2 py-0.5 rounded">&lt;</code></td>
+                      <td class="px-4 py-3"><code class="bg-[#1c2028] px-2 py-0.5 rounded">&lt;</code></td>
                       <td class="px-4 py-3">Less than</td>
                       <td class="px-4 py-3"><code class="text-sm">x &lt; 10</code></td>
                     </tr>
                     <tr>
-                      <td class="px-4 py-3"><code class="bg-[#21262d] px-2 py-0.5 rounded">&lt;=</code></td>
+                      <td class="px-4 py-3"><code class="bg-[#1c2028] px-2 py-0.5 rounded">&lt;=</code></td>
                       <td class="px-4 py-3">Less than or equal</td>
                       <td class="px-4 py-3"><code class="text-sm">SUM(x * weight) &lt;= 50</code></td>
                     </tr>
                     <tr>
-                      <td class="px-4 py-3"><code class="bg-[#21262d] px-2 py-0.5 rounded">&gt;</code></td>
+                      <td class="px-4 py-3"><code class="bg-[#1c2028] px-2 py-0.5 rounded">&gt;</code></td>
                       <td class="px-4 py-3">Greater than</td>
                       <td class="px-4 py-3"><code class="text-sm">x &gt; 0</code></td>
                     </tr>
                     <tr>
-                      <td class="px-4 py-3"><code class="bg-[#21262d] px-2 py-0.5 rounded">&gt;=</code></td>
+                      <td class="px-4 py-3"><code class="bg-[#1c2028] px-2 py-0.5 rounded">&gt;=</code></td>
                       <td class="px-4 py-3">Greater than or equal</td>
                       <td class="px-4 py-3"><code class="text-sm">SUM(x) &gt;= 3</code></td>
                     </tr>
@@ -493,12 +493,12 @@ SUCH THAT
 
 
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Supported Constructs</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Supported Constructs</h3>
 
               <div class="space-y-6 mb-8">
                 <!-- BETWEEN -->
                 <div>
-                  <h4 class="font-semibold text-[#e6edf3] mb-3">BETWEEN</h4>
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3">BETWEEN</h4>
                   <div class="code-block">
                     <div class="code-header">
                       <span class="language-label">SQL</span>
@@ -516,7 +516,7 @@ SUCH THAT x >= 1 AND x <= 10</code></pre>
 
                 <!-- IN -->
                 <div>
-                  <h4 class="font-semibold text-[#e6edf3] mb-3">IN</h4>
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3">IN</h4>
                   <div class="code-block">
                     <div class="code-header">
                       <span class="language-label">SQL</span>
@@ -533,7 +533,7 @@ SUCH THAT x >= 1 AND x <= 10</code></pre>
 
                 <!-- Scalar Subqueries -->
                 <div>
-                  <h4 class="font-semibold text-[#e6edf3] mb-3">Scalar Subqueries</h4>
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3">Scalar Subqueries</h4>
                   <div class="code-block mb-4">
                     <div class="code-header">
                       <span class="language-label">SQL</span>
@@ -546,27 +546,27 @@ SUCH THAT x >= 1 AND x <= 10</code></pre>
 SUCH THAT
     SUM(x) <= (SELECT COUNT(*) FROM Drivers)</code></pre>
                   </div>
-                  <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+                  <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
                     <p class="text-[#8b949e] text-sm mb-3">
                       <strong>Important:</strong> Only <strong>uncorrelated</strong> scalar subqueries are supported. The subquery cannot reference columns from the outer query.
                     </p>
                     <div class="grid gap-3">
                       <div class="flex items-start gap-2">
                         <i data-lucide="check" class="w-5 h-5 text-[#3fb950] flex-shrink-0"></i>
-                        <code class="text-sm text-[#e6edf3]">SUM(x * price) &lt;= (SELECT AVG(budget) FROM Departments)</code>
+                        <code class="text-sm text-[#e2e8f0]">SUM(x * price) &lt;= (SELECT AVG(budget) FROM Departments)</code>
                       </div>
                       <div class="flex items-start gap-2">
                         <i data-lucide="x" class="w-5 h-5 text-[#f85149] flex-shrink-0"></i>
-                        <code class="text-sm text-[#e6edf3]">x &lt;= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code>
+                        <code class="text-sm text-[#e2e8f0]">x &lt;= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Linearity Requirement</h3>
-              <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#58a6ff] rounded-lg p-6 mb-6">
-                <h4 class="font-semibold text-[#e6edf3] mb-2 flex items-center gap-2">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Linearity Requirement</h3>
+              <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#58a6ff] rounded-lg p-6 mb-6">
+                <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
                   <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
                   All constraints must be linear in decision variables
                 </h4>
@@ -574,8 +574,8 @@ SUCH THAT
 
               <div class="grid md:grid-cols-2 gap-6 mb-8">
                 <!-- Valid -->
-                <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#3fb950] rounded-lg p-6">
-                  <h4 class="font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#3fb950] rounded-lg p-6">
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="check-circle" class="w-5 h-5 text-[#3fb950]"></i>
                     Valid Linear Expressions
                   </h4>
@@ -598,8 +598,8 @@ SUM(x * price + y * cost - z * discount)</code></pre>
                 </div>
 
                 <!-- Invalid -->
-                <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#f85149] rounded-lg p-6">
-                  <h4 class="font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#f85149] rounded-lg p-6">
+                  <h4 class="font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="x-circle" class="w-5 h-5 text-[#f85149]"></i>
                     Invalid Non-Linear Expressions
                   </h4>
@@ -622,7 +622,7 @@ cost / x</code></pre>
                 </div>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Constraint Examples</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Constraint Examples</h3>
               <div class="code-block">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -657,13 +657,13 @@ SUCH THAT
                  OBJECTIVES
                  ============================================ -->
             <section id="objectives" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Objective Functions</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Objective Functions</h2>
 
               <p class="text-[#8b949e] mb-6">
                 The objective function specifies what to optimize.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Syntax</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Syntax</h3>
               <div class="code-block mb-8">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -677,16 +677,16 @@ SUCH THAT
 MINIMIZE aggregate_expression</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Requirements</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Requirements</h3>
               <div class="bg-[#161b22] rounded-lg p-6 mb-8">
                 <ol class="list-decimal list-inside space-y-2 text-[#8b949e]">
-                  <li>Must use <code class="bg-[#30363d] px-1 rounded">SUM()</code> aggregation</li>
+                  <li>Must use <code class="bg-[#262c36] px-1 rounded">SUM()</code> aggregation</li>
                   <li>Must involve at least one decision variable</li>
                   <li>Must be linear</li>
                 </ol>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Examples</h3>
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Examples</h3>
               <div class="grid gap-6 mb-8">
                 <div class="code-block">
                   <div class="code-header">
@@ -733,8 +733,8 @@ MINIMIZE aggregate_expression</code></pre>
                 </div>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">Unsupported Aggregations</h3>
-              <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Unsupported Aggregations</h3>
+              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">SQL — Not Supported</span>
@@ -755,8 +755,8 @@ MAXIMIZE MAX(x * value)</code></pre>
                 </div>
               </div>
 
-              <div class="mt-6 bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#58a6ff] rounded-lg p-4">
-                <p class="text-[#e6edf3] text-sm">
+              <div class="mt-6 bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#58a6ff] rounded-lg p-4">
+                <p class="text-[#e2e8f0] text-sm">
                   <strong>Note:</strong> Constant terms in the objective are ignored, as they do not affect the optimal solution.
                 </p>
               </div>
@@ -766,15 +766,15 @@ MAXIMIZE MAX(x * value)</code></pre>
                  SOLVER OUTCOMES
                  ============================================ -->
             <section id="solver-outcomes" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Solver Outcomes</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Solver Outcomes</h2>
               <p class="text-[#8b949e] mb-6">
                 PackDB only returns results when the optimization problem is successfully solved to optimality. Here's what happens with different solver outcomes:
               </p>
 
               <div class="grid md:grid-cols-3 gap-6">
                 <!-- Optimal -->
-                <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#3fb950] rounded-lg p-6">
-                  <h3 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#3fb950] rounded-lg p-6">
+                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="check-circle" class="w-5 h-5 text-[#3fb950]"></i>
                     Optimal
                   </h3>
@@ -787,8 +787,8 @@ MAXIMIZE MAX(x * value)</code></pre>
                 </div>
 
                 <!-- Infeasible -->
-                <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#f85149] rounded-lg p-6">
-                  <h3 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#f85149] rounded-lg p-6">
+                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="x-circle" class="w-5 h-5 text-[#f85149]"></i>
                     Infeasible
                   </h3>
@@ -801,8 +801,8 @@ MAXIMIZE MAX(x * value)</code></pre>
                 </div>
 
                 <!-- Unbounded -->
-                <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#d29922] rounded-lg p-6">
-                  <h3 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#d29922] rounded-lg p-6">
+                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="infinity" class="w-5 h-5 text-[#d29922]"></i>
                     Unbounded
                   </h3>
@@ -815,8 +815,8 @@ MAXIMIZE MAX(x * value)</code></pre>
                 </div>
               </div>
 
-              <div class="mt-6 bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#58a6ff] rounded-lg p-4">
-                <p class="text-[#e6edf3] text-sm flex items-start gap-2">
+              <div class="mt-6 bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#58a6ff] rounded-lg p-4">
+                <p class="text-[#e2e8f0] text-sm flex items-start gap-2">
                   <i data-lucide="info" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
                   <span>
                     <strong>Note:</strong> If your query returns an error, check that your constraints are not contradictory (infeasible) and that your objective is properly bounded by the constraints (unbounded).
@@ -829,18 +829,18 @@ MAXIMIZE MAX(x * value)</code></pre>
                  FEATURES & LIMITATIONS
                  ============================================ -->
             <section id="features-limitations" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Features & Limitations</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Features & Limitations</h2>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">
                 Fully Supported
               </h3>
-              <div class="table-wrapper rounded-lg border border-[#30363d] overflow-hidden mb-8">
+              <div class="table-wrapper rounded-lg border border-[#262c36] overflow-hidden mb-8">
                 <table class="w-full">
                   <thead>
-                    <tr class="bg-[#21262d]">
-                      <th class="text-left px-4 py-3 text-[#e6edf3]">Feature</th>
-                      <th class="text-left px-4 py-3 text-[#e6edf3]">Status</th>
-                      <th class="text-left px-4 py-3 text-[#e6edf3]">Example</th>
+                    <tr class="bg-[#1c2028]">
+                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Feature</th>
+                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Status</th>
+                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Example</th>
                     </tr>
                   </thead>
                   <tbody class="text-[#8b949e]">
@@ -898,21 +898,21 @@ MAXIMIZE MAX(x * value)</code></pre>
                 </table>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e6edf3] mb-4">
+              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">
                 Technical Constraints
               </h3>
               <div class="space-y-6 mb-8">
                 <!-- Linearity -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="function-square" class="w-5 h-5 text-[#8b949e]"></i>
                     Linearity Requirement
                   </h4>
                   <p class="text-[#8b949e] mb-4">
                     PackDB currently supports only <strong>Linear Programming (LP)</strong> and <strong>Integer Linear Programming (ILP)</strong>.
                   </p>
-                  <div class="bg-[#0d1117] border border-[#30363d] rounded-md p-4 mb-4">
-                    <p class="text-[#e6edf3] text-sm font-semibold mb-2">Cannot express:</p>
+                  <div class="bg-[#0d1117] border border-[#262c36] rounded-md p-4 mb-4">
+                    <p class="text-[#e2e8f0] text-sm font-semibold mb-2">Cannot express:</p>
                     <ul class="text-[#8b949e] text-sm space-y-1">
                       <li>Quadratic objectives (e.g., <code>x * x</code>)</li>
                       <li>Variable interactions (e.g., <code>x * y</code>)</li>
@@ -923,7 +923,7 @@ MAXIMIZE MAX(x * value)</code></pre>
 
                 <!-- Subqueries -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="git-branch" class="w-5 h-5 text-[#8b949e]"></i>
                     Subquery Restrictions
                   </h4>
@@ -931,13 +931,13 @@ MAXIMIZE MAX(x * value)</code></pre>
                     Only <strong>uncorrelated scalar subqueries</strong> are supported.
                   </p>
                   <div class="grid gap-3 mb-4">
-                    <div class="flex items-start gap-2 bg-[#0d1117] border border-[#30363d] p-3 rounded-md">
+                    <div class="flex items-start gap-2 bg-[#0d1117] border border-[#262c36] p-3 rounded-md">
                       <i data-lucide="check" class="w-5 h-5 text-[#3fb950] flex-shrink-0 mt-0.5"></i>
-                      <code class="text-sm text-[#e6edf3]">SUM(x) &lt;= (SELECT AVG(capacity) FROM Resources)</code>
+                      <code class="text-sm text-[#e2e8f0]">SUM(x) &lt;= (SELECT AVG(capacity) FROM Resources)</code>
                     </div>
-                    <div class="flex items-start gap-2 bg-[#0d1117] border border-[#30363d] p-3 rounded-md">
+                    <div class="flex items-start gap-2 bg-[#0d1117] border border-[#262c36] p-3 rounded-md">
                       <i data-lucide="x" class="w-5 h-5 text-[#f85149] flex-shrink-0 mt-0.5"></i>
-                      <code class="text-sm text-[#e6edf3]">x &lt;= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code>
+                      <code class="text-sm text-[#e2e8f0]">x &lt;= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code>
                     </div>
                   </div>
                   <p class="text-[#6e7681] text-sm">
@@ -948,29 +948,29 @@ MAXIMIZE MAX(x * value)</code></pre>
 
                 <!-- Scalability -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="trending-up" class="w-5 h-5 text-[#8b949e]"></i>
                     Scalability
                   </h4>
                   <p class="text-[#8b949e] mb-4">
                     The current prototype uses an <strong>exact ILP solver</strong> (HiGHS).
                   </p>
-                  <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-4 mb-4">
-                    <h5 class="font-semibold text-[#e6edf3] mb-3">Performance Profile</h5>
+                  <div class="bg-[#0d1117] border border-[#262c36] rounded-lg p-4 mb-4">
+                    <h5 class="font-semibold text-[#e2e8f0] mb-3">Performance Profile</h5>
                     <div class="space-y-2">
                       <div class="flex items-center gap-3">
-                        <span class="w-20 text-sm font-medium text-[#e6edf3]">Fast</span>
-                        <div class="flex-1 bg-[#30363d] rounded-sm h-2"></div>
+                        <span class="w-20 text-sm font-medium text-[#e2e8f0]">Fast</span>
+                        <div class="flex-1 bg-[#262c36] rounded-sm h-2"></div>
                         <span class="text-sm text-[#8b949e]">&lt; 1,000 rows</span>
                       </div>
                       <div class="flex items-center gap-3">
-                        <span class="w-20 text-sm font-medium text-[#e6edf3]">Acceptable</span>
-                        <div class="flex-1 bg-[#30363d] rounded-sm h-2"></div>
+                        <span class="w-20 text-sm font-medium text-[#e2e8f0]">Acceptable</span>
+                        <div class="flex-1 bg-[#262c36] rounded-sm h-2"></div>
                         <span class="text-sm text-[#8b949e]">1K - 10K rows</span>
                       </div>
                       <div class="flex items-center gap-3">
-                        <span class="w-20 text-sm font-medium text-[#e6edf3]">Slow</span>
-                        <div class="flex-1 bg-[#30363d] rounded-sm h-2"></div>
+                        <span class="w-20 text-sm font-medium text-[#e2e8f0]">Slow</span>
+                        <div class="flex-1 bg-[#262c36] rounded-sm h-2"></div>
                         <span class="text-sm text-[#8b949e]">&gt; 10,000 rows</span>
                       </div>
                     </div>
@@ -986,12 +986,12 @@ MAXIMIZE MAX(x * value)</code></pre>
 
                 <!-- Memory -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="hard-drive" class="w-5 h-5 text-[#8b949e]"></i>
                     Memory Requirements
                   </h4>
                   <p class="text-[#8b949e] mb-4">
-                    The <code class="bg-[#30363d] px-1 rounded">PhysicalDecide</code> operator materializes all candidate rows in memory.
+                    The <code class="bg-[#262c36] px-1 rounded">PhysicalDecide</code> operator materializes all candidate rows in memory.
                   </p>
                   <p class="text-[#8b949e] text-sm mb-2">
                     <strong>Impact:</strong> Very large candidate sets may exceed available RAM.
@@ -1004,12 +1004,12 @@ MAXIMIZE MAX(x * value)</code></pre>
 
                 <!-- Single Decision Context -->
                 <div class="bg-[#161b22] rounded-lg p-6">
-                  <h4 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
+                  <h4 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
                     <i data-lucide="table" class="w-5 h-5 text-[#8b949e]"></i>
                     Single Decision Context
                   </h4>
                   <p class="text-[#8b949e] mb-4">
-                    JOINs work fine with PackDB—decision variables operate on the result of the <code class="bg-[#30363d] px-1 rounded">WHERE</code>/<code class="bg-[#30363d] px-1 rounded">HAVING</code> clauses (the joined rows).
+                    JOINs work fine with PackDB—decision variables operate on the result of the <code class="bg-[#262c36] px-1 rounded">WHERE</code>/<code class="bg-[#262c36] px-1 rounded">HAVING</code> clauses (the joined rows).
                   </p>
                   <div class="code-block mb-4">
                     <div class="code-header">
@@ -1035,7 +1035,7 @@ DECIDE x ON orders, y ON customers  -- Cannot bind variables to specific tables<
                   </div>
                   <p class="text-[#6e7681] text-sm">
                     <i data-lucide="info" class="w-4 h-4 inline"></i>
-                    All decision variables share a single context: the rows produced by the <code class="bg-[#30363d] px-1 rounded">WHERE</code>/<code class="bg-[#30363d] px-1 rounded">HAVING</code> clauses.
+                    All decision variables share a single context: the rows produced by the <code class="bg-[#262c36] px-1 rounded">WHERE</code>/<code class="bg-[#262c36] px-1 rounded">HAVING</code> clauses.
                   </p>
                 </div>
               </div>
@@ -1045,34 +1045,34 @@ DECIDE x ON orders, y ON customers  -- Cannot bind variables to specific tables<
                  BEST PRACTICES
                  ============================================ -->
             <section id="best-practices" class="mb-16">
-              <h2 class="text-3xl font-bold text-[#e6edf3] mb-6">Best Practices</h2>
+              <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Best Practices</h2>
 
               <div class="space-y-8">
                 <!-- Practice 1 -->
-                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
-                  <h3 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">1</span>
+                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
+                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">1</span>
                     Filter Aggressively with WHERE
                   </h3>
                   <p class="text-[#8b949e] mb-4">
-                    The optimization problem size grows with the number of candidate rows. Use <code class="bg-[#30363d] px-1 rounded">WHERE</code> to reduce the input.
+                    The optimization problem size grows with the number of candidate rows. Use <code class="bg-[#262c36] px-1 rounded">WHERE</code> to reduce the input.
                   </p>
                   <div class="grid md:grid-cols-2 gap-4">
-                    <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#f85149] rounded-lg p-4">
-                      <p class="text-[#e6edf3] text-sm font-semibold mb-2 flex items-center gap-1">
+                    <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#f85149] rounded-lg p-4">
+                      <p class="text-[#e2e8f0] text-sm font-semibold mb-2 flex items-center gap-1">
                         <i data-lucide="x" class="w-4 h-4 text-[#f85149]"></i> Slow
                       </p>
-                      <pre class="text-xs text-[#e6edf3] overflow-x-auto"><code>SELECT *
+                      <pre class="text-xs text-[#e2e8f0] overflow-x-auto"><code>SELECT *
 FROM Products
 DECIDE x
 SUCH THAT x IS BINARY
 MAXIMIZE SUM(x * value);</code></pre>
                     </div>
-                    <div class="bg-[#161b22] border border-[#30363d] border-l-4 border-l-[#3fb950] rounded-lg p-4">
-                      <p class="text-[#e6edf3] text-sm font-semibold mb-2 flex items-center gap-1">
+                    <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#3fb950] rounded-lg p-4">
+                      <p class="text-[#e2e8f0] text-sm font-semibold mb-2 flex items-center gap-1">
                         <i data-lucide="check" class="w-4 h-4 text-[#3fb950]"></i> Better
                       </p>
-                      <pre class="text-xs text-[#e6edf3] overflow-x-auto"><code>SELECT *
+                      <pre class="text-xs text-[#e2e8f0] overflow-x-auto"><code>SELECT *
 FROM Products
 WHERE category = 'electronics'
   AND price > 100
@@ -1085,9 +1085,9 @@ MAXIMIZE SUM(x * value);</code></pre>
                 </div>
 
                 <!-- Practice 2 -->
-                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
-                  <h3 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">2</span>
+                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
+                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">2</span>
                     Use Binary Variables When Possible
                   </h3>
                   <p class="text-[#8b949e] mb-4">
@@ -1108,9 +1108,9 @@ SUCH THAT quantity IS INTEGER</code></pre>
                 </div>
 
                 <!-- Practice 3 -->
-                <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-6">
-                  <h3 class="text-lg font-semibold text-[#e6edf3] mb-3 flex items-center gap-2">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#30363d] text-[#e6edf3] rounded-md flex items-center justify-center font-bold text-sm">3</span>
+                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
+                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
+                    <span class="flex-shrink-0 w-7 h-7 bg-[#262c36] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">3</span>
                     Start Simple, Debug Incrementally
                   </h3>
                   <p class="text-[#8b949e] mb-4">
@@ -1151,75 +1151,40 @@ SUCH THAT quantity IS INTEGER</code></pre>
   <!-- ============================================
        FOOTER
        ============================================ -->
-  <footer class="bg-[#010409] text-gray-300">
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-
-        <!-- Col 1: Branding -->
         <div>
           <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-gray-400 mb-4">
-            Optimization-enabled SQL queries for DuckDB
-          </p>
-          <p class="text-xs text-gray-500">
-            &copy; 2025 HUDA Lab<br>
-            NYU Abu Dhabi &amp; UMass Amherst
-          </p>
+          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
-
-        <!-- Col 2: Documentation -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Documentation</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-gray-400 hover:text-white transition-colors">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-gray-400 hover:text-white transition-colors">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-gray-400 hover:text-white transition-colors">Examples</a></li>
+            <li><a href="getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
+            <li><a href="documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
+            <li><a href="examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
           </ul>
         </div>
-
-        <!-- Col 3: Resources -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Resources</h4>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li>
-              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                <i data-lucide="github" class="w-4 h-4"></i>
-                GitHub Repository
-              </a>
-            </li>
-            <li>
-              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">Issue Tracker</a>
-            </li>
-            <li><a href="about.html#research" class="text-gray-400 hover:text-white transition-colors">Research Papers</a></li>
-            <li>
-              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="text-gray-400 hover:text-white transition-colors">HUDA Lab</a>
-            </li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
+            <li><a href="about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
           </ul>
         </div>
-
-        <!-- Col 4: Contact -->
         <div>
-          <h4 class="font-semibold text-white mb-3">Contact</h4>
-          <ul class="space-y-2 text-sm text-gray-400">
-            <li>NYU Abu Dhabi</li>
-            <li>Saadiyat Island</li>
-            <li>Abu Dhabi, UAE</li>
-            <li>
-              <a href="mailto:huda-lab@nyu.edu" class="text-blue-400 hover:text-blue-300 transition-colors">
-                huda-lab@nyu.edu
-              </a>
-            </li>
+          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-[#6e7681]">
+            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
-
       </div>
-
-      <!-- Bottom Bar -->
-      <div class="mt-8 pt-8 border-t border-gray-800 text-center text-sm text-gray-500">
-        <p>&copy; 2025 HUDA Lab | NYU Abu Dhabi &amp; UMass Amherst | Built with DuckDB and HiGHS</p>
+      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>
   </footer>

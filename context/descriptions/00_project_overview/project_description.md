@@ -8,7 +8,9 @@ Standard Database Management Systems (DBMS) are excellent at retrieving and aggr
 
 ### 1.2 Solution: PackDB
 
-PackDB extends DuckDB with native support for **Package Queries**. It introduces a declarative `DECIDE` clause to SQL, allowing users to express these optimization problems directly within the query language. PackDB handles the translation of these high-level requirements into an Integer Linear Programming (ILP) model, solves it using an embedded solver (HiGHS), and returns the optimal package as standard relational tables.
+PackDB extends DuckDB with native support for **Package Queries**. It introduces a declarative `DECIDE` clause to SQL, allowing users to express these optimization problems directly within the query language. PackDB handles the translation of these high-level requirements into an Integer Linear Programming (ILP) model, solves it using an embedded solver, and returns the optimal package as standard relational tables.
+
+**Solver Strategy**: PackDB first attempts to use **Gurobi** (a high-performance commercial solver). If Gurobi is not available (it requires a paid license), PackDB automatically falls back to **HiGHS**, an open-source solver bundled with PackDB.
 
 ## 2. Project Goals
 
@@ -43,4 +45,4 @@ PackDB modifies the standard query processing pipeline:
 1.  **Parser**: Recognizes the new keywords and builds a symbolic representation.
 2.  **Binder**: Validates variable scopes, types, and mathematical properties (linearity).
 3.  **Planner**: Inserts a `LogicalDecide` operator into the query plan.
-4.  **Execution**: The `PhysicalDecide` operator materializes data, formulates the ILP model, invokes the HiGHS solver, and maps results back to the query output.
+4.  **Execution**: The `PhysicalDecide` operator materializes data, formulates the ILP model, invokes the solver (Gurobi if available, otherwise HiGHS), and maps results back to the query output.

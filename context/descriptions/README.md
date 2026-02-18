@@ -38,7 +38,7 @@ The DECIDE clause passes through three custom stages after standard DuckDB parsi
 | ----------------- | ------------------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------- |
 | Parser / Symbolic | Normalizes algebraic expressions into canonical linear form               | `01_pipeline/01_parser.md`    | `src/packdb/symbolic/decide_symbolic.cpp`                                          |
 | Binder            | Validates linearity, binds decision variables, resolves types             | `01_pipeline/02_binder.md`    | `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp` |
-| Execution         | Materializes data, builds the solver matrix, runs HiGHS, projects results | `01_pipeline/03_execution.md` | `src/execution/operator/decide/physical_decide.cpp`                                |
+| Execution         | Materializes data, builds the solver matrix, runs Gurobi/HiGHS, projects results | `01_pipeline/03_execution.md` | `src/execution/operator/decide/physical_decide.cpp`                                |
 
 For the full source-tree map (all headers, all classes, all key methods), see
 `01_pipeline/code_structure.md`.

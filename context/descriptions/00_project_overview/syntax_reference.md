@@ -54,11 +54,13 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 - `COUNT(x)` is **Not Supported** (Use `SUM(x)` where x is boolean).
 - `AVG(x)` is **Not Supported** (Non-linear ratio).
 
-## 6. Conditional Constraints — `WHEN`
+## 6. Conditional Expressions — `WHEN`
 
-The `WHEN` keyword enables conditional constraints within `SUCH THAT`. A constraint with `WHEN` only applies to rows where the condition evaluates to true. Rows where the condition is false or NULL are excluded from that constraint.
+The `WHEN` keyword enables conditional constraints and conditional objectives. A `WHEN` clause causes the expression to apply only to rows where the condition evaluates to true. Rows where the condition is false or NULL are excluded.
 
-**Syntax**: `constraint_expression WHEN condition`
+**Syntax**: `expression WHEN condition`
+
+### 6.1 WHEN on Constraints
 
 ```sql
 SUCH THAT
@@ -67,14 +69,24 @@ SUCH THAT
     x <= 1
 ```
 
-**Rules**:
-- `WHEN` is postfix: the constraint comes first, then `WHEN condition`.
+**Execution**: WHEN conditions create per-row boolean masks. For aggregate constraints (`SUM`), masked-out rows are excluded from the summation. For per-row constraints, masked-out rows skip constraint generation entirely.
+
+### 6.2 WHEN on Objective
+
+```sql
+MAXIMIZE SUM(x * profit) WHEN category = 'electronics'
+MINIMIZE SUM(x * cost) WHEN region = 'US'
+```
+
+**Execution**: Objective coefficients for non-matching rows are zeroed out. The solver sees a standard ILP where only matching rows contribute to the objective value.
+
+### 6.3 Rules (applies to both constraints and objectives)
+
+- `WHEN` is postfix: the expression comes first, then `WHEN condition`.
 - The `WHEN` condition must reference only table columns, **not** decision variables.
-- NULL conditions are treated as false (constraint does not apply for that row).
+- NULL conditions are treated as false (expression does not apply for that row).
 - When a `WHEN` condition contains `AND`/`OR`, parentheses are required:
   ```sql
   SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
   ```
-- Constraints without `WHEN` apply unconditionally to all rows.
-
-**Execution**: WHEN conditions create per-row boolean masks. For aggregate constraints (`SUM`), masked-out rows are excluded from the summation. For per-row constraints, masked-out rows skip constraint generation entirely.
+- Expressions without `WHEN` apply unconditionally to all rows.

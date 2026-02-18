@@ -18,11 +18,14 @@ Once all data is collected, the operator transforms the data-centric view into a
 2.  **Constraint Evaluation**:
     -   The operator evaluates the expression trees for the constraint coefficients.
     -   Example: If the constraint is `SUM(cost * x) <= 100`, the operator evaluates `cost` for every row to generate the vector coefficients $[c_1, c_2, ..., c_n]$.
-3.  **Matrix Construction**: These values are passed to the HiGHS API to build the Constraint Matrix (Sparse format).
+3.  **Matrix Construction**: These values are passed to the solver API to build the Constraint Matrix (Sparse format).
+    -   **Objective WHEN**: If the objective has a `WHEN` condition (e.g., `MAXIMIZE SUM(x * profit) WHEN category = 'A'`), objective coefficients for non-matching rows are zeroed out after evaluation. The solver receives a standard ILP with no special handling needed.
 
-### 2.3 Phase 3: Solving (Highs Integration)
-PackDB links directly to `libhighs`.
--   **API**: We use the Highs C++ API.
+### 2.3 Phase 3: Solving (Gurobi / HiGHS)
+PackDB supports two ILP solvers with automatic fallback:
+1.  **Gurobi** (preferred): A high-performance commercial solver. PackDB attempts to use Gurobi first via its C API.
+2.  **HiGHS** (fallback): An open-source solver bundled with PackDB. Used automatically when Gurobi is not available (no license).
+
 -   **Configuration**: The solver is configured with a time limit (default 60s) and a "Silent" logging profile to avoid polluting the database logs.
 -   **Outcome**: The solver returns a status (Optimal, Infeasible, Unbounded) and a solution vector.
 

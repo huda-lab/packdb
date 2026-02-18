@@ -50,9 +50,21 @@ Note: DuckDB's internal `LogicalType::INTEGER` is used for all decision variable
 
 ## 5. `WHEN` Condition Validation
 
+### 5.1 WHEN on Constraints
+
 The `DecideConstraintsBinder` handles WHEN constraints via `BindWhenConstraint`:
 
 1. **Validation**: The WHEN condition (child[1]) is checked with `ExpressionContainsDecideVariable` — it must reference only table columns, not decision variables.
 2. **Constraint binding**: The constraint (child[0]) is bound through normal DECIDE constraint dispatch (linearity validation, etc.).
 3. **Condition binding**: The condition (child[1]) is bound using the base `ExpressionBinder` (via `binding_when_condition` flag), bypassing DECIDE-specific validation since the condition is a data filter, not an optimization constraint.
 4. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG` carries both the bound constraint and bound condition downstream to the execution layer.
+
+### 5.2 WHEN on Objective
+
+The `DecideObjectiveBinder` handles WHEN on the objective (`MAXIMIZE SUM(...) WHEN condition`) using the same pattern:
+
+1. **Detection**: The binder checks for a `FunctionExpression` with `function_name == WHEN_CONSTRAINT_TAG` at the top level.
+2. **Validation**: The WHEN condition must not reference decision variables.
+3. **Objective binding**: The objective (child[0]) is bound through normal objective binding (SUM validation, linearity check).
+4. **Condition binding**: The condition (child[1]) is bound via `ExpressionBinder` using the `binding_when_condition` flag bypass.
+5. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG`, identical in structure to the constraint WHEN output.

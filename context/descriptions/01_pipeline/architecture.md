@@ -10,7 +10,7 @@ PackDB is implemented as an extension to DuckDB. It leverages DuckDB's extensibl
 *   **Symbolic Layer (Parser)**: Uses `SymbolicC++` to parse and normalize algebraic expressions within the `DECIDE` and `SUCH THAT` clauses. It converts user-friendly SQL expressions into a canonical form.
 *   **Binder & Optimizer**: Validates the mathematical properties of the optimization problem (e.g., linearity checks) and optimizes the execution plan.
 *   **Execution Runtime**: A dedicated physical operator (`PhysicalDecide`) that acts as a bridge between the relational engine and the linear solver.
-*   **HiGHS Solver**: An open-source, high-performance linear optimization solver embedded directly into the PackDB extension.
+*   **Solvers**: PackDB supports two ILP solvers — **Gurobi** (commercial, preferred) and **HiGHS** (open-source, bundled fallback). At solve time, Gurobi is attempted first; if unavailable, HiGHS is used automatically.
 
 ## 2. Query Lifecycle
 
@@ -29,7 +29,7 @@ graph TD
     subgraph PackDB Execution
         Exec --> Data[Materialize Candidates]
         Data --> Matrix[Build Solver Matrix]
-        Matrix --> Solver[HiGHS Solver]
+        Matrix --> Solver[Solver: Gurobi / HiGHS]
         Solver --> Result[Map Solution to Rows]
     end
     end
