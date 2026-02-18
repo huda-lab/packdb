@@ -34,6 +34,7 @@ struct LinearConstraint {
 //! Represents the objective function after term extraction
 struct LinearObjective {
     vector<LinearTerm> terms;           // All objective terms
+    unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
 
     LinearObjective() = default;
 };

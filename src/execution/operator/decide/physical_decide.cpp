@@ -260,11 +260,26 @@ public:
             expr = expr->Cast<BoundCastExpression>().child.get();
         }
 
+        // PackDB: Check for WHEN wrapper on objective
+        unique_ptr<Expression> when_cond;
+        if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+            auto &conj = expr->Cast<BoundConjunctionExpression>();
+            if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+                when_cond = conj.children[1]->Copy();
+                // Unwrap to get the actual objective expression
+                expr = conj.children[0].get();
+                while (expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    expr = expr->Cast<BoundCastExpression>().child.get();
+                }
+            }
+        }
+
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
             auto &agg = expr->Cast<BoundAggregateExpression>();
 
             objective = make_uniq<LinearObjective>();
             op.ExtractLinearTerms(*agg.children[0], objective->terms);
+            objective->when_condition = std::move(when_cond);
         }
     }
 
@@ -839,6 +854,84 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
                     gstate.evaluated_objective_coefficients[term_idx].push_back(double_val);
                 }
+            }
+        }
+
+        // PackDB: Apply WHEN mask to objective coefficients
+        if (gstate.objective->when_condition) {
+            std::function<unique_ptr<Expression>(const Expression&)> TransformCondExpr;
+            TransformCondExpr = [&](const Expression &cond_expr) -> unique_ptr<Expression> {
+                if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    auto &colref = cond_expr.Cast<BoundColumnRefExpression>();
+                    return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                    auto &func = cond_expr.Cast<BoundFunctionExpression>();
+                    vector<unique_ptr<Expression>> new_children;
+                    for (auto &child : func.children) {
+                        new_children.push_back(TransformCondExpr(*child));
+                    }
+                    unique_ptr<FunctionData> new_bind_info;
+                    if (func.bind_info) {
+                        new_bind_info = func.bind_info->Copy();
+                    }
+                    return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    auto &cast = cond_expr.Cast<BoundCastExpression>();
+                    auto transformed_child = TransformCondExpr(*cast.child);
+                    return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+                    auto &comp = cond_expr.Cast<BoundComparisonExpression>();
+                    auto left = TransformCondExpr(*comp.left);
+                    auto right = TransformCondExpr(*comp.right);
+                    return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+                    auto &conj = cond_expr.Cast<BoundConjunctionExpression>();
+                    auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
+                    for (auto &child : conj.children) {
+                        result->children.push_back(TransformCondExpr(*child));
+                    }
+                    return std::move(result);
+                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+                    auto &op_expr = cond_expr.Cast<BoundOperatorExpression>();
+                    auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
+                    for (auto &child : op_expr.children) {
+                        result->children.push_back(TransformCondExpr(*child));
+                    }
+                    return std::move(result);
+                } else {
+                    return cond_expr.Copy();
+                }
+            };
+
+            auto transformed_condition = TransformCondExpr(*gstate.objective->when_condition);
+
+            ExpressionExecutor cond_executor(context);
+            cond_executor.AddExpression(*transformed_condition);
+
+            ColumnDataScanState obj_cond_scan_state;
+            gstate.data.InitializeScan(obj_cond_scan_state);
+            DataChunk obj_cond_chunk;
+            obj_cond_chunk.Initialize(context, gstate.data.Types());
+
+            idx_t row_offset = 0;
+            while (gstate.data.Scan(obj_cond_scan_state, obj_cond_chunk)) {
+                DataChunk cond_result;
+                vector<LogicalType> result_types = {LogicalType::BOOLEAN};
+                cond_result.Initialize(context, result_types);
+                cond_executor.Execute(obj_cond_chunk, cond_result);
+
+                auto &vec = cond_result.data[0];
+                for (idx_t row_in_chunk = 0; row_in_chunk < obj_cond_chunk.size(); row_in_chunk++) {
+                    Value val = vec.GetValue(row_in_chunk);
+                    bool condition_met = val.IsNull() ? false : val.GetValue<bool>();
+                    if (!condition_met) {
+                        // Zero out all objective coefficients for this row
+                        for (idx_t term_idx = 0; term_idx < gstate.evaluated_objective_coefficients.size(); term_idx++) {
+                            gstate.evaluated_objective_coefficients[term_idx][row_offset + row_in_chunk] = 0.0;
+                        }
+                    }
+                }
+                row_offset += obj_cond_chunk.size();
             }
         }
 

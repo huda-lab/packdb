@@ -24,6 +24,7 @@ protected:
 
 private:
     DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) override;
+    bool binding_when_condition = false;
 };
 
 } // namespace duckdb
