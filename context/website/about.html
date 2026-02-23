@@ -53,7 +53,7 @@
   <!-- ============================================
        HEADER / NAVIGATION
        ============================================ -->
-  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#21262d] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
@@ -94,14 +94,14 @@
     </nav>
 
     <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#262c36] bg-[#0d1117]" aria-hidden="true">
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#21262d] bg-[#0d1117]" aria-hidden="true">
       <div class="container mx-auto px-4 py-4 space-y-4">
         <a href="index.html" class="block py-2 nav-link">Home</a>
         <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
         <a href="documentation.html" class="block py-2 nav-link">Docs</a>
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link active">About</a>
-        <hr class="border-[#262c36]">
+        <hr class="border-[#21262d]">
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
            class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
           <i data-lucide="github" class="w-5 h-5"></i>
@@ -133,7 +133,7 @@
         </nav>
 
         <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl font-bold text-[#e2e8f0] mb-4">
+          <h1 class="text-4xl md:text-5xl text-[#e2e8f0] mb-4">
             About PackDB
           </h1>
           <p class="text-xl text-[#8b949e]">
@@ -159,7 +159,6 @@
                 <li><a href="#team" class="sidebar-link">The Team</a></li>
                 <li><a href="#huda-lab" class="sidebar-link">HUDA Lab</a></li>
                 <li><a href="#technical" class="sidebar-link">Technical Details</a></li>
-                <li><a href="#limitations" class="sidebar-link">Limitations</a></li>
                 <li><a href="#future" class="sidebar-link">Future Development</a></li>
               </ul>
             </nav>
@@ -173,67 +172,46 @@
                RESEARCH FOUNDATION
                ============================================ -->
           <section id="research" class="mb-16">
-            <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Research Foundation</h2>
+            <h2 class="text-3xl text-[#e2e8f0] mb-6">Research Foundation</h2>
             <p class="text-[#8b949e] mb-6">
               PackDB builds on the <strong>Package Queries</strong> framework:
             </p>
 
-            <div class="space-y-6">
+            <div class="space-y-5">
               <!-- Paper 1 -->
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
-                <div class="flex items-start gap-4">
-                  <div class="w-10 h-10 rounded-lg bg-[#1c2028] flex items-center justify-center flex-shrink-0">
-                    <i data-lucide="file-text" class="w-5 h-5 text-[#8b949e]"></i>
-                  </div>
-                  <div>
-                    <h3 class="font-semibold text-[#e2e8f0] mb-1">Scalable Package Queries in Relational Database Systems</h3>
-                    <p class="text-sm text-[#8b949e] mb-2">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
-                    <p class="text-sm text-[#6e7681] mb-3"><em>VLDB 2016</em></p>
-                    <a href="https://doi.org/10.14778/2904483.2904489" target="_blank" rel="noopener noreferrer"
-                       class="text-sm text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
-                      <i data-lucide="external-link" class="w-4 h-4"></i>
-                      Read Paper
-                    </a>
-                  </div>
-                </div>
+              <div class="py-4 border-b border-[#1c2028]">
+                <h3 class="font-semibold text-[#e2e8f0] mb-1">Scalable Package Queries in Relational Database Systems</h3>
+                <p class="text-sm text-[#8b949e] mb-1">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+                <p class="text-sm text-[#6e7681] mb-2"><em>VLDB 2016</em></p>
+                <a href="https://doi.org/10.14778/2904483.2904489" target="_blank" rel="noopener noreferrer"
+                   class="text-sm text-[#58a6ff] hover:text-[#79c0ff] inline-flex items-center gap-1">
+                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                  Read Paper
+                </a>
               </div>
 
               <!-- Paper 2 -->
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
-                <div class="flex items-start gap-4">
-                  <div class="w-10 h-10 rounded-lg bg-[#1c2028] flex items-center justify-center flex-shrink-0">
-                    <i data-lucide="file-text" class="w-5 h-5 text-[#8b949e]"></i>
-                  </div>
-                  <div>
-                    <h3 class="font-semibold text-[#e2e8f0] mb-1">Scalable Computation of High-Order Optimization Queries</h3>
-                    <p class="text-sm text-[#8b949e] mb-2">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
-                    <p class="text-sm text-[#6e7681] mb-3"><em>Communications of the ACM, 2019</em></p>
-                    <a href="https://doi.org/10.1145/3299881" target="_blank" rel="noopener noreferrer"
-                       class="text-sm text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
-                      <i data-lucide="external-link" class="w-4 h-4"></i>
-                      Read Paper
-                    </a>
-                  </div>
-                </div>
+              <div class="py-4 border-b border-[#1c2028]">
+                <h3 class="font-semibold text-[#e2e8f0] mb-1">Scalable Computation of High-Order Optimization Queries</h3>
+                <p class="text-sm text-[#8b949e] mb-1">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+                <p class="text-sm text-[#6e7681] mb-2"><em>Communications of the ACM, 2019</em></p>
+                <a href="https://doi.org/10.1145/3299881" target="_blank" rel="noopener noreferrer"
+                   class="text-sm text-[#58a6ff] hover:text-[#79c0ff] inline-flex items-center gap-1">
+                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                  Read Paper
+                </a>
               </div>
 
               <!-- Paper 3 -->
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
-                <div class="flex items-start gap-4">
-                  <div class="w-10 h-10 rounded-lg bg-[#1c2028] flex items-center justify-center flex-shrink-0">
-                    <i data-lucide="file-text" class="w-5 h-5 text-[#8b949e]"></i>
-                  </div>
-                  <div>
-                    <h3 class="font-semibold text-[#e2e8f0] mb-1">Scaling Package Queries to a Billion Tuples</h3>
-                    <p class="text-sm text-[#8b949e] mb-2">Anh L. Mai, Pengyu Wang, Azza Abouzied, Matteo Brucato, Peter J. Haas, Alexandra Meliou</p>
-                    <p class="text-sm text-[#6e7681] mb-3"><em>VLDB 2024</em></p>
-                    <a href="https://doi.org/10.14778/3641204.3641222" target="_blank" rel="noopener noreferrer"
-                       class="text-sm text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
-                      <i data-lucide="external-link" class="w-4 h-4"></i>
-                      Read Paper
-                    </a>
-                  </div>
-                </div>
+              <div class="py-4">
+                <h3 class="font-semibold text-[#e2e8f0] mb-1">Scaling Package Queries to a Billion Tuples</h3>
+                <p class="text-sm text-[#8b949e] mb-1">Anh L. Mai, Pengyu Wang, Azza Abouzied, Matteo Brucato, Peter J. Haas, Alexandra Meliou</p>
+                <p class="text-sm text-[#6e7681] mb-2"><em>VLDB 2024</em></p>
+                <a href="https://doi.org/10.14778/3641204.3641222" target="_blank" rel="noopener noreferrer"
+                   class="text-sm text-[#58a6ff] hover:text-[#79c0ff] inline-flex items-center gap-1">
+                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                  Read Paper
+                </a>
               </div>
             </div>
           </section>
@@ -242,63 +220,55 @@
                THE TEAM
                ============================================ -->
           <section id="team" class="mb-16">
-            <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">The Team</h2>
+            <h2 class="text-3xl text-[#e2e8f0] mb-6">The Team</h2>
 
             <!-- NYU Abu Dhabi -->
             <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">NYU Abu Dhabi</h3>
-            <div class="grid md:grid-cols-2 gap-4 mb-8">
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+            <div class="grid md:grid-cols-2 gap-x-8 gap-y-4 mb-8">
+              <div class="py-3 border-b border-[#1c2028]">
                 <a href="https://azza.azurewebsites.net/" target="_blank" rel="noopener noreferrer"
                    class="font-semibold text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
                   Prof. Azza Abouzied
                   <i data-lucide="external-link" class="w-3 h-3"></i>
                 </a>
                 <p class="text-sm text-[#8b949e]">Principal Investigator, Director HUDA Lab</p>
-                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
               </div>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <p class="font-semibold text-[#e2e8f0]">Anh Mai</p>
                 <p class="text-sm text-[#8b949e]">PhD Student, Sketch-Refine algorithm</p>
-                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
               </div>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <p class="font-semibold text-[#e2e8f0]">Filip Milisov</p>
                 <p class="text-sm text-[#8b949e]">Research Assistant</p>
-                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
               </div>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <p class="font-semibold text-[#e2e8f0]">Hatim Rehmanjee</p>
                 <p class="text-sm text-[#8b949e]">Capstone Project 2025-2026</p>
-                <p class="text-sm text-[#6e7681]">NYU Abu Dhabi</p>
               </div>
             </div>
 
             <!-- UMass Amherst -->
             <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">UMass Amherst</h3>
-            <div class="grid md:grid-cols-2 gap-4">
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+            <div class="grid md:grid-cols-2 gap-x-8 gap-y-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <a href="https://people.cs.umass.edu/~ameli/" target="_blank" rel="noopener noreferrer"
                    class="font-semibold text-[#58a6ff] hover:text-[#79c0ff] flex items-center gap-1">
                   Prof. Alexandra Meliou
                   <i data-lucide="external-link" class="w-3 h-3"></i>
                 </a>
                 <p class="text-sm text-[#8b949e]">Co-PI, Package Queries</p>
-                <p class="text-sm text-[#6e7681]">UMass Amherst</p>
               </div>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <p class="font-semibold text-[#e2e8f0]">Matteo Brucato</p>
                 <p class="text-sm text-[#8b949e]">Researcher, Package Queries</p>
-                <p class="text-sm text-[#6e7681]">UMass Amherst</p>
               </div>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <p class="font-semibold text-[#e2e8f0]">Peter J. Haas</p>
                 <p class="text-sm text-[#8b949e]">Researcher, Scalable Package Queries</p>
-                <p class="text-sm text-[#6e7681]">UMass Amherst</p>
               </div>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
+              <div class="py-3 border-b border-[#1c2028]">
                 <p class="font-semibold text-[#e2e8f0]">Pengyu Wang</p>
                 <p class="text-sm text-[#8b949e]">Researcher, Scalable Package Queries</p>
-                <p class="text-sm text-[#6e7681]">UMass Amherst</p>
               </div>
             </div>
           </section>
@@ -307,35 +277,18 @@
                HUDA LAB
                ============================================ -->
           <section id="huda-lab" class="mb-16">
-            <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">HUDA Lab</h2>
-            <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-8">
-              <div class="flex items-center gap-3 mb-4">
-                <div class="w-12 h-12 rounded-lg bg-[#1c2028] flex items-center justify-center">
-                  <i data-lucide="users" class="w-6 h-6 text-[#8b949e]"></i>
-                </div>
-                <h3 class="text-2xl font-bold text-[#e2e8f0]">Human Data Interaction Lab</h3>
-              </div>
+            <h2 class="text-3xl text-[#e2e8f0] mb-6">HUDA Lab</h2>
+            <div>
+              <h3 class="text-2xl text-[#e2e8f0] mb-3">Human Data Interaction Lab</h3>
               <p class="text-[#8b949e] mb-4">
                 The HUDA Lab focuses on making data systems more accessible, interactive, and intelligent.
               </p>
               <h4 class="font-semibold text-[#e2e8f0] mb-2">Research Areas:</h4>
-              <ul class="space-y-2 mb-6">
-                <li class="flex items-center gap-2 text-[#8b949e]">
-                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
-                  Query interfaces for non-experts
-                </li>
-                <li class="flex items-center gap-2 text-[#8b949e]">
-                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
-                  Visual data exploration
-                </li>
-                <li class="flex items-center gap-2 text-[#8b949e]">
-                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
-                  Automated data analysis
-                </li>
-                <li class="flex items-center gap-2 text-[#8b949e]">
-                  <i data-lucide="check-circle" class="w-5 h-5 text-[#8b949e] flex-shrink-0"></i>
-                  Optimization in databases
-                </li>
+              <ul class="space-y-1 mb-6 text-[#8b949e]">
+                <li>&bull; Query interfaces for non-experts</li>
+                <li>&bull; Visual data exploration</li>
+                <li>&bull; Automated data analysis</li>
+                <li>&bull; Optimization in databases</li>
               </ul>
               <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
                  class="btn btn-primary">
@@ -343,128 +296,71 @@
                 <i data-lucide="external-link" class="w-4 h-4"></i>
               </a>
             </div>
+
           </section>
 
           <!-- ============================================
                TECHNICAL DETAILS
                ============================================ -->
           <section id="technical" class="mb-16">
-            <h2 class="text-3xl font-bold text-[#e2e8f0] mb-6">Technical Details</h2>
+            <h2 class="text-3xl text-[#e2e8f0] mb-6">Technical Details</h2>
 
             <!-- Built With -->
             <div class="mb-8">
               <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Built With</h3>
-              <p class="text-[#8b949e] mb-4">PackDB leverages several open-source technologies:</p>
-              <div class="grid md:grid-cols-3 gap-4">
-                <a href="https://duckdb.org" target="_blank" rel="noopener noreferrer"
-                   class="bg-[#161b22] border border-[#262c36] rounded-lg p-4 hover:bg-[#1c2028] hover:border-[#8b949e] transition-all group">
-                  <div class="flex items-center gap-3 mb-2">
-                    <div class="w-10 h-10 rounded-lg bg-[#1c2028] flex items-center justify-center">
-                      <i data-lucide="database" class="w-5 h-5 text-[#8b949e]"></i>
-                    </div>
-                    <h4 class="font-semibold text-[#e2e8f0] group-hover:text-[#58a6ff]">DuckDB</h4>
+              <ul class="space-y-3">
+                <li class="flex items-baseline gap-3">
+                  <span class="text-[#58a6ff]">&bull;</span>
+                  <div>
+                    <a href="https://duckdb.org" target="_blank" rel="noopener noreferrer"
+                       class="font-semibold text-[#58a6ff] hover:text-[#79c0ff] inline-flex items-center gap-1">
+                      DuckDB <i data-lucide="external-link" class="w-3 h-3"></i>
+                    </a>
+                    <span class="text-sm text-[#8b949e]"> &mdash; Embeddable analytical database engine</span>
                   </div>
-                  <p class="text-sm text-[#8b949e]">Embeddable analytical database</p>
-                </a>
-                <a href="https://highs.dev/" target="_blank" rel="noopener noreferrer"
-                   class="bg-[#161b22] border border-[#262c36] rounded-lg p-4 hover:bg-[#1c2028] hover:border-[#8b949e] transition-all group">
-                  <div class="flex items-center gap-3 mb-2">
-                    <div class="w-10 h-10 rounded-lg bg-[#1c2028] flex items-center justify-center">
-                      <i data-lucide="cpu" class="w-5 h-5 text-[#8b949e]"></i>
-                    </div>
-                    <h4 class="font-semibold text-[#e2e8f0] group-hover:text-[#58a6ff]">HiGHS</h4>
+                </li>
+                <li class="flex items-baseline gap-3">
+                  <span class="text-[#58a6ff]">&bull;</span>
+                  <div>
+                    <a href="https://highs.dev/" target="_blank" rel="noopener noreferrer"
+                       class="font-semibold text-[#58a6ff] hover:text-[#79c0ff] inline-flex items-center gap-1">
+                      HiGHS <i data-lucide="external-link" class="w-3 h-3"></i>
+                    </a>
+                    <span class="text-sm text-[#8b949e]"> &mdash; High-performance LP/MIP solver (bundled)</span>
                   </div>
-                  <p class="text-sm text-[#8b949e]">High-performance LP/MIP solver</p>
-                </a>
-                <a href="https://issc.uj.ac.za/symbolic/symbolic.html" target="_blank" rel="noopener noreferrer"
-                   class="bg-[#161b22] border border-[#262c36] rounded-lg p-4 hover:bg-[#1c2028] hover:border-[#8b949e] transition-all group">
-                  <div class="flex items-center gap-3 mb-2">
-                    <div class="w-10 h-10 rounded-lg bg-[#1c2028] flex items-center justify-center">
-                      <i data-lucide="sigma" class="w-5 h-5 text-[#8b949e]"></i>
-                    </div>
-                    <h4 class="font-semibold text-[#e2e8f0] group-hover:text-[#58a6ff]">SymbolicC++</h4>
+                </li>
+                <li class="flex items-baseline gap-3">
+                  <span class="text-[#58a6ff]">&bull;</span>
+                  <div>
+                    <a href="https://issc.uj.ac.za/symbolic/symbolic.html" target="_blank" rel="noopener noreferrer"
+                       class="font-semibold text-[#58a6ff] hover:text-[#79c0ff] inline-flex items-center gap-1">
+                      SymbolicC++ <i data-lucide="external-link" class="w-3 h-3"></i>
+                    </a>
+                    <span class="text-sm text-[#8b949e]"> &mdash; Computer algebra for constraint linearization</span>
                   </div>
-                  <p class="text-sm text-[#8b949e]">Computer algebra system</p>
-                </a>
-              </div>
+                </li>
+              </ul>
             </div>
 
             <!-- Current Status -->
             <div class="mb-8">
               <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Current Status</h3>
-              <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-6">
-                <div class="grid md:grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span class="font-semibold text-[#e2e8f0]">Version:</span>
-                    <span class="text-[#8b949e]"> 0.1.0 (Prototype)</span>
-                  </div>
-                  <div>
-                    <span class="font-semibold text-[#e2e8f0]">Branch:</span>
-                    <span class="text-[#8b949e]"> <code class="bg-[#262c36] px-2 py-0.5 rounded">hatim</code> (stable)</span>
-                  </div>
-                  <div>
-                    <span class="font-semibold text-[#e2e8f0]">Test Coverage:</span>
-                    <span class="text-[#8b949e]"> automated test suite</span>
-                  </div>
-                  <div>
-                    <span class="font-semibold text-[#e2e8f0]">Target Scale:</span>
-                    <span class="text-[#8b949e]"> ~10K rows (exact solving)</span>
-                  </div>
+              <div class="grid md:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+                <div class="py-2 border-b border-[#1c2028]">
+                  <span class="font-semibold text-[#e2e8f0]">Version:</span>
+                  <span class="text-[#8b949e]"> 0.1.0 (Prototype)</span>
                 </div>
-              </div>
-            </div>
-
-            <!-- Known Limitations -->
-            <div class="mb-8">
-              <h3 id="limitations" class="text-xl font-semibold text-[#e2e8f0] mb-4">Known Limitations</h3>
-              <p class="text-[#8b949e] mb-4">
-                As a research prototype, PackDB has several constraints that will be addressed in future releases:
-              </p>
-              <div class="space-y-4">
-                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
-                    Linearity Requirement
-                  </h4>
-                  <p class="text-sm text-[#8b949e]">
-                    Only Linear Programming (LP) and Integer Linear Programming (ILP) are supported. Cannot express quadratic objectives, variable interactions, or non-linear functions.
-                  </p>
+                <div class="py-2 border-b border-[#1c2028]">
+                  <span class="font-semibold text-[#e2e8f0]">Branch:</span>
+                  <span class="text-[#8b949e]"> <code>hatim</code> (stable)</span>
                 </div>
-                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
-                    Scalability Constraints
-                  </h4>
-                  <p class="text-sm text-[#8b949e]">
-                    Exact solving works well for ~1K-10K rows. Performance degrades significantly beyond this range due to NP-Hard nature of integer programming.
-                  </p>
+                <div class="py-2 border-b border-[#1c2028]">
+                  <span class="font-semibold text-[#e2e8f0]">Test Coverage:</span>
+                  <span class="text-[#8b949e]"> automated test suite</span>
                 </div>
-                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
-                    Subquery Restrictions
-                  </h4>
-                  <p class="text-sm text-[#8b949e]">
-                    Only uncorrelated scalar subqueries are supported. Correlated subqueries that reference outer query columns are not yet implemented.
-                  </p>
-                </div>
-                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
-                    Variable Types
-                  </h4>
-                  <p class="text-sm text-[#8b949e]">
-                    No support for continuous (real) decision variables. Only BINARY {0, 1} and non-negative INTEGER {0, 1, 2, ...} variables are available.
-                  </p>
-                </div>
-                <div class="bg-[#161b22] border border-[#262c36] rounded-lg p-4">
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#8b949e]"></i>
-                    Memory Requirements
-                  </h4>
-                  <p class="text-sm text-[#8b949e]">
-                    All candidate rows are materialized in memory. Very large candidate sets may exceed available RAM. Use WHERE clauses to filter aggressively.
-                  </p>
+                <div class="py-2 border-b border-[#1c2028]">
+                  <span class="font-semibold text-[#e2e8f0]">Target Scale:</span>
+                  <span class="text-[#8b949e]"> ~10K rows (exact solving)</span>
                 </div>
               </div>
             </div>
@@ -472,45 +368,36 @@
             <!-- Future Development -->
             <div>
               <h3 id="future" class="text-xl font-semibold text-[#e2e8f0] mb-4">Future Development</h3>
-              <div class="bg-[#161b22] border border-[#262c36] border-l-4 border-l-[#58a6ff] rounded-lg p-6">
-                <ul class="space-y-3">
-                  <li class="flex items-start gap-3">
-                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
-                    <div>
-                      <span class="font-semibold text-[#e2e8f0]">Sketch-Refine Algorithm</span>
-                      <p class="text-sm text-[#8b949e]">Enable million-row scale optimization with bounded approximation error</p>
-                    </div>
-                  </li>
-                  <li class="flex items-start gap-3">
-                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
-                    <div>
-                      <span class="font-semibold text-[#e2e8f0]">Correlated Subqueries</span>
-                      <p class="text-sm text-[#8b949e]">Support complex data dependencies via query unnesting</p>
-                    </div>
-                  </li>
-                  <li class="flex items-start gap-3">
-                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
-                    <div>
-                      <span class="font-semibold text-[#e2e8f0]">Performance Benchmarking</span>
-                      <p class="text-sm text-[#8b949e]">Comprehensive performance testing and optimization</p>
-                    </div>
-                  </li>
-                  <li class="flex items-start gap-3">
-                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
-                    <div>
-                      <span class="font-semibold text-[#e2e8f0]">Multi-Solver Integration</span>
-                      <p class="text-sm text-[#8b949e]">Support for multiple solver backends beyond HiGHS</p>
-                    </div>
-                  </li>
-                  <li class="flex items-start gap-3">
-                    <i data-lucide="target" class="w-5 h-5 text-[#8b949e] flex-shrink-0 mt-0.5"></i>
-                    <div>
-                      <span class="font-semibold text-[#e2e8f0]">Automatic Linearization</span>
-                      <p class="text-sm text-[#8b949e]">Automatic linearization of common non-linear patterns</p>
-                    </div>
-                  </li>
-                </ul>
-              </div>
+              <ul class="space-y-4">
+                <li class="flex items-start gap-3">
+                  <span class="text-[#58a6ff] mt-0.5">&bull;</span>
+                  <div>
+                    <span class="font-semibold text-[#e2e8f0]">Sketch-Refine Algorithm</span>
+                    <p class="text-sm text-[#8b949e]">Scale to million-row datasets with bounded approximation error</p>
+                  </div>
+                </li>
+                <li class="flex items-start gap-3">
+                  <span class="text-[#58a6ff] mt-0.5">&bull;</span>
+                  <div>
+                    <span class="font-semibold text-[#e2e8f0]">Correlated Subqueries</span>
+                    <p class="text-sm text-[#8b949e]">Support data-dependent constraint bounds via query unnesting</p>
+                  </div>
+                </li>
+                <li class="flex items-start gap-3">
+                  <span class="text-[#58a6ff] mt-0.5">&bull;</span>
+                  <div>
+                    <span class="font-semibold text-[#e2e8f0]">Automatic Linearization</span>
+                    <p class="text-sm text-[#8b949e]">Automatically reformulate common non-linear patterns into linear equivalents</p>
+                  </div>
+                </li>
+                <li class="flex items-start gap-3">
+                  <span class="text-[#58a6ff] mt-0.5">&bull;</span>
+                  <div>
+                    <span class="font-semibold text-[#e2e8f0]">Performance Benchmarking</span>
+                    <p class="text-sm text-[#8b949e]">Comprehensive benchmarks and solver-level optimizations</p>
+                  </div>
+                </li>
+              </ul>
             </div>
           </section>
 
@@ -525,7 +412,7 @@
   <!-- ============================================
        FOOTER
        ============================================ -->
-  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#21262d]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>

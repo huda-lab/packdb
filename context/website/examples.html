@@ -48,7 +48,7 @@
   <!-- ============================================
        HEADER / NAVIGATION
        ============================================ -->
-  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#262c36] z-50">
+  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#21262d] z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
@@ -81,7 +81,7 @@
       </div>
 
       <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#262c36]"
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#21262d]"
               aria-label="Toggle menu" aria-expanded="false">
         <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6 text-[#e2e8f0]"></i>
         <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden text-[#e2e8f0]"></i>
@@ -89,14 +89,14 @@
     </nav>
 
     <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#262c36] bg-[#0d1117]" aria-hidden="true">
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#21262d] bg-[#0d1117]" aria-hidden="true">
       <div class="container mx-auto px-4 py-4 space-y-4">
         <a href="index.html" class="block py-2 nav-link">Home</a>
         <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
         <a href="documentation.html" class="block py-2 nav-link">Docs</a>
         <a href="examples.html" class="block py-2 nav-link active">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#262c36]">
+        <hr class="border-[#21262d]">
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
            class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
           <i data-lucide="github" class="w-5 h-5"></i>
@@ -128,15 +128,11 @@
         </nav>
 
         <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl font-bold text-[#e2e8f0] mb-4">
-            PackDB Examples
+          <h1 class="text-4xl md:text-5xl text-[#e2e8f0] mb-4">
+            Examples
           </h1>
-          <p class="text-xl text-[#8b949e] mb-4">
-            Real-world optimization problems solved with PackDB. Browse by difficulty level or explore specific use cases.
-          </p>
-          <p class="text-lg text-[#8b949e]">
-            Each example walks through a complete problem: creating sample data, writing a <code class="bg-[#1c2028] px-2 py-0.5 rounded text-sm">DECIDE</code> query, and understanding the results.
-            The <code class="bg-[#1c2028] px-2 py-0.5 rounded text-sm">DECIDE</code> clause introduces decision variables (one per row), <code class="bg-[#1c2028] px-2 py-0.5 rounded text-sm">SUCH THAT</code> defines constraints, and <code class="bg-[#1c2028] px-2 py-0.5 rounded text-sm">MAXIMIZE</code>/<code class="bg-[#1c2028] px-2 py-0.5 rounded text-sm">MINIMIZE</code> sets the objective.
+          <p class="text-xl text-[#8b949e]">
+            Complete worked examples, from basic selection to multi-constraint problems. Each one creates sample data, writes a query, and walks through the result.
           </p>
         </div>
       </div>
@@ -145,19 +141,19 @@
     <!-- ============================================
          FILTER BAR
          ============================================ -->
-    <section class="py-6 border-b border-[#262c36] bg-[#0d1117] sticky top-16 z-40">
+    <section class="py-6 border-b border-[#21262d] bg-[#0d1117] sticky top-16 z-40">
       <div class="container mx-auto px-4">
         <div class="flex flex-wrap gap-2">
           <button data-filter="all" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#238636] text-white">
             All Examples
           </button>
-          <button data-filter="basic" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#1c2028] text-[#8b949e] hover:bg-[#262c36]">
+          <button data-filter="basic" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#1c2028] text-[#8b949e] hover:bg-[#21262d]">
             Basic
           </button>
-          <button data-filter="intermediate" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#1c2028] text-[#8b949e] hover:bg-[#262c36]">
+          <button data-filter="intermediate" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#1c2028] text-[#8b949e] hover:bg-[#21262d]">
             Intermediate
           </button>
-          <button data-filter="advanced" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#1c2028] text-[#8b949e] hover:bg-[#262c36]">
+          <button data-filter="advanced" class="px-4 py-2 rounded-full text-sm font-medium transition-colors bg-[#1c2028] text-[#8b949e] hover:bg-[#21262d]">
             Advanced
           </button>
         </div>
@@ -172,10 +168,10 @@
         <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
 
           <!-- Example Card: Knapsack -->
-          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(63, 185, 80, 0.1)">
-                <i data-lucide="package" class="w-6 h-6 text-[#3fb950]"></i>
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
+                <i data-lucide="package" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-basic">Basic</span>
             </div>
@@ -195,10 +191,10 @@
           </article>
 
           <!-- Example Card: Production Planning -->
-          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(63, 185, 80, 0.1)">
-                <i data-lucide="factory" class="w-6 h-6 text-[#3fb950]"></i>
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
+                <i data-lucide="factory" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-basic">Basic</span>
             </div>
@@ -218,10 +214,10 @@
           </article>
 
           <!-- Example Card: Item Filtering -->
-          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(63, 185, 80, 0.1)">
-                <i data-lucide="filter" class="w-6 h-6 text-[#3fb950]"></i>
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
+                <i data-lucide="filter" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-basic">Basic</span>
             </div>
@@ -241,9 +237,9 @@
           </article>
 
           <!-- Example Card: Diet Problem -->
-          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.1)">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
                 <i data-lucide="utensils" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-intermediate">Intermediate</span>
@@ -265,9 +261,9 @@
           </article>
 
           <!-- Example Card: Multi-Variable Assignment -->
-          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.1)">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
                 <i data-lucide="git-branch" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-intermediate">Intermediate</span>
@@ -279,15 +275,14 @@
             <div class="flex flex-wrap gap-2 mb-4">
               <span class="text-xs px-2 py-1 bg-[#1c2028] rounded text-[#8b949e]">Multiple Decision Variables</span>
               <span class="text-xs px-2 py-1 bg-[#1c2028] rounded text-[#8b949e]">Equality Constraints</span>
-              <span class="text-xs px-2 py-1 bg-[#1c2028] rounded text-[#8b949e]">PER Clause</span>
             </div>
             <a href="examples/intermediate-assignment.html" class="text-[#58a6ff] hover:text-[#79c0ff] font-medium text-sm flex items-center gap-1">View Example <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
           </article>
 
           <!-- Example Card: Dynamic Constraints -->
-          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.1)">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
                 <i data-lucide="database" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-intermediate">Intermediate</span>
@@ -308,10 +303,10 @@
           </article>
 
           <!-- Example Card: Portfolio Optimization -->
-          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(248, 81, 73, 0.1)">
-                <i data-lucide="trending-up" class="w-6 h-6 text-[#f85149]"></i>
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
+                <i data-lucide="trending-up" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-advanced">Advanced</span>
             </div>
@@ -331,10 +326,10 @@
           </article>
 
           <!-- Example Card: Resource Scheduling -->
-          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(248, 81, 73, 0.1)">
-                <i data-lucide="calendar" class="w-6 h-6 text-[#f85149]"></i>
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
+                <i data-lucide="calendar" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-advanced">Advanced</span>
             </div>
@@ -345,16 +340,15 @@
             <div class="flex flex-wrap gap-2 mb-4">
               <span class="text-xs px-2 py-1 bg-[#1c2028] rounded text-[#8b949e]">JOIN</span>
               <span class="text-xs px-2 py-1 bg-[#1c2028] rounded text-[#8b949e]">Complex WHERE</span>
-              <span class="text-xs px-2 py-1 bg-[#1c2028] rounded text-[#8b949e]">PER Clause</span>
             </div>
             <a href="examples/advanced-scheduling.html" class="text-[#58a6ff] hover:text-[#79c0ff] font-medium text-sm flex items-center gap-1">View Example <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
           </article>
 
           <!-- Example Card: Multi-Period Planning -->
-          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#262c36]">
+          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-[#161b22] border border-[#21262d]">
             <div class="flex items-start justify-between mb-4">
-              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(248, 81, 73, 0.1)">
-                <i data-lucide="layers" class="w-6 h-6 text-[#f85149]"></i>
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center" style="background-color: rgba(56, 139, 253, 0.08)">
+                <i data-lucide="layers" class="w-6 h-6 text-[#58a6ff]"></i>
               </div>
               <span class="badge badge-advanced">Advanced</span>
             </div>
@@ -377,9 +371,9 @@
     <!-- ============================================
          CTA SECTION
          ============================================ -->
-    <section class="py-16 bg-[#161b22]">
+    <section class="py-16 border-t border-[#1c2028]">
       <div class="container mx-auto px-4 text-center">
-        <h2 class="text-2xl font-bold text-[#e2e8f0] mb-4">Ready to Build Your Own?</h2>
+        <h2 class="text-2xl text-[#e2e8f0] mb-4">Ready to Build Your Own?</h2>
         <p class="text-[#8b949e] mb-8 max-w-2xl mx-auto">
           Check out the documentation for the complete syntax reference and learn more about the project.
         </p>
@@ -401,7 +395,7 @@
   <!-- ============================================
        FOOTER
        ============================================ -->
-  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#262c36]">
+  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#21262d]">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
