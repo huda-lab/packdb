@@ -34,15 +34,8 @@ Implementing a binder rule to "unnest" correlated subqueries into joins before t
 ### 2.3 Incremental Optimization
 Currently, the entire dataset is materialized. Future work could explore "Interactive Optimization," where the user provides feedback on a solution, and the solver incrementally updates the result without re-building the entire model.
 
-### 2.4 Conditional Expressions (`WHEN` Keyword) — Implemented
-The `WHEN` postfix keyword is now supported for both constraints (`SUCH THAT`) and objectives (`MAXIMIZE`/`MINIMIZE`).
--   **Constraint syntax**: `SUM(x * weight) <= 20 WHEN category = 'perishable'`
--   **Objective syntax**: `MAXIMIZE SUM(x * profit) WHEN category = 'electronics'`
--   **Benefit**: More expressive modeling without query decomposition. Objective WHEN zeros out coefficients for non-matching rows.
--   **Limitation**: WHEN conditions cannot reference decision variables.
+### ~~2.4 Conditional Expressions (`WHEN` Keyword)~~ — Done
+Implemented. See `context/descriptions/03_expressivity/when/done.md`.
 
-### 2.5 Gurobi Solver Integration — Implemented
-PackDB now supports Gurobi as the primary solver with automatic fallback to HiGHS.
--   **Mechanism**: At solve time, PackDB attempts to use Gurobi first. If Gurobi is not available (no license installed), it falls back to the bundled HiGHS solver.
--   **Benefit**: Gurobi offers significantly better performance on large-scale ILP problems.
--   **Requirement**: Gurobi requires a commercial license (free for academic use).
+### ~~2.5 Gurobi Solver Integration~~ — Done
+Implemented. See `context/descriptions/04_optimizer/physical_planning/done.md`.

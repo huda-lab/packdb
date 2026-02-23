@@ -26,7 +26,7 @@ PackDB supports two ILP solvers with automatic fallback:
 1.  **Gurobi** (preferred): A high-performance commercial solver. PackDB attempts to use Gurobi first via its C API.
 2.  **HiGHS** (fallback): An open-source solver bundled with PackDB. Used automatically when Gurobi is not available (no license).
 
--   **Configuration**: The solver is configured with a time limit (default 60s) and a "Silent" logging profile to avoid polluting the database logs.
+-   **Configuration**: The solver is configured with a "Silent" logging profile to avoid polluting the database logs. Note: no solver time limit is currently configured — both backends run with their library defaults.
 -   **Outcome**: The solver returns a status (Optimal, Infeasible, Unbounded) and a solution vector.
 
 ### 2.4 Phase 4: Result Projection (The Source)
