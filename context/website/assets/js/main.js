@@ -7,6 +7,30 @@
   'use strict';
 
   // ============================================
+  // Theme Toggle (Dark / Light)
+  // ============================================
+  function initThemeToggle() {
+    var toggle = document.getElementById('theme-toggle');
+    if (!toggle) return;
+
+    toggle.addEventListener('click', function() {
+      // Enable smooth color transition
+      document.documentElement.classList.add('theme-transition');
+
+      var current = document.documentElement.getAttribute('data-theme') || 'light';
+      var next = current === 'dark' ? 'light' : 'dark';
+
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('packdb-theme', next);
+
+      // Remove transition class after animation completes
+      setTimeout(function() {
+        document.documentElement.classList.remove('theme-transition');
+      }, 350);
+    });
+  }
+
+  // ============================================
   // Mobile Navigation Toggle
   // ============================================
   function initMobileNav() {
@@ -319,11 +343,11 @@
 
         // Update active button
         filterButtons.forEach(function(btn) {
-          btn.classList.remove('active', 'bg-primary', 'text-white');
-          btn.classList.add('bg-gray-100', 'text-gray-700');
+          btn.classList.remove('active', 'bg-success', 'text-white');
+          btn.classList.add('bg-canvas-subtle', 'text-fg-muted');
         });
-        this.classList.add('active', 'bg-primary', 'text-white');
-        this.classList.remove('bg-gray-100', 'text-gray-700');
+        this.classList.add('active', 'bg-success', 'text-white');
+        this.classList.remove('bg-canvas-subtle', 'text-fg-muted');
 
         // Filter cards
         exampleCards.forEach(function(card) {
@@ -364,6 +388,18 @@
   // ============================================
   function initPrism() {
     if (typeof Prism !== 'undefined') {
+      // Extend SQL grammar with PackDB-specific clause keywords so that
+      // DECIDE, SUCH THAT, MAXIMIZE, and MINIMIZE are highlighted just like
+      // standard SQL clauses (SELECT, FROM, WHERE, etc.).
+      if (Prism.languages.sql) {
+        var orig = Prism.languages.sql['keyword'];
+        var packdbKeywords = {
+          pattern: /\bDECIDE\b|\bSUCH\s+THAT\b|\bMAXIMIZE\b|\bMINIMIZE\b/i
+        };
+        Prism.languages.sql['keyword'] = Array.isArray(orig)
+          ? [packdbKeywords].concat(orig)
+          : [packdbKeywords, orig];
+      }
       Prism.highlightAll();
     }
   }
@@ -383,6 +419,7 @@
   // Initialize All Features
   // ============================================
   onDOMReady(function() {
+    initThemeToggle();
     initMobileNav();
     initCopyButtons();
     initScrollSpy();

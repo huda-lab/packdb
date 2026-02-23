@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  document.documentElement.setAttribute('data-theme',t)})();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="PackDB Documentation - Complete syntax reference for the DECIDE clause, constraints, objectives, and best practices.">
@@ -11,6 +15,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
 
   <!-- Tailwind CSS -->
+  <script src="assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- DM Serif Display + DM Sans -->
@@ -39,7 +44,6 @@
   <style>
     body {
       font-family: 'DM Sans', system-ui, sans-serif;
-      background-color: #0d1117;
     }
     code, pre {
       font-family: 'JetBrains Mono', monospace;
@@ -54,13 +58,13 @@
   <!-- ============================================
        HEADER / NAVIGATION
        ============================================ -->
-  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#21262d] z-50">
+  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="PackDB" class="h-8">
+        <img src="assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
+          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
 
@@ -84,10 +88,14 @@
           Get Started
           <i data-lucide="arrow-right" class="w-4 h-4"></i>
         </a>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
+          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
       </div>
 
       <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#1c2028]"
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset"
               aria-label="Toggle menu" aria-expanded="false">
         <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
         <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
@@ -95,16 +103,16 @@
     </nav>
 
     <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#21262d] bg-[#0d1117]" aria-hidden="true">
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
       <div class="container mx-auto px-4 py-4 space-y-4">
         <a href="index.html" class="block py-2 nav-link">Home</a>
         <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
         <a href="documentation.html" class="block py-2 nav-link active">Docs</a>
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#21262d]">
+        <hr class="border-bdcolor">
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
           <i data-lucide="github" class="w-5 h-5"></i>
           GitHub
         </a>
@@ -124,20 +132,20 @@
     <!-- ============================================
          HERO SECTION
          ============================================ -->
-    <section class="py-12 bg-gradient-to-b from-[#0d1117] to-[#0d1117]">
+    <section class="py-12 bg-canvas">
       <div class="container mx-auto px-4">
         <!-- Breadcrumb -->
         <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
           <a href="index.html">Home</a>
           <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          <span class="text-[#e2e8f0] font-medium">Documentation</span>
+          <span class="text-fg font-medium">Documentation</span>
         </nav>
 
         <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl text-[#e2e8f0] mb-4">
+          <h1 class="text-4xl md:text-5xl text-fg mb-4">
             PackDB Documentation
           </h1>
-          <p class="text-xl text-[#8b949e]">
+          <p class="text-xl text-fg-muted">
             Complete reference for writing optimization queries with the DECIDE clause.
           </p>
         </div>
@@ -154,7 +162,7 @@
           <!-- Sidebar Navigation -->
           <aside class="lg:w-64 flex-shrink-0">
             <nav class="sidebar-nav lg:sticky lg:top-24">
-              <h3 class="text-sm font-semibold text-[#e2e8f0] uppercase tracking-wider mb-4">Reference</h3>
+              <h3 class="text-sm font-semibold text-fg uppercase tracking-wider mb-4">Reference</h3>
               <ul class="space-y-1">
                 <li><a href="#syntax" class="sidebar-link active">Syntax Overview</a></li>
                 <li><a href="#decide" class="sidebar-link">The DECIDE Clause</a></li>
@@ -173,13 +181,13 @@
                  SYNTAX OVERVIEW
                  ============================================ -->
             <section id="syntax" class="mb-20">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6">Syntax Overview</h2>
+              <h2 class="text-3xl text-fg mb-6">Syntax Overview</h2>
 
-              <p class="text-[#8b949e] mb-6">
+              <p class="text-fg-muted mb-6">
                 PackDB adds a <code>DECIDE</code> clause to standard SQL. You declare decision variables, define constraints with <code>SUCH THAT</code>, and optionally set an objective with <code>MAXIMIZE</code> or <code>MINIMIZE</code>. PackDB solves the optimization problem and returns every candidate row with the optimal variable values filled in.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Complete Syntax</h3>
+              <h3 class="text-xl font-semibold text-fg mb-4">Complete Syntax</h3>
               <div class="code-block mb-8">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -197,42 +205,42 @@ SUCH THAT
 [MAXIMIZE | MINIMIZE] SUM(linear_expression)</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Execution Order</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">Execution Order</h3>
+              <p class="text-fg-muted mb-4">
                 PackDB processes your query in this order:
               </p>
               <ol class="space-y-3 mb-6">
                 <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">1</span>
+                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">1</span>
                   <div>
-                    <span class="font-semibold text-[#e2e8f0]">FROM + WHERE</span>
-                    <span class="text-[#8b949e]"> &mdash; Standard SQL filtering produces candidate rows</span>
+                    <span class="font-semibold text-fg">FROM + WHERE</span>
+                    <span class="text-fg-muted"> &mdash; Standard SQL filtering produces candidate rows</span>
                   </div>
                 </li>
                 <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">2</span>
+                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">2</span>
                   <div>
-                    <span class="font-semibold text-[#e2e8f0]">DECIDE</span>
-                    <span class="text-[#8b949e]"> &mdash; Creates one decision variable per candidate row</span>
+                    <span class="font-semibold text-fg">DECIDE</span>
+                    <span class="text-fg-muted"> &mdash; Creates one decision variable per candidate row</span>
                   </div>
                 </li>
                 <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">3</span>
+                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">3</span>
                   <div>
-                    <span class="font-semibold text-[#e2e8f0]">SUCH THAT + Objective</span>
-                    <span class="text-[#8b949e]"> &mdash; Constraints and objective are sent to the solver</span>
+                    <span class="font-semibold text-fg">SUCH THAT + Objective</span>
+                    <span class="text-fg-muted"> &mdash; Constraints and objective are sent to the solver</span>
                   </div>
                 </li>
                 <li class="flex gap-4">
-                  <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">4</span>
+                  <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">4</span>
                   <div>
-                    <span class="font-semibold text-[#e2e8f0]">SELECT</span>
-                    <span class="text-[#8b949e]"> &mdash; Returns all candidate rows with their optimal variable values</span>
+                    <span class="font-semibold text-fg">SELECT</span>
+                    <span class="text-fg-muted"> &mdash; Returns all candidate rows with their optimal variable values</span>
                   </div>
                 </li>
               </ol>
 
-              <p class="text-[#8b949e] text-sm">
+              <p class="text-fg-muted text-sm">
                 Decision variables are available in <code>SUCH THAT</code>, <code>MAXIMIZE</code>/<code>MINIMIZE</code>, and <code>SELECT</code>.
               </p>
             </section>
@@ -241,9 +249,9 @@ SUCH THAT
                  THE DECIDE CLAUSE
                  ============================================ -->
             <section id="decide" class="mb-20">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6">The DECIDE Clause</h2>
+              <h2 class="text-3xl text-fg mb-6">The DECIDE Clause</h2>
 
-              <p class="text-[#8b949e] mb-6">
+              <p class="text-fg-muted mb-6">
                 Use <code>DECIDE</code> to declare one or more decision variables. Each candidate row gets its own instance of each variable. The solver assigns optimal values to these variables.
               </p>
 
@@ -258,16 +266,16 @@ SUCH THAT
                 <pre class="language-sql"><code>DECIDE variable_name [IS type] [, variable_name2 [IS type] ...]</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Variable Types</h3>
+              <h3 class="text-xl font-semibold text-fg mb-4">Variable Types</h3>
 
-              <p class="text-[#8b949e] mb-4">
+              <p class="text-fg-muted mb-4">
                 Specify the variable type with <code>IS BOOLEAN</code> or <code>IS INTEGER</code>. If you omit the type, the default is <code>INTEGER</code>.
               </p>
 
               <div class="space-y-6 mb-8">
                 <div>
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2">BOOLEAN &mdash; select or skip</h4>
-                  <p class="text-[#8b949e] text-sm mb-3">
+                  <h4 class="font-semibold text-fg mb-2">BOOLEAN &mdash; select or skip</h4>
+                  <p class="text-fg-muted text-sm mb-3">
                     The variable takes the value 0 or 1. Use this when each row is either included or excluded.
                   </p>
                   <div class="code-block">
@@ -283,8 +291,8 @@ SUCH THAT
                 </div>
 
                 <div>
-                  <h4 class="font-semibold text-[#e2e8f0] mb-2">INTEGER &mdash; choose a quantity</h4>
-                  <p class="text-[#8b949e] text-sm mb-3">
+                  <h4 class="font-semibold text-fg mb-2">INTEGER &mdash; choose a quantity</h4>
+                  <p class="text-fg-muted text-sm mb-3">
                     The variable takes a non-negative integer value (0, 1, 2, 3, ...). Use this when you need to decide how many of each item to include.
                   </p>
                   <div class="code-block">
@@ -300,8 +308,8 @@ SUCH THAT
                 </div>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Multiple Variables</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">Multiple Variables</h3>
+              <p class="text-fg-muted mb-4">
                 Declare multiple variables separated by commas. Each row gets its own instance of every variable.
               </p>
               <div class="code-block mb-8">
@@ -316,8 +324,8 @@ SUCH THAT
 DECIDE x IS BOOLEAN, quantity IS INTEGER</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Using Variables in SELECT</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">Using Variables in SELECT</h3>
+              <p class="text-fg-muted mb-4">
                 Reference decision variables in <code>SELECT</code> to see their optimal values in the output. You can also use them in expressions.
               </p>
               <div class="code-block mb-6">
@@ -334,7 +342,7 @@ DECIDE x IS BOOLEAN
 SUCH THAT SUM(x * price) <= 1000
 MAXIMIZE SUM(x * profit);</code></pre>
               </div>
-              <p class="text-[#8b949e] text-sm">
+              <p class="text-fg-muted text-sm">
                 This returns every product row. The <code>x</code> column shows 1 for selected products and 0 for skipped ones. The <code>cost</code> column shows the price for selected items and 0 otherwise.
               </p>
             </section>
@@ -343,15 +351,15 @@ MAXIMIZE SUM(x * profit);</code></pre>
                  THE SUCH THAT CLAUSE
                  ============================================ -->
             <section id="such-that" class="mb-20">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6">The SUCH THAT Clause</h2>
+              <h2 class="text-3xl text-fg mb-6">The SUCH THAT Clause</h2>
 
-              <p class="text-[#8b949e] mb-6">
+              <p class="text-fg-muted mb-6">
                 Use <code>SUCH THAT</code> to define constraints that the solution must satisfy. Constraints are separated by <code>AND</code>. All constraints must be <strong>linear</strong> in decision variables.
               </p>
 
               <!-- Row-Level vs Aggregate -->
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Row-Level Constraints</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">Row-Level Constraints</h3>
+              <p class="text-fg-muted mb-4">
                 A constraint without <code>SUM()</code> applies independently to each row. Use this to bound individual variable values.
               </p>
               <div class="code-block mb-8">
@@ -366,12 +374,12 @@ MAXIMIZE SUM(x * profit);</code></pre>
     x >= 0
     AND x <= 5</code></pre>
               </div>
-              <p class="text-[#8b949e] text-sm mb-8">
+              <p class="text-fg-muted text-sm mb-8">
                 Each row's <code>x</code> is independently constrained between 0 and 5.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Aggregate Constraints</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">Aggregate Constraints</h3>
+              <p class="text-fg-muted mb-4">
                 Wrap an expression in <code>SUM()</code> to constrain the total across all rows. This is how you express global limits like total weight or budget.
               </p>
               <div class="code-block mb-8">
@@ -388,22 +396,22 @@ MAXIMIZE SUM(x * profit);</code></pre>
     AND SUM(x * volume) <= 50
     AND SUM(x) >= 5</code></pre>
               </div>
-              <p class="text-[#8b949e] text-sm mb-8">
+              <p class="text-fg-muted text-sm mb-8">
                 The total weight of selected items must be at most 100, total volume at most 50, and at least 5 items must be selected.
               </p>
 
               <!-- Comparison Operators -->
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Comparison Operators</h3>
-              <div class="table-wrapper rounded-lg border border-[#21262d] overflow-hidden mb-8">
+              <h3 class="text-xl font-semibold text-fg mb-4">Comparison Operators</h3>
+              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-8">
                 <table class="w-full">
                   <thead>
-                    <tr class="bg-[#1c2028]">
-                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Operator</th>
-                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Example</th>
-                      <th class="text-left px-4 py-3 text-[#e2e8f0]">Result</th>
+                    <tr class="bg-canvas-inset">
+                      <th class="text-left px-4 py-3 text-fg">Operator</th>
+                      <th class="text-left px-4 py-3 text-fg">Example</th>
+                      <th class="text-left px-4 py-3 text-fg">Result</th>
                     </tr>
                   </thead>
-                  <tbody class="text-[#8b949e]">
+                  <tbody class="text-fg-muted">
                     <tr>
                       <td class="px-4 py-3"><code>=</code></td>
                       <td class="px-4 py-3"><code class="text-sm">SUM(x) = 3</code></td>
@@ -429,8 +437,8 @@ MAXIMIZE SUM(x * profit);</code></pre>
               </div>
 
               <!-- BETWEEN and IN -->
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">BETWEEN and IN</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">BETWEEN and IN</h3>
+              <p class="text-fg-muted mb-4">
                 Use <code>BETWEEN</code> to constrain a variable to a range, or <code>IN</code> to restrict it to specific values.
               </p>
               <div class="code-block mb-8">
@@ -449,8 +457,8 @@ SUCH THAT x IN (1, 2, 3)</code></pre>
               </div>
 
               <!-- Scalar Subqueries -->
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Scalar Subqueries</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">Scalar Subqueries</h3>
+              <p class="text-fg-muted mb-4">
                 Use a subquery to compute a constraint bound from another table. The subquery must return a single value and cannot reference columns from the outer query.
               </p>
               <div class="code-block mb-4">
@@ -467,27 +475,27 @@ SUCH THAT x IN (1, 2, 3)</code></pre>
 
               <div class="grid gap-3 mb-8">
                 <div class="flex items-start gap-2">
-                  <i data-lucide="check" class="w-5 h-5 text-[#3fb950] flex-shrink-0 mt-0.5"></i>
-                  <code class="text-sm text-[#e2e8f0]">SUM(x * price) &lt;= (SELECT AVG(budget) FROM Departments)</code>
+                  <i data-lucide="check" class="w-5 h-5 text-success flex-shrink-0 mt-0.5"></i>
+                  <code class="text-sm text-fg">SUM(x * price) &lt;= (SELECT AVG(budget) FROM Departments)</code>
                 </div>
                 <div class="flex items-start gap-2">
-                  <i data-lucide="x" class="w-5 h-5 text-[#f85149] flex-shrink-0 mt-0.5"></i>
-                  <code class="text-sm text-[#e2e8f0]">x &lt;= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code>
-                  <span class="text-xs text-[#6e7681] mt-0.5">&mdash; correlated, not supported</span>
+                  <i data-lucide="x" class="w-5 h-5 text-danger flex-shrink-0 mt-0.5"></i>
+                  <code class="text-sm text-fg">x &lt;= (SELECT budget FROM Depts WHERE Depts.id = Items.dept_id)</code>
+                  <span class="text-xs text-fg-subtle mt-0.5">&mdash; correlated, not supported</span>
                 </div>
               </div>
 
               <!-- Linearity Requirement -->
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Linearity Requirement</h3>
-              <p class="text-[#8b949e] mb-6">
+              <h3 class="text-xl font-semibold text-fg mb-4">Linearity Requirement</h3>
+              <p class="text-fg-muted mb-6">
                 Every constraint (and the objective) must be linear in decision variables. A term is linear if it multiplies a variable by a constant or a table column &mdash; never by another variable.
               </p>
 
               <div class="grid md:grid-cols-2 gap-6 mb-8">
                 <!-- Valid -->
                 <div>
-                  <h4 class="font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-4 h-4 text-[#3fb950]"></i>
+                  <h4 class="font-semibold text-fg mb-3 flex items-center gap-2">
+                    <i data-lucide="check-circle" class="w-4 h-4 text-success"></i>
                     Valid (linear)
                   </h4>
                   <div class="code-block">
@@ -502,8 +510,8 @@ SUM(x * price + y * cost)</code></pre>
 
                 <!-- Invalid -->
                 <div>
-                  <h4 class="font-semibold text-[#e2e8f0] mb-3 flex items-center gap-2">
-                    <i data-lucide="x-circle" class="w-4 h-4 text-[#f85149]"></i>
+                  <h4 class="font-semibold text-fg mb-3 flex items-center gap-2">
+                    <i data-lucide="x-circle" class="w-4 h-4 text-danger"></i>
                     Invalid (non-linear)
                   </h4>
                   <div class="code-block">
@@ -518,7 +526,7 @@ SIN(x)</code></pre>
               </div>
 
               <!-- Combining Constraints -->
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Full Example</h3>
+              <h3 class="text-xl font-semibold text-fg mb-4">Full Example</h3>
               <div class="code-block">
                 <div class="code-header">
                   <span class="language-label">SQL</span>
@@ -537,7 +545,7 @@ SUCH THAT
     AND SUM(x) <= (SELECT capacity FROM Config WHERE name = 'max_items')
 MAXIMIZE SUM(x * value);</code></pre>
               </div>
-              <p class="text-[#8b949e] text-sm mt-3">
+              <p class="text-fg-muted text-sm mt-3">
                 Select at least 5 items without exceeding weight, volume, or capacity limits. Maximize total value.
               </p>
             </section>
@@ -546,9 +554,9 @@ MAXIMIZE SUM(x * value);</code></pre>
                  THE OBJECTIVE CLAUSE
                  ============================================ -->
             <section id="objective" class="mb-20">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6">The Objective Clause</h2>
+              <h2 class="text-3xl text-fg mb-6">The Objective Clause</h2>
 
-              <p class="text-[#8b949e] mb-6">
+              <p class="text-fg-muted mb-6">
                 Use <code>MAXIMIZE</code> or <code>MINIMIZE</code> followed by a <code>SUM()</code> expression to tell the solver what to optimize. The objective must be linear and must involve at least one decision variable.
               </p>
 
@@ -573,28 +581,28 @@ MAXIMIZE SUM(x * (revenue - cost) * discount_factor)
 MAXIMIZE SUM(x * profit_a + y * profit_b)</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Requirements</h3>
-              <ul class="space-y-2 text-[#8b949e] mb-8">
+              <h3 class="text-xl font-semibold text-fg mb-4">Requirements</h3>
+              <ul class="space-y-2 text-fg-muted mb-8">
                 <li class="flex items-start gap-2">
-                  <span class="text-[#e2e8f0] mt-0.5">&bull;</span>
+                  <span class="text-fg mt-0.5">&bull;</span>
                   <span>The objective must use <code>SUM()</code>. Other aggregates (<code>COUNT</code>, <code>AVG</code>, <code>MAX</code>, <code>MIN</code>) are not supported.</span>
                 </li>
                 <li class="flex items-start gap-2">
-                  <span class="text-[#e2e8f0] mt-0.5">&bull;</span>
+                  <span class="text-fg mt-0.5">&bull;</span>
                   <span>Must involve at least one decision variable.</span>
                 </li>
                 <li class="flex items-start gap-2">
-                  <span class="text-[#e2e8f0] mt-0.5">&bull;</span>
+                  <span class="text-fg mt-0.5">&bull;</span>
                   <span>Must be linear (same rules as constraints).</span>
                 </li>
                 <li class="flex items-start gap-2">
-                  <span class="text-[#e2e8f0] mt-0.5">&bull;</span>
+                  <span class="text-fg mt-0.5">&bull;</span>
                   <span>Constant terms are ignored (they don't affect which solution is optimal).</span>
                 </li>
               </ul>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">COUNT Workaround</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mb-4">COUNT Workaround</h3>
+              <p class="text-fg-muted mb-4">
                 To maximize the number of selected items, use <code>SUM(x)</code> with a boolean variable instead of <code>COUNT</code>.
               </p>
               <div class="code-block mb-4">
@@ -610,12 +618,12 @@ DECIDE x IS BOOLEAN
 SUCH THAT SUM(x * weight) <= 100
 MAXIMIZE SUM(x);</code></pre>
               </div>
-              <p class="text-[#8b949e] text-sm">
+              <p class="text-fg-muted text-sm">
                 Since <code>x</code> is 0 or 1, <code>SUM(x)</code> counts how many rows are selected.
               </p>
 
-              <h3 class="text-xl font-semibold text-[#e2e8f0] mt-8 mb-4">Feasibility Queries (No Objective)</h3>
-              <p class="text-[#8b949e] mb-4">
+              <h3 class="text-xl font-semibold text-fg mt-8 mb-4">Feasibility Queries (No Objective)</h3>
+              <p class="text-fg-muted mb-4">
                 You can omit the objective entirely. In that case, the solver finds any feasible assignment that satisfies all constraints.
               </p>
               <div class="code-block">
@@ -633,7 +641,7 @@ SUCH THAT
     SUM(x * weight) <= 50
     AND SUM(x) = 3;</code></pre>
               </div>
-              <p class="text-[#8b949e] text-sm mt-3">
+              <p class="text-fg-muted text-sm mt-3">
                 Returns any combination of exactly 3 items whose total weight is at most 50.
               </p>
             </section>
@@ -642,38 +650,38 @@ SUCH THAT
                  SOLVER OUTCOMES
                  ============================================ -->
             <section id="solver-outcomes" class="mb-20">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6">Solver Outcomes</h2>
-              <p class="text-[#8b949e] mb-8">
+              <h2 class="text-3xl text-fg mb-6">Solver Outcomes</h2>
+              <p class="text-fg-muted mb-8">
                 After processing, the solver reports one of three outcomes:
               </p>
 
               <div class="space-y-6 mb-6">
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-5 h-5 text-[#3fb950]"></i>
+                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
+                    <i data-lucide="check-circle" class="w-5 h-5 text-success"></i>
                     Optimal
                   </h3>
-                  <p class="text-[#8b949e]">
+                  <p class="text-fg-muted">
                     A solution was found. The query returns all candidate rows with optimal variable values.
                   </p>
                 </div>
 
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="x-circle" class="w-5 h-5 text-[#f85149]"></i>
+                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
+                    <i data-lucide="x-circle" class="w-5 h-5 text-danger"></i>
                     Infeasible
                   </h3>
-                  <p class="text-[#8b949e]">
+                  <p class="text-fg-muted">
                     No solution exists &mdash; the constraints contradict each other. The query returns an error. Try relaxing one or more constraints.
                   </p>
                 </div>
 
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-2 flex items-center gap-2">
-                    <i data-lucide="alert-circle" class="w-5 h-5 text-[#d29922]"></i>
+                  <h3 class="text-lg font-semibold text-fg mb-2 flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-5 h-5 text-warning"></i>
                     Unbounded
                   </h3>
-                  <p class="text-[#8b949e]">
+                  <p class="text-fg-muted">
                     The objective can grow without limit because the constraints don't bound it. The query returns an error. Add an upper bound on the relevant variable or expression.
                   </p>
                 </div>
@@ -684,19 +692,19 @@ SUCH THAT
                  BEST PRACTICES
                  ============================================ -->
             <section id="best-practices" class="mb-16">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6">Best Practices</h2>
+              <h2 class="text-3xl text-fg mb-6">Best Practices</h2>
 
               <div class="space-y-10">
                 <!-- Practice 1 -->
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3">Filter with WHERE first</h3>
-                  <p class="text-[#8b949e] mb-4">
+                  <h3 class="text-lg font-semibold text-fg mb-3">Filter with WHERE first</h3>
+                  <p class="text-fg-muted mb-4">
                     The solver runs on every candidate row. Fewer rows means faster solving. Use <code>WHERE</code> to exclude rows that can't possibly be in the optimal solution.
                   </p>
                   <div class="grid md:grid-cols-2 gap-4">
                     <div>
-                      <p class="text-[#8b949e] text-sm mb-2 flex items-center gap-1">
-                        <i data-lucide="x" class="w-4 h-4 text-[#f85149]"></i> Slow &mdash; all rows
+                      <p class="text-fg-muted text-sm mb-2 flex items-center gap-1">
+                        <i data-lucide="x" class="w-4 h-4 text-danger"></i> Slow &mdash; all rows
                       </p>
                       <div class="code-block">
                         <div class="code-header"><span class="language-label">SQL</span></div>
@@ -707,8 +715,8 @@ MAXIMIZE SUM(x * value);</code></pre>
                       </div>
                     </div>
                     <div>
-                      <p class="text-[#8b949e] text-sm mb-2 flex items-center gap-1">
-                        <i data-lucide="check" class="w-4 h-4 text-[#3fb950]"></i> Better &mdash; filtered
+                      <p class="text-fg-muted text-sm mb-2 flex items-center gap-1">
+                        <i data-lucide="check" class="w-4 h-4 text-success"></i> Better &mdash; filtered
                       </p>
                       <div class="code-block">
                         <div class="code-header"><span class="language-label">SQL</span></div>
@@ -725,16 +733,16 @@ MAXIMIZE SUM(x * value);</code></pre>
 
                 <!-- Practice 2 -->
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3">Prefer BOOLEAN over INTEGER</h3>
-                  <p class="text-[#8b949e] mb-4">
+                  <h3 class="text-lg font-semibold text-fg mb-3">Prefer BOOLEAN over INTEGER</h3>
+                  <p class="text-fg-muted mb-4">
                     Boolean variables (0/1) solve faster than integer variables. Use <code>IS BOOLEAN</code> whenever your decision is "include or not." Only use <code>IS INTEGER</code> when you need quantities.
                   </p>
                 </div>
 
                 <!-- Practice 3 -->
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3">Build incrementally</h3>
-                  <p class="text-[#8b949e] mb-4">
+                  <h3 class="text-lg font-semibold text-fg mb-3">Build incrementally</h3>
+                  <p class="text-fg-muted mb-4">
                     Start with one constraint and verify the result makes sense. Add constraints one at a time. If the query returns an error, the most recently added constraint may be making the problem infeasible &mdash; try relaxing it.
                   </p>
                   <div class="code-block">
@@ -748,8 +756,8 @@ MAXIMIZE SUM(x * value);</code></pre>
 
                 <!-- Practice 4 -->
                 <div>
-                  <h3 class="text-lg font-semibold text-[#e2e8f0] mb-3">JOINs work normally</h3>
-                  <p class="text-[#8b949e] mb-4">
+                  <h3 class="text-lg font-semibold text-fg mb-3">JOINs work normally</h3>
+                  <p class="text-fg-muted mb-4">
                     You can use <code>JOIN</code> before <code>DECIDE</code>. The decision variables operate on the joined result set.
                   </p>
                   <div class="code-block">
@@ -781,39 +789,39 @@ MAXIMIZE SUM(x * p.profit);</code></pre>
   <!-- ============================================
        FOOTER
        ============================================ -->
-  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#21262d]">
+  <footer class="bg-canvas-inset text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
+            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent">Getting Started</a></li>
+            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent">Syntax Reference</a></li>
+            <li><a href="examples.html" class="text-fg-subtle hover:text-accent">Examples</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
-            <li><a href="about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
+            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-[#6e7681]">
+          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-fg-subtle">
             <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-accent hover:text-accent">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
       </div>
-      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
         <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>

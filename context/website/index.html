@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  document.documentElement.setAttribute('data-theme',t)})();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="PackDB - Optimization-enabled SQL queries for DuckDB. Express optimization problems directly in SQL with the DECIDE clause.">
@@ -9,6 +13,9 @@
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
+
+  <!-- Tailwind config (before CDN) -->
+  <script src="assets/js/tw-config.js"></script>
 
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -40,7 +47,6 @@
   <style>
     body {
       font-family: 'DM Sans', system-ui, sans-serif;
-      background-color: #0d1117;
     }
     code, pre {
       font-family: 'JetBrains Mono', monospace;
@@ -55,13 +61,13 @@
   <!-- ============================================
        HEADER / NAVIGATION
        ============================================ -->
-  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#21262d] z-50">
+  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="PackDB" class="h-8">
+        <img src="assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
+          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
 
@@ -85,10 +91,14 @@
           Get Started
           <i data-lucide="arrow-right" class="w-4 h-4"></i>
         </a>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
+          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
       </div>
 
       <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#1c2028] text-[#e2e8f0]"
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset text-fg"
               aria-label="Toggle menu" aria-expanded="false">
         <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
         <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
@@ -96,16 +106,16 @@
     </nav>
 
     <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#21262d] bg-[#0d1117]" aria-hidden="true">
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
       <div class="container mx-auto px-4 py-4 space-y-4">
         <a href="index.html" class="block py-2 nav-link active">Home</a>
         <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
         <a href="documentation.html" class="block py-2 nav-link">Docs</a>
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#21262d]">
+        <hr class="border-bdcolor">
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
           <i data-lucide="github" class="w-5 h-5"></i>
           GitHub
         </a>
@@ -128,11 +138,11 @@
     <section class="pt-28 pb-20 md:pt-36 md:pb-28">
       <div class="container mx-auto px-4">
         <div class="max-w-3xl mx-auto text-center">
-          <h1 class="text-4xl md:text-5xl lg:text-6xl text-[#e2e8f0] mb-6 leading-tight">
-            Optimization, Native in <span class="text-[#58a6ff]">SQL</span>
+          <h1 class="text-4xl md:text-5xl lg:text-6xl text-fg mb-6 leading-tight">
+            Optimization, Native in <span class="text-accent">SQL</span>
           </h1>
 
-          <p class="text-lg md:text-xl text-[#8b949e] mb-10 max-w-2xl mx-auto leading-relaxed">
+          <p class="text-lg md:text-xl text-fg-muted mb-10 max-w-2xl mx-auto leading-relaxed">
             PackDB extends DuckDB with declarative optimization.
             Select optimal subsets of data with constraints and objectives &mdash; no external tools required.
           </p>
@@ -167,7 +177,7 @@ SUCH THAT
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
             </div>
-            <p class="text-sm text-[#6e7681] mt-3 text-center">
+            <p class="text-sm text-fg-subtle mt-3 text-center">
               One query. No data export. No solver code. Just SQL.
             </p>
           </div>
@@ -186,10 +196,10 @@ MAXIMIZE SUM(x * value);</code></pre>
 
           <!-- Intro text -->
           <div class="max-w-3xl mx-auto text-center mb-16">
-            <h2 class="text-3xl md:text-4xl text-[#e2e8f0] mb-5">
+            <h2 class="text-3xl md:text-4xl text-fg mb-5">
               Why Optimization Belongs in the Database
             </h2>
-            <p class="text-lg text-[#8b949e] leading-relaxed">
+            <p class="text-lg text-fg-muted leading-relaxed">
               Many real-world decisions require choosing the best subset of items from a table &mdash; which products to stock, which patients to schedule, which assets to include.
               Today, solving these <em>package queries</em> means exporting data, writing solver code in Python, and mapping results back.
               PackDB collapses that entire pipeline into a single SQL statement.
@@ -200,9 +210,9 @@ MAXIMIZE SUM(x * value);</code></pre>
           <div class="grid md:grid-cols-2 gap-6 mb-12">
             <!-- Traditional Approach -->
             <div class="code-block">
-              <div class="code-header" style="background-color: rgba(248, 81, 73, 0.08);">
+              <div class="code-header bg-danger-tint">
                 <span class="language-label flex items-center gap-2">
-                  <span class="w-1.5 h-1.5 rounded-full bg-[#f85149]"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-danger"></span>
                   Traditional Approach
                 </span>
                 <button class="copy-button">
@@ -238,9 +248,9 @@ prob.solve()
 
             <!-- PackDB Approach -->
             <div class="code-block">
-              <div class="code-header" style="background-color: rgba(63, 185, 80, 0.08);">
+              <div class="code-header bg-success-tint">
                 <span class="language-label flex items-center gap-2">
-                  <span class="w-1.5 h-1.5 rounded-full bg-[#3fb950]"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
                   With PackDB
                 </span>
                 <button class="copy-button">
@@ -259,42 +269,42 @@ MAXIMIZE SUM(x * value);</code></pre>
             </div>
           </div>
 
-          <p class="text-center text-[#8b949e]">
-            <span class="text-[#58a6ff] font-medium">Same result</span>, a fraction of the code. No context switching between languages.
+          <p class="text-center text-fg-muted">
+            <span class="text-accent font-medium">Same result</span>, a fraction of the code. No context switching between languages.
           </p>
 
           <!-- Use case mentions -->
-          <div class="mt-20 pt-16 border-t border-[#1c2028]">
-            <h3 class="text-2xl md:text-3xl text-[#e2e8f0] text-center mb-4">
+          <div class="mt-20 pt-16 border-t border-bdcolor-muted">
+            <h3 class="text-2xl md:text-3xl text-fg text-center mb-4">
               Built for Complex Selection Problems
             </h3>
-            <p class="text-center text-[#8b949e] mb-10 max-w-2xl mx-auto">
+            <p class="text-center text-fg-muted mb-10 max-w-2xl mx-auto">
               Any problem where you need to pick the best subset from a table &mdash; subject to constraints &mdash; is a package query.
             </p>
             <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
               <a href="examples/basic-knapsack.html" class="card p-5 block group">
-                <i data-lucide="package" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-                <h4 class="text-sm font-semibold text-[#e2e8f0] mb-1 group-hover:text-[#58a6ff] transition-colors">Knapsack / Packing</h4>
-                <p class="text-xs text-[#6e7681] leading-relaxed">Maximize value within a weight or budget limit.</p>
+                <i data-lucide="package" class="w-5 h-5 text-accent mb-3"></i>
+                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Knapsack / Packing</h4>
+                <p class="text-xs text-fg-subtle leading-relaxed">Maximize value within a weight or budget limit.</p>
               </a>
               <a href="examples/intermediate-diet.html" class="card p-5 block group">
-                <i data-lucide="utensils" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-                <h4 class="text-sm font-semibold text-[#e2e8f0] mb-1 group-hover:text-[#58a6ff] transition-colors">Diet / Nutrition</h4>
-                <p class="text-xs text-[#6e7681] leading-relaxed">Meet nutritional targets while minimizing cost.</p>
+                <i data-lucide="utensils" class="w-5 h-5 text-accent mb-3"></i>
+                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Diet / Nutrition</h4>
+                <p class="text-xs text-fg-subtle leading-relaxed">Meet nutritional targets while minimizing cost.</p>
               </a>
               <a href="examples/advanced-portfolio.html" class="card p-5 block group">
-                <i data-lucide="trending-up" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-                <h4 class="text-sm font-semibold text-[#e2e8f0] mb-1 group-hover:text-[#58a6ff] transition-colors">Portfolio Selection</h4>
-                <p class="text-xs text-[#6e7681] leading-relaxed">Maximize return under risk and diversification constraints.</p>
+                <i data-lucide="trending-up" class="w-5 h-5 text-accent mb-3"></i>
+                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Portfolio Selection</h4>
+                <p class="text-xs text-fg-subtle leading-relaxed">Maximize return under risk and diversification constraints.</p>
               </a>
               <a href="examples/basic-production.html" class="card p-5 block group">
-                <i data-lucide="factory" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-                <h4 class="text-sm font-semibold text-[#e2e8f0] mb-1 group-hover:text-[#58a6ff] transition-colors">Resource Allocation</h4>
-                <p class="text-xs text-[#6e7681] leading-relaxed">Assign limited resources to maximize output.</p>
+                <i data-lucide="factory" class="w-5 h-5 text-accent mb-3"></i>
+                <h4 class="text-sm font-semibold text-fg mb-1 group-hover:text-accent transition-colors">Resource Allocation</h4>
+                <p class="text-xs text-fg-subtle leading-relaxed">Assign limited resources to maximize output.</p>
               </a>
             </div>
             <div class="text-center mt-8">
-              <a href="examples.html" class="text-sm text-[#58a6ff] hover:text-[#79c0ff]">
+              <a href="examples.html" class="text-sm text-accent hover:text-accent">
                 View all examples &rarr;
               </a>
             </div>
@@ -311,29 +321,29 @@ MAXIMIZE SUM(x * value);</code></pre>
     <section class="py-20 md:py-28">
       <div class="container mx-auto px-4">
         <div class="max-w-5xl mx-auto">
-          <h2 class="text-3xl md:text-4xl text-[#e2e8f0] text-center mb-14">
+          <h2 class="text-3xl md:text-4xl text-fg text-center mb-14">
             Why PackDB?
           </h2>
 
           <div class="feature-strip">
             <div class="feature-item">
-              <i data-lucide="database" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-              <h4 class="text-[#e2e8f0]">Native SQL</h4>
+              <i data-lucide="database" class="w-5 h-5 text-accent mb-3"></i>
+              <h4 class="text-fg">Native SQL</h4>
               <p>Express optimization as a SQL extension. No context switching.</p>
             </div>
             <div class="feature-item">
-              <i data-lucide="zap" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-              <h4 class="text-[#e2e8f0]">Zero Data Movement</h4>
+              <i data-lucide="zap" class="w-5 h-5 text-accent mb-3"></i>
+              <h4 class="text-fg">Zero Data Movement</h4>
               <p>Solve directly on database buffers. No export/import overhead.</p>
             </div>
             <div class="feature-item">
-              <i data-lucide="file-code" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-              <h4 class="text-[#e2e8f0]">Declarative</h4>
+              <i data-lucide="file-code" class="w-5 h-5 text-accent mb-3"></i>
+              <h4 class="text-fg">Declarative</h4>
               <p>Define what to optimize, not how. The system handles formulation.</p>
             </div>
             <div class="feature-item">
-              <i data-lucide="cpu" class="w-5 h-5 text-[#58a6ff] mb-3"></i>
-              <h4 class="text-[#e2e8f0]">Built on DuckDB</h4>
+              <i data-lucide="cpu" class="w-5 h-5 text-accent mb-3"></i>
+              <h4 class="text-fg">Built on DuckDB</h4>
               <p>Columnar storage, vectorized execution, embedded HiGHS solver.</p>
             </div>
           </div>
@@ -349,10 +359,10 @@ MAXIMIZE SUM(x * value);</code></pre>
     <section class="py-20 md:py-28">
       <div class="container mx-auto px-4">
         <div class="max-w-3xl mx-auto text-center">
-          <h2 class="text-3xl md:text-4xl text-[#e2e8f0] mb-5">
+          <h2 class="text-3xl md:text-4xl text-fg mb-5">
             Ready to Try It?
           </h2>
-          <p class="text-lg text-[#8b949e] mb-10 max-w-xl mx-auto">
+          <p class="text-lg text-fg-muted mb-10 max-w-xl mx-auto">
             Install PackDB and run your first optimization query in minutes.
           </p>
           <a href="getting-started.html" class="btn btn-primary text-base px-8 py-3">
@@ -368,17 +378,17 @@ MAXIMIZE SUM(x * value);</code></pre>
   <!-- ============================================
        FOOTER
        ============================================ -->
-  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#21262d]">
+  <footer class="bg-canvas-inset text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
 
         <!-- Col 1: Branding -->
         <div>
-          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-[#6e7681] mb-4">
+          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <p class="text-sm text-fg-subtle mb-4">
             Optimization-enabled SQL queries for DuckDB
           </p>
-          <p class="text-xs text-[#6e7681]">
+          <p class="text-xs text-fg-subtle">
             &copy; 2025 HUDA Lab<br>
             NYU Abu Dhabi &amp; UMass Amherst
           </p>
@@ -386,44 +396,44 @@ MAXIMIZE SUM(x * value);</code></pre>
 
         <!-- Col 2: Documentation -->
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff] transition-colors">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-[#6e7681] hover:text-[#58a6ff] transition-colors">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-[#6e7681] hover:text-[#58a6ff] transition-colors">Examples</a></li>
+            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent transition-colors">Getting Started</a></li>
+            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent transition-colors">Syntax Reference</a></li>
+            <li><a href="examples.html" class="text-fg-subtle hover:text-accent transition-colors">Examples</a></li>
           </ul>
         </div>
 
         <!-- Col 3: Resources -->
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
             <li>
               <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-                 class="text-[#6e7681] hover:text-[#58a6ff] transition-colors flex items-center gap-1">
+                 class="text-fg-subtle hover:text-accent transition-colors flex items-center gap-1">
                 <i data-lucide="github" class="w-4 h-4"></i>
                 GitHub Repository
               </a>
             </li>
             <li>
               <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
-                 class="text-[#6e7681] hover:text-[#58a6ff] transition-colors">Issue Tracker</a>
+                 class="text-fg-subtle hover:text-accent transition-colors">Issue Tracker</a>
             </li>
-            <li><a href="about.html#research" class="text-[#6e7681] hover:text-[#58a6ff] transition-colors">Research Papers</a></li>
+            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent transition-colors">Research Papers</a></li>
             <li>
               <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="text-[#6e7681] hover:text-[#58a6ff] transition-colors">HUDA Lab</a>
+                 class="text-fg-subtle hover:text-accent transition-colors">HUDA Lab</a>
             </li>
           </ul>
         </div>
 
         <!-- Col 4: Contact -->
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-[#6e7681]">
+          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-fg-subtle">
             <li>NYU Abu Dhabi &amp; UMass Amherst</li>
             <li>
-              <a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff] transition-colors">
+              <a href="mailto:huda-lab@nyu.edu" class="text-accent hover:text-accent transition-colors">
                 huda-lab@nyu.edu
               </a>
             </li>
@@ -433,7 +443,7 @@ MAXIMIZE SUM(x * value);</code></pre>
       </div>
 
       <!-- Bottom Bar -->
-      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
         <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>

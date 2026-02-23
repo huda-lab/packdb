@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  document.documentElement.setAttribute('data-theme',t)})();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Get started with PackDB - Download or build the standalone database and run your first optimization query in minutes.">
@@ -11,6 +15,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
 
   <!-- Tailwind CSS -->
+  <script src="assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- DM Serif Display + DM Sans -->
@@ -39,7 +44,6 @@
   <style>
     body {
       font-family: 'DM Sans', system-ui, sans-serif;
-      background-color: #0d1117;
     }
     code, pre {
       font-family: 'JetBrains Mono', monospace;
@@ -54,13 +58,13 @@
   <!-- ============================================
        HEADER / NAVIGATION
        ============================================ -->
-  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#21262d] z-50">
+  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="PackDB" class="h-8">
+        <img src="assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
+          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
 
@@ -84,10 +88,14 @@
           Get Started
           <i data-lucide="arrow-right" class="w-4 h-4"></i>
         </a>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
+          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
       </div>
 
       <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-[#1c2028]"
+      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset"
               aria-label="Toggle menu" aria-expanded="false">
         <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
         <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
@@ -95,16 +103,16 @@
     </nav>
 
     <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-[#21262d] bg-[#0d1117]" aria-hidden="true">
+    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
       <div class="container mx-auto px-4 py-4 space-y-4">
         <a href="index.html" class="block py-2 nav-link">Home</a>
         <a href="getting-started.html" class="block py-2 nav-link active">Getting Started</a>
         <a href="documentation.html" class="block py-2 nav-link">Docs</a>
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-[#21262d]">
+        <hr class="border-bdcolor">
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-[#8b949e] hover:text-[#58a6ff]">
+           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
           <i data-lucide="github" class="w-5 h-5"></i>
           GitHub
         </a>
@@ -124,20 +132,20 @@
     <!-- ============================================
          HERO SECTION
          ============================================ -->
-    <section class="py-12 bg-gradient-to-b from-[#0d1117] to-[#0d1117]">
+    <section class="py-12 bg-canvas">
       <div class="container mx-auto px-4">
         <!-- Breadcrumb -->
         <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
           <a href="index.html">Home</a>
           <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          <span class="text-[#e2e8f0] font-medium">Getting Started</span>
+          <span class="text-fg font-medium">Getting Started</span>
         </nav>
 
         <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl text-[#e2e8f0] mb-4">
+          <h1 class="text-4xl md:text-5xl text-fg mb-4">
             Getting Started with PackDB
           </h1>
-          <p class="text-xl text-[#8b949e]">
+          <p class="text-xl text-fg-muted">
             Install PackDB and run your first optimization query.
           </p>
         </div>
@@ -154,7 +162,7 @@
           <!-- Sidebar Navigation -->
           <aside class="lg:w-64 flex-shrink-0">
             <nav class="sidebar-nav lg:sticky lg:top-24">
-              <h3 class="text-sm font-semibold text-[#e2e8f0] uppercase tracking-wider mb-4">On This Page</h3>
+              <h3 class="text-sm font-semibold text-fg uppercase tracking-wider mb-4">On This Page</h3>
               <ul class="space-y-1">
                 <li>
                   <a href="#prerequisites" class="sidebar-link active">Prerequisites</a>
@@ -174,12 +182,12 @@
 
             <!-- Prerequisites Section -->
             <section id="prerequisites" class="mb-16">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6 flex items-center gap-3">
-                <span class="flex items-center justify-center w-10 h-10 bg-[#1c2028] text-[#e2e8f0] rounded-md text-lg font-semibold">1</span>
+              <h2 class="text-3xl text-fg mb-6 flex items-center gap-3">
+                <span class="flex items-center justify-center w-10 h-10 bg-canvas-inset text-fg rounded-md text-lg font-semibold">1</span>
                 Prerequisites
               </h2>
 
-              <p class="text-[#8b949e] mb-6">
+              <p class="text-fg-muted mb-6">
                 Requirements depend on your installation method:
               </p>
 
@@ -191,8 +199,8 @@
 
               <!-- Build from Source -->
               <div class="mb-6">
-                <h3 class="font-semibold text-[#e2e8f0] mb-3">Building from Source</h3>
-                <ul class="space-y-2 text-[#8b949e] text-sm">
+                <h3 class="font-semibold text-fg mb-3">Building from Source</h3>
+                <ul class="space-y-2 text-fg-muted text-sm">
                   <li><strong>C++ Compiler:</strong> GCC 9+, Clang 10+, or MSVC 2019+</li>
                   <li><strong>CMake:</strong> Version 3.15+</li>
                   <li><strong>Python:</strong> Version 3.7+ (parser generation)</li>
@@ -202,8 +210,8 @@
               </div>
 
               <div class="mb-6">
-                <h3 class="font-semibold text-[#e2e8f0] mb-3">Supported Platforms</h3>
-                <ul class="text-[#8b949e] text-sm space-y-1">
+                <h3 class="font-semibold text-fg mb-3">Supported Platforms</h3>
+                <ul class="text-fg-muted text-sm space-y-1">
                   <li>Linux x86-64 (Ubuntu 18.04+)</li>
                   <li>macOS 11.0+ (Intel & Apple Silicon)</li>
                   <li>Windows 10+ (x64)</li>
@@ -218,21 +226,21 @@
 
             <!-- Installation Section -->
             <section id="installation" class="mb-16">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6 flex items-center gap-3">
-                <span class="flex items-center justify-center w-10 h-10 bg-[#1c2028] text-[#e2e8f0] rounded-md text-lg font-semibold">2</span>
+              <h2 class="text-3xl text-fg mb-6 flex items-center gap-3">
+                <span class="flex items-center justify-center w-10 h-10 bg-canvas-inset text-fg rounded-md text-lg font-semibold">2</span>
                 Installation
               </h2>
 
               <!-- Installation Method Tabs -->
               <div class="mb-8">
                 <div class="flex flex-wrap gap-2 mb-6">
-                  <button class="install-tab active px-4 py-2 rounded-lg font-medium text-sm bg-[#21262d] text-[#e2e8f0]" data-tab="binary">
+                  <button class="install-tab active px-4 py-2 rounded-lg font-medium text-sm bg-canvas-subtle text-fg" data-tab="binary">
                     Download Binary
                   </button>
-                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-[#1c2028] text-[#8b949e] hover:bg-[#21262d]" data-tab="source">
+                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-muted hover:bg-canvas-subtle" data-tab="source">
                     Build from Source
                   </button>
-                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-[#1c2028] text-[#6e7681] hover:bg-[#21262d]" data-tab="pip">
+                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-subtle hover:bg-canvas-subtle" data-tab="pip">
                     pip install (coming soon)
                   </button>
                 </div>
@@ -241,60 +249,60 @@
                 <div id="install-binary" class="install-content">
                   <!-- Step 1: Choose Platform -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 1: Choose Your Platform</h3>
-                    <div class="bg-[#161b22] rounded-lg border border-[#21262d] overflow-hidden">
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Choose Your Platform</h3>
+                    <div class="bg-canvas-subtle rounded-lg border border-bdcolor overflow-hidden">
                       <table class="w-full text-sm">
                         <thead>
-                          <tr class="bg-[#1c2028]">
-                            <th class="text-left px-4 py-3 text-[#e2e8f0]">Platform</th>
-                            <th class="text-left px-4 py-3 text-[#e2e8f0]">Requirements</th>
-                            <th class="text-left px-4 py-3 text-[#e2e8f0]">Filename</th>
+                          <tr class="bg-canvas-inset">
+                            <th class="text-left px-4 py-3 text-fg">Platform</th>
+                            <th class="text-left px-4 py-3 text-fg">Requirements</th>
+                            <th class="text-left px-4 py-3 text-fg">Filename</th>
                           </tr>
                         </thead>
                         <tbody>
-                          <tr class="border-t border-[#21262d]">
-                            <td class="px-4 py-3 font-medium text-[#e2e8f0]">Linux x86-64</td>
-                            <td class="px-4 py-3 text-[#8b949e]">Ubuntu 18.04+, CentOS 7+</td>
-                            <td class="px-4 py-3"><code class="text-[#8b949e]">packdb_cli-linux-amd64.zip</code></td>
+                          <tr class="border-t border-bdcolor">
+                            <td class="px-4 py-3 font-medium text-fg">Linux x86-64</td>
+                            <td class="px-4 py-3 text-fg-muted">Ubuntu 18.04+, CentOS 7+</td>
+                            <td class="px-4 py-3"><code class="text-fg-muted">packdb_cli-linux-amd64.zip</code></td>
                           </tr>
-                          <tr class="border-t border-[#21262d]">
-                            <td class="px-4 py-3 font-medium text-[#e2e8f0]">macOS Universal</td>
-                            <td class="px-4 py-3 text-[#8b949e]">macOS 11.0+</td>
-                            <td class="px-4 py-3"><code class="text-[#8b949e]">packdb_cli-osx-universal.zip</code></td>
+                          <tr class="border-t border-bdcolor">
+                            <td class="px-4 py-3 font-medium text-fg">macOS Universal</td>
+                            <td class="px-4 py-3 text-fg-muted">macOS 11.0+</td>
+                            <td class="px-4 py-3"><code class="text-fg-muted">packdb_cli-osx-universal.zip</code></td>
                           </tr>
-                          <tr class="border-t border-[#21262d]">
-                            <td class="px-4 py-3 font-medium text-[#e2e8f0]">Windows x64</td>
-                            <td class="px-4 py-3 text-[#8b949e]">Windows 10+</td>
-                            <td class="px-4 py-3"><code class="text-[#8b949e]">packdb_cli-windows-amd64.zip</code></td>
+                          <tr class="border-t border-bdcolor">
+                            <td class="px-4 py-3 font-medium text-fg">Windows x64</td>
+                            <td class="px-4 py-3 text-fg-muted">Windows 10+</td>
+                            <td class="px-4 py-3"><code class="text-fg-muted">packdb_cli-windows-amd64.zip</code></td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
-                    <p class="text-[#6e7681] text-xs mt-3">
+                    <p class="text-fg-subtle text-xs mt-3">
                       .gz archives are also available for Linux and macOS in the release assets.
                     </p>
                   </div>
 
                   <!-- Step 2: Download -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 2: Download from GitHub Releases</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Download from GitHub Releases</h3>
                     <a href="https://github.com/huda-lab/packdb/releases/latest" target="_blank" rel="noopener noreferrer"
                        class="inline-flex items-center gap-2 btn btn-primary mb-4">
                       <i data-lucide="external-link" class="w-4 h-4"></i>
                       Latest Release
                     </a>
-                    <p class="text-sm text-[#8b949e]">
+                    <p class="text-sm text-fg-muted">
                       Download the ZIP file for your platform from the Assets section.
                     </p>
                   </div>
 
                   <!-- Step 3: Extract and Verify -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 3: Extract and Verify</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 3: Extract and Verify</h3>
 
                     <!-- Linux/macOS -->
                     <div class="mb-4">
-                      <h4 class="font-medium text-[#8b949e] mb-2">Linux / macOS</h4>
+                      <h4 class="font-medium text-fg-muted mb-2">Linux / macOS</h4>
                       <div class="code-block">
                         <div class="code-header">
                           <span class="language-label">Bash</span>
@@ -316,7 +324,7 @@ chmod +x packdb
 
                     <!-- Windows -->
                     <div class="mb-4">
-                      <h4 class="font-medium text-[#8b949e] mb-2">Windows (PowerShell)</h4>
+                      <h4 class="font-medium text-fg-muted mb-2">Windows (PowerShell)</h4>
                       <div class="code-block">
                         <div class="code-header">
                           <span class="language-label">PowerShell</span>
@@ -343,7 +351,7 @@ Expand-Archive packdb_cli-windows-amd64.zip -DestinationPath .
 
                   <!-- Test Query -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 4: Test Installation</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 4: Test Installation</h3>
                     <div class="code-block">
                       <div class="code-header">
                         <span class="language-label">Bash</span>
@@ -362,7 +370,7 @@ Expand-Archive packdb_cli-windows-amd64.zip -DestinationPath .
                 <div id="install-source" class="install-content hidden">
                   <!-- Step 1: Clone -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 1: Clone the Repository</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Clone the Repository</h3>
                     <div class="code-block">
                       <div class="code-header">
                         <span class="language-label">Bash</span>
@@ -379,10 +387,10 @@ git checkout hatim</code></pre>
 
                   <!-- Step 2: Build -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 2: Configure and Build</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Configure and Build</h3>
                     <!-- Linux / macOS -->
                     <div class="mb-4">
-                      <h4 class="font-medium text-[#8b949e] mb-2">Linux / macOS</h4>
+                      <h4 class="font-medium text-fg-muted mb-2">Linux / macOS</h4>
                       <div class="code-block">
                         <div class="code-header">
                           <span class="language-label">Bash</span>
@@ -397,8 +405,8 @@ git checkout hatim</code></pre>
 
                     <!-- Windows -->
                     <div class="mb-4">
-                      <h4 class="font-medium text-[#8b949e] mb-2">Windows (PowerShell)</h4>
-                      <p class="text-[#6e7681] text-xs mb-2">Requires Visual Studio 2019+ and Ninja installed.</p>
+                      <h4 class="font-medium text-fg-muted mb-2">Windows (PowerShell)</h4>
+                      <p class="text-fg-subtle text-xs mb-2">Requires Visual Studio 2019+ and Ninja installed.</p>
                       <div class="code-block">
                         <div class="code-header">
                           <span class="language-label">PowerShell</span>
@@ -415,10 +423,10 @@ ninja -C build/release</code></pre>
 
                   <!-- Step 3: Verify -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Step 3: Verify Installation</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 3: Verify Installation</h3>
                     <!-- Linux / macOS -->
                     <div class="mb-4">
-                      <h4 class="font-medium text-[#8b949e] mb-2">Linux / macOS</h4>
+                      <h4 class="font-medium text-fg-muted mb-2">Linux / macOS</h4>
                       <div class="code-block">
                         <div class="code-header">
                           <span class="language-label">Bash</span>
@@ -437,7 +445,7 @@ ninja -C build/release</code></pre>
 
                     <!-- Windows -->
                     <div class="mb-4">
-                      <h4 class="font-medium text-[#8b949e] mb-2">Windows (PowerShell)</h4>
+                      <h4 class="font-medium text-fg-muted mb-2">Windows (PowerShell)</h4>
                       <div class="code-block">
                         <div class="code-header">
                           <span class="language-label">PowerShell</span>
@@ -459,8 +467,8 @@ ninja -C build/release</code></pre>
                 <!-- Option 3: pip install -->
                 <div id="install-pip" class="install-content hidden">
                   <div class="text-center py-8">
-                    <h3 class="text-xl font-semibold text-[#e2e8f0] mb-2">Coming Soon</h3>
-                    <p class="text-[#8b949e] mb-4 text-sm">
+                    <h3 class="text-xl font-semibold text-fg mb-2">Coming Soon</h3>
+                    <p class="text-fg-muted mb-4 text-sm">
                       Python package is under development.
                     </p>
                     <div class="code-block max-w-md mx-auto opacity-50">
@@ -469,8 +477,8 @@ ninja -C build/release</code></pre>
                       </div>
                       <pre class="language-bash"><code>pip install packdb</code></pre>
                     </div>
-                    <p class="text-sm text-[#6e7681] mt-4">
-                      <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#8b949e] hover:underline">
+                    <p class="text-sm text-fg-subtle mt-4">
+                      <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-muted hover:underline">
                         Watch the GitHub repo
                       </a>
                       for updates.
@@ -483,18 +491,18 @@ ninja -C build/release</code></pre>
 
             <!-- Your First Query Section -->
             <section id="first-query" class="mb-16">
-              <h2 class="text-3xl text-[#e2e8f0] mb-6 flex items-center gap-3">
-                <span class="flex items-center justify-center w-10 h-10 bg-[#1c2028] text-[#e2e8f0] rounded-md text-lg font-semibold">3</span>
+              <h2 class="text-3xl text-fg mb-6 flex items-center gap-3">
+                <span class="flex items-center justify-center w-10 h-10 bg-canvas-inset text-fg rounded-md text-lg font-semibold">3</span>
                 Your First Query
               </h2>
 
-              <p class="text-[#8b949e] mb-6">
+              <p class="text-fg-muted mb-6">
                 A classic knapsack problem: select items to maximize value within a weight limit.
               </p>
 
               <!-- Start PackDB -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Start PackDB</h3>
+                <h3 class="text-xl font-semibold text-fg mb-4">Start PackDB</h3>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">Bash</span>
@@ -506,15 +514,15 @@ ninja -C build/release</code></pre>
                   <pre class="language-bash"><code id="code-start"># Start PackDB with a new database
 ./packdb my_database.db</code></pre>
                 </div>
-                <p class="text-sm text-[#6e7681] mt-2">
-                  This opens an interactive SQL shell. You can also use <code class="bg-[#1c2028] px-1 rounded">./packdb</code> without a filename for an in-memory database.
+                <p class="text-sm text-fg-subtle mt-2">
+                  This opens an interactive SQL shell. You can also use <code class="bg-canvas-inset px-1 rounded">./packdb</code> without a filename for an in-memory database.
                 </p>
               </div>
 
               <!-- Step 1: Create Sample Data -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Create Sample Data</h3>
-                <p class="text-[#8b949e] mb-4">In the PackDB shell, run:</p>
+                <h3 class="text-xl font-semibold text-fg mb-4">Create Sample Data</h3>
+                <p class="text-fg-muted mb-4">In the PackDB shell, run:</p>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">SQL</span>
@@ -540,7 +548,7 @@ INSERT INTO Items VALUES
 
               <!-- Step 2: Write Optimization Query -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Write the Optimization Query</h3>
+                <h3 class="text-xl font-semibold text-fg mb-4">Write the Optimization Query</h3>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">SQL</span>
@@ -562,34 +570,34 @@ MAXIMIZE SUM(x * value);</code></pre>
 
               <!-- Understanding the Query -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">What Each Clause Does</h3>
+                <h3 class="text-xl font-semibold text-fg mb-4">What Each Clause Does</h3>
                 <ol class="space-y-3">
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">1</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">1</span>
                     <div>
-                      <code class="text-[#e2e8f0]">WHERE category = 'electronics'</code>
-                      <span class="text-[#8b949e]"> &mdash; Only electronics are considered. Item 4 (furniture) is excluded.</span>
+                      <code class="text-fg">WHERE category = 'electronics'</code>
+                      <span class="text-fg-muted"> &mdash; Only electronics are considered. Item 4 (furniture) is excluded.</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">2</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">2</span>
                     <div>
-                      <code class="text-[#e2e8f0]">DECIDE x</code>
-                      <span class="text-[#8b949e]"> &mdash; Creates a variable <code>x</code> for each remaining row.</span>
+                      <code class="text-fg">DECIDE x</code>
+                      <span class="text-fg-muted"> &mdash; Creates a variable <code>x</code> for each remaining row.</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">3</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">3</span>
                     <div>
-                      <code class="text-[#e2e8f0]">SUCH THAT x IS BINARY, SUM(x * weight) &lt;= 50</code>
-                      <span class="text-[#8b949e]"> &mdash; Each <code>x</code> is 0 or 1, and the total weight of selected items cannot exceed 50.</span>
+                      <code class="text-fg">SUCH THAT x IS BINARY, SUM(x * weight) &lt;= 50</code>
+                      <span class="text-fg-muted"> &mdash; Each <code>x</code> is 0 or 1, and the total weight of selected items cannot exceed 50.</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-[#1c2028] text-[#e2e8f0] rounded-md flex items-center justify-center font-bold text-sm">4</span>
+                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">4</span>
                     <div>
-                      <code class="text-[#e2e8f0]">MAXIMIZE SUM(x * value)</code>
-                      <span class="text-[#8b949e]"> &mdash; Pick the combination with the highest total value.</span>
+                      <code class="text-fg">MAXIMIZE SUM(x * value)</code>
+                      <span class="text-fg-muted"> &mdash; Pick the combination with the highest total value.</span>
                     </div>
                   </li>
                 </ol>
@@ -597,49 +605,49 @@ MAXIMIZE SUM(x * value);</code></pre>
 
               <!-- Expected Output -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Expected Output</h3>
-                <div class="table-wrapper rounded-lg border border-[#21262d] overflow-hidden">
+                <h3 class="text-xl font-semibold text-fg mb-4">Expected Output</h3>
+                <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden">
                   <table class="w-full">
                     <thead>
-                      <tr class="bg-[#1c2028]">
-                        <th class="text-left px-4 py-3 text-[#e2e8f0]">id</th>
-                        <th class="text-left px-4 py-3 text-[#e2e8f0]">value</th>
-                        <th class="text-left px-4 py-3 text-[#e2e8f0]">weight</th>
-                        <th class="text-left px-4 py-3 text-[#e2e8f0]">x</th>
+                      <tr class="bg-canvas-inset">
+                        <th class="text-left px-4 py-3 text-fg">id</th>
+                        <th class="text-left px-4 py-3 text-fg">value</th>
+                        <th class="text-left px-4 py-3 text-fg">weight</th>
+                        <th class="text-left px-4 py-3 text-fg">x</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
-                        <td class="px-4 py-3 text-[#e2e8f0]">1</td>
-                        <td class="px-4 py-3 text-[#e2e8f0]">100</td>
-                        <td class="px-4 py-3 text-[#e2e8f0]">20</td>
-                        <td class="px-4 py-3 font-semibold text-[#e2e8f0]">1</td>
+                        <td class="px-4 py-3 text-fg">1</td>
+                        <td class="px-4 py-3 text-fg">100</td>
+                        <td class="px-4 py-3 text-fg">20</td>
+                        <td class="px-4 py-3 font-semibold text-fg">1</td>
                       </tr>
                       <tr>
-                        <td class="px-4 py-3 text-[#e2e8f0]">2</td>
-                        <td class="px-4 py-3 text-[#e2e8f0]">60</td>
-                        <td class="px-4 py-3 text-[#e2e8f0]">10</td>
-                        <td class="px-4 py-3 text-[#6e7681]">0</td>
+                        <td class="px-4 py-3 text-fg">2</td>
+                        <td class="px-4 py-3 text-fg">60</td>
+                        <td class="px-4 py-3 text-fg">10</td>
+                        <td class="px-4 py-3 text-fg-subtle">0</td>
                       </tr>
                       <tr>
-                        <td class="px-4 py-3 text-[#e2e8f0]">3</td>
-                        <td class="px-4 py-3 text-[#e2e8f0]">120</td>
-                        <td class="px-4 py-3 text-[#e2e8f0]">30</td>
-                        <td class="px-4 py-3 font-semibold text-[#e2e8f0]">1</td>
+                        <td class="px-4 py-3 text-fg">3</td>
+                        <td class="px-4 py-3 text-fg">120</td>
+                        <td class="px-4 py-3 text-fg">30</td>
+                        <td class="px-4 py-3 font-semibold text-fg">1</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
 
-                <p class="mt-4 text-[#8b949e] text-sm">
+                <p class="mt-4 text-fg-muted text-sm">
                   <strong>Result:</strong> Items 1 and 3 are selected (<code>x = 1</code>). Their combined weight is exactly 50 (at the limit) and their combined value is 220 &mdash; the highest achievable. Item 2 is skipped (<code>x = 0</code>) because including it would push the total weight to 60.
                 </p>
               </div>
 
               <!-- Alternative: One-liner -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-[#e2e8f0] mb-4">Alternative: Run from Command Line</h3>
-                <p class="text-[#8b949e] mb-4">
+                <h3 class="text-xl font-semibold text-fg mb-4">Alternative: Run from Command Line</h3>
+                <p class="text-fg-muted mb-4">
                   You can also run queries directly from your terminal without entering the interactive shell:
                 </p>
                 <div class="code-block">
@@ -669,39 +677,39 @@ MAXIMIZE SUM(x * value);</code></pre>
   <!-- ============================================
        FOOTER
        ============================================ -->
-  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#21262d]">
+  <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
+            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent">Getting Started</a></li>
+            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent">Syntax Reference</a></li>
+            <li><a href="examples.html" class="text-fg-subtle hover:text-accent">Examples</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
-            <li><a href="about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
+            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-[#6e7681]">
+          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-fg-subtle">
             <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-accent hover:text-accent">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
       </div>
-      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
         <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>

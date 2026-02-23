@@ -1,10 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  document.documentElement.setAttribute('data-theme',t)})();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dynamic Constraints - PackDB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
+  <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,15 +24,16 @@
     body { font-family: 'DM Sans', system-ui, sans-serif; }
     code, pre { font-family: 'JetBrains Mono', monospace; }
   </style>
+  <script src="../assets/js/main.js" defer></script>
 </head>
 <body class="min-h-screen">
 
-  <header class="fixed top-0 w-full bg-[#0d1117]/95 backdrop-blur-sm border-b border-[#21262d] z-50">
+  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
-        <img src="../assets/images/logo.svg" alt="PackDB" class="h-8">
+        <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
         <div class="hidden sm:block">
-          <div class="text-xs text-[#6e7681]">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
+          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
       </a>
       <div class="hidden md:flex items-center space-x-6">
@@ -41,6 +47,10 @@
         <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
           <i data-lucide="github" class="w-4 h-4"></i> GitHub
         </a>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
+          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
       </div>
     </nav>
   </header>
@@ -55,19 +65,19 @@
 
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-[#e2e8f0]">Dynamic Constraints</h1>
+        <h1 class="text-4xl text-fg">Dynamic Constraints</h1>
         <span class="badge badge-intermediate">Intermediate</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Scalar Subquery</span>
-        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">CASE Expression</span>
-        <span class="badge" style="background-color: var(--color-canvas-subtle); color: var(--color-fg-muted); border: 1px solid var(--color-border-default);">Dynamic Bounds</span>
+        <span class="badge badge-tag">Scalar Subquery</span>
+        <span class="badge badge-tag">CASE Expression</span>
+        <span class="badge badge-tag">Dynamic Bounds</span>
       </div>
     </div>
 
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
-      <p class="text-[#c9d1d9] leading-relaxed">
+      <p class="text-fg leading-relaxed">
         An inventory manager selects items for a display, but the rules come from a configuration table — the maximum number of items and the budget are stored externally rather than hard-coded. Additionally, category-specific rules apply: at least 2 items from category A and at most 3 from category B. This example shows how PackDB constraints can reference scalar subqueries (for dynamic bounds) and use CASE expressions (for category-level counting).
       </p>
     </section>
@@ -166,45 +176,45 @@ MAXIMIZE SUM(x * value);</code></pre>
       </div>
     </section>
 
-    <div class="flex justify-between pt-8 border-t border-[#21262d]">
-      <a href="intermediate-assignment.html" class="text-[#58a6ff] hover:text-[#79c0ff]">&larr; Task Assignment</a>
-      <a href="advanced-portfolio.html" class="text-[#58a6ff] hover:text-[#79c0ff]">Next: Portfolio Optimization &rarr;</a>
+    <div class="flex justify-between pt-8 border-t border-bdcolor">
+      <a href="intermediate-assignment.html" class="text-accent hover:text-accent">&larr; Task Assignment</a>
+      <a href="advanced-portfolio.html" class="text-accent hover:text-accent">Next: Portfolio Optimization &rarr;</a>
     </div>
   </main>
 
-  <footer class="bg-[#010409] text-[#8b949e] border-t border-[#21262d]">
+  <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 brightness-200">
-          <p class="text-sm text-[#6e7681] mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-[#6e7681]">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
+          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Documentation</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="../getting-started.html" class="text-[#6e7681] hover:text-[#58a6ff]">Getting Started</a></li>
-            <li><a href="../documentation.html" class="text-[#6e7681] hover:text-[#58a6ff]">Syntax Reference</a></li>
-            <li><a href="../examples.html" class="text-[#6e7681] hover:text-[#58a6ff]">Examples</a></li>
+            <li><a href="../getting-started.html" class="text-fg-subtle hover:text-accent">Getting Started</a></li>
+            <li><a href="../documentation.html" class="text-fg-subtle hover:text-accent">Syntax Reference</a></li>
+            <li><a href="../examples.html" class="text-fg-subtle hover:text-accent">Examples</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Resources</h4>
+          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-[#6e7681] hover:text-[#58a6ff]">Issue Tracker</a></li>
-            <li><a href="../about.html#research" class="text-[#6e7681] hover:text-[#58a6ff]">Research Papers</a></li>
+            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
+            <li><a href="../about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
           </ul>
         </div>
         <div>
-          <h4 class="font-semibold text-[#e2e8f0] mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-[#6e7681]">
+          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
+          <ul class="space-y-2 text-sm text-fg-subtle">
             <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li><a href="mailto:huda-lab@nyu.edu" class="text-[#58a6ff] hover:text-[#79c0ff]">huda-lab@nyu.edu</a></li>
+            <li><a href="mailto:huda-lab@nyu.edu" class="text-accent hover:text-accent">huda-lab@nyu.edu</a></li>
           </ul>
         </div>
       </div>
-      <div class="mt-8 pt-8 border-t border-[#1c2028] text-center text-xs text-[#6e7681]">
+      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
         <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
       </div>
     </div>
