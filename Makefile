@@ -1,4 +1,4 @@
-.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite
+.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test grammar grammar-build
 
 all: release
 opt: release
@@ -527,3 +527,16 @@ gather-libs: release
 	cp src/libduckdb_static.a libs/. && \
 	cp third_party/*/libduckdb_*.a libs/. && \
 	cp extension/*/lib*_extension.a libs/.
+
+# ── PackDB-specific targets ──────────────────────────────────────────────
+
+decide-setup:
+	test/decide/run_tests.sh --setup-only
+
+decide-test:
+	test/decide/run_tests.sh
+
+grammar:
+	python3 scripts/generate_grammar.py
+
+grammar-build: grammar release

@@ -208,9 +208,9 @@ typed_decide_variable_list:
 		;
 
 decide_objective_item:
-			a_expr WHEN a_expr
+			a_expr WHEN b_expr
 				{
-					/* PackDB: objective WHEN condition */
+					/* PackDB: objective WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
 			| a_expr
@@ -244,12 +244,14 @@ decide_constraint_list:
 				{ $$ = $1; }
 			| decide_constraint_list ',' decide_constraint_item
 				{ $$ = makeAndExpr($1, $3, @2); }
+			| decide_constraint_list AND decide_constraint_item
+				{ $$ = makeAndExpr($1, $3, @2); }
 		;
 
 decide_constraint_item:
-			a_expr WHEN a_expr
+			a_expr WHEN b_expr
 				{
-					/* PackDB: constraint WHEN condition */
+					/* PackDB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
 			| a_expr

@@ -116,6 +116,79 @@ MAXIMIZE SUM(x * value) WHEN region = 'US'
 
 ---
 
+## Note: WHEN vs SQL CASE WHEN
+
+PackDB's `WHEN` is a **row filter** — it controls whether a constraint or objective *applies* to a row. SQL's `CASE WHEN` is a **value expression** — it produces different values conditionally. These serve different purposes and are not interchangeable.
+
+When you need **conditional coefficients or bounds** (different values per row based on conditions), use a CTE or subquery to pre-compute the value, then reference the resulting column inside DECIDE. This avoids any need to support `CASE WHEN` within the DECIDE clause itself.
+
+### Example 1: Conditional Penalty Weights in Objective
+
+Suppose director hour changes should be penalized 3x and manager changes 2x:
+
+```sql
+WITH weighted AS (
+  SELECT *,
+    CASE WHEN title = 'Director' THEN 3
+         WHEN title = 'Manager'  THEN 2
+         ELSE 1 END AS penalty_weight
+  FROM Employees E JOIN WeeklyPlan P ON E.empID = P.empID
+)
+SELECT * DECIDE new_hours IS INTEGER
+FROM weighted
+SUCH THAT ...
+MINIMIZE SUM(penalty_weight * abs(new_hours - hours))
+```
+
+`penalty_weight` is a table column by the time DECIDE sees it, so it works as a standard coefficient.
+
+### Example 2: Conditional Effectiveness in Constraint
+
+Suppose director hours count as twice as effective:
+
+```sql
+WITH effective AS (
+  SELECT *,
+    CASE WHEN title = 'Director' THEN 2 ELSE 1 END AS effectiveness
+  FROM Employees E JOIN WeeklyPlan P ON E.empID = P.empID
+)
+SELECT * DECIDE new_hours IS INTEGER
+FROM effective
+SUCH THAT
+  SUM(new_hours * effectiveness) >= 60 PER projectID
+```
+
+Note: this is **not equivalent** to decomposing into separate WHEN constraints (`SUM(new_hours) >= 60 PER projectID AND SUM(new_hours) >= 30 WHEN title='Director' PER projectID`), which creates two independent constraints rather than one combined weighted sum.
+
+### Example 3: Conditional Bounds with Overlapping Conditions
+
+Suppose rent tolerance depends on zipcode and bedroom count, with overlapping conditions:
+
+```sql
+WITH toleranced AS (
+  SELECT *,
+    CASE WHEN zipcode = 10003 THEN 500
+         WHEN beds >= 3       THEN 300
+         ELSE 150 END AS tolerance
+  FROM rentals
+)
+SELECT * DECIDE syn_rent IS INTEGER
+FROM toleranced
+SUCH THAT
+  abs(syn_rent - rent) <= tolerance
+```
+
+Decomposing into multiple WHEN constraints fails here because the conditions overlap (e.g., a 3-bed apartment in zipcode 10003). SQL `CASE WHEN` evaluates top-to-bottom and returns the first match, giving the correct priority semantics. Pre-computing it as a column preserves that behavior.
+
+### Summary
+
+| Need | Use |
+|------|-----|
+| Include/exclude rows from a constraint or objective | `WHEN` (postfix) |
+| Different coefficient values per row | `CASE WHEN` in a CTE, referenced as a column |
+
+---
+
 ## Code Pointers
 
 - **Grammar**: `third_party/libpg_query/grammar/statements/select.y`
