@@ -39,6 +39,8 @@ class PerfRecord:
     objective_value: float | None
     solver_backend: str
     status: str
+    comparison_status: str = ""
+    decide_vector: list[float] | None = None
 
 
 @dataclass
@@ -62,6 +64,8 @@ class PerfTracker:
         objective_value: float | None,
         solver_backend: str,
         status: str = "pass",
+        comparison_status: str = "",
+        decide_vector: list[float] | None = None,
     ) -> None:
         self.records.append(
             PerfRecord(
@@ -77,6 +81,8 @@ class PerfTracker:
                 objective_value=objective_value,
                 solver_backend=solver_backend,
                 status=status,
+                comparison_status=comparison_status,
+                decide_vector=decide_vector,
             )
         )
 

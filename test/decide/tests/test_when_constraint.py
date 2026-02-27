@@ -15,7 +15,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.when_constraint
@@ -66,8 +66,8 @@ def test_when_aggregate_string_equality(packdb_conn, duckdb_conn, oracle_solver,
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -75,6 +75,8 @@ def test_when_aggregate_string_equality(packdb_conn, duckdb_conn, oracle_solver,
         "when_agg_str_eq", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -132,8 +134,8 @@ def test_when_multiple_categories(packdb_conn, duckdb_conn, oracle_solver, perf_
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -141,6 +143,8 @@ def test_when_multiple_categories(packdb_conn, duckdb_conn, oracle_solver, perf_
         "when_multi_cat", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -192,8 +196,8 @@ def test_when_aggregate_numeric_comparison(packdb_conn, duckdb_conn, oracle_solv
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -201,6 +205,8 @@ def test_when_aggregate_numeric_comparison(packdb_conn, duckdb_conn, oracle_solv
         "when_agg_numeric", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -250,8 +256,8 @@ def test_when_all_rows_match(packdb_conn, duckdb_conn, oracle_solver, perf_track
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -259,6 +265,8 @@ def test_when_all_rows_match(packdb_conn, duckdb_conn, oracle_solver, perf_track
         "when_all_match", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -310,8 +318,8 @@ def test_when_no_rows_match(packdb_conn, duckdb_conn, oracle_solver, perf_tracke
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -319,6 +327,8 @@ def test_when_no_rows_match(packdb_conn, duckdb_conn, oracle_solver, perf_tracke
         "when_no_match", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -377,8 +387,8 @@ def test_when_mixed_conditional_and_unconditional(packdb_conn, duckdb_conn, orac
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -386,6 +396,8 @@ def test_when_mixed_conditional_and_unconditional(packdb_conn, duckdb_conn, orac
         "when_mixed", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -434,8 +446,8 @@ def test_when_aggregate_constant_coeff(packdb_conn, duckdb_conn, oracle_solver, 
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("c_acctbal")])},
     )
 
@@ -443,4 +455,67 @@ def test_when_aggregate_constant_coeff(packdb_conn, duckdb_conn, oracle_solver, 
         "when_const_coeff", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.when_constraint
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_when_not_equal(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """WHEN with not-equal operator: SUM(x*qty) <= 80 WHEN returnflag <> 'N'."""
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
+               l_returnflag, x
+        FROM lineitem
+        WHERE l_orderkey < 100
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * l_quantity) <= 80 WHEN l_returnflag <> 'N'
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_result = packdb_conn.execute(sql).fetchall()
+    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE),
+               CAST(l_quantity AS DOUBLE),
+               l_returnflag
+        FROM lineitem WHERE l_orderkey < 100
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("when_not_eq")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][3] for i in range(len(data)) if data[i][4] != 'N'},
+        "<=", 80.0, name="capacity_not_N",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(len(data))},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+
+    perf_tracker.record(
+        "when_not_eq", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

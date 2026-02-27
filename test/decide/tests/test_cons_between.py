@@ -9,7 +9,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.var_integer
@@ -59,8 +59,8 @@ def test_q10_logic_dependency(packdb_conn, duckdb_conn, oracle_solver, perf_trac
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
@@ -68,4 +68,6 @@ def test_q10_logic_dependency(packdb_conn, duckdb_conn, oracle_solver, perf_trac
         "q10_logic_dependency", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

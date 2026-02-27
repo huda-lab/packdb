@@ -10,7 +10,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.var_boolean
@@ -59,8 +59,8 @@ def test_q09_minimize_cost(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("s_acctbal")])},
     )
 
@@ -68,6 +68,8 @@ def test_q09_minimize_cost(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
         "q09_minimize_cost", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -117,8 +119,8 @@ def test_min_cost_supplier(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_supplycost")])},
     )
 
@@ -126,4 +128,64 @@ def test_min_cost_supplier(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
         "min_cost_supplier", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_minimize_count(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """MINIMIZE SUM(x) — select fewest items meeting a threshold."""
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
+        FROM lineitem
+        WHERE l_orderkey < 100
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * l_extendedprice) >= 50000
+        MINIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    packdb_result = packdb_conn.execute(sql).fetchall()
+    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 100
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("minimize_count")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][2] for i in range(len(data))},
+        ">=", 50000.0, name="min_value",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: 1.0 for i in range(len(data))},
+        ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 1.0},
+    )
+
+    perf_tracker.record(
+        "minimize_count", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

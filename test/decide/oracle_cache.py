@@ -1,0 +1,201 @@
+"""Oracle result cache for DECIDE tests.
+
+Caches solver objective values keyed by test node ID and a hash of the
+test source code + database checksum.  On cache hit, all model-building
+calls (add_variable, add_constraint, set_objective) become no-ops and
+solve() returns the cached SolverResult instantly.
+
+Cache file: results/oracle_cache.json
+Invalidation:
+  - Per-test: hash of inspect.getsource(test_fn) + db checksum
+  - Global:   db checksum (size + mtime) stored at top level
+  - GC:       stale entries pruned on full (unfiltered) test runs
+"""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+import json
+import os
+from pathlib import Path
+from typing import Any, Callable
+
+from solver.base import OracleSolver
+from solver.types import ObjSense, SolverResult, SolverStatus, VarType
+
+_CACHE_PATH = Path(__file__).resolve().parent / "results" / "oracle_cache.json"
+
+
+def _file_checksum(path: str) -> str:
+    st = os.stat(path)
+    return hashlib.sha256(f"{st.st_size}:{st.st_mtime_ns}".encode()).hexdigest()[:16]
+
+
+def _source_hash(fn: Callable, db_checksum: str) -> str:
+    src = inspect.getsource(fn)
+    return hashlib.sha256(f"{db_checksum}\n{src}".encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Cache storage
+# ---------------------------------------------------------------------------
+
+class OracleCache:
+    """Reads/writes oracle results from a JSON file on disk."""
+
+    def __init__(self, db_path: str):
+        self._db_checksum = _file_checksum(db_path)
+        self._data: dict[str, Any] = {
+            "db_checksum": self._db_checksum,
+            "entries": {},
+        }
+        self._accessed: set[str] = set()
+        self._dirty = False
+        self._load()
+
+    def _load(self) -> None:
+        if not _CACHE_PATH.exists():
+            return
+        try:
+            raw = json.loads(_CACHE_PATH.read_text())
+        except (json.JSONDecodeError, KeyError):
+            return
+        if raw.get("db_checksum") != self._db_checksum:
+            self._dirty = True
+            return
+        self._data = raw
+
+    def lookup(self, test_id: str, test_fn: Callable) -> SolverResult | None:
+        h = _source_hash(test_fn, self._db_checksum)
+        self._accessed.add(test_id)
+        entry = self._data["entries"].get(test_id)
+        if entry is None or entry.get("input_hash") != h:
+            return None
+        raw_vv = entry.get("variable_values", {})
+        return SolverResult(
+            status=SolverStatus[entry["status"]],
+            objective_value=entry.get("objective_value"),
+            variable_values={k: float(v) for k, v in raw_vv.items()},
+        )
+
+    def store(self, test_id: str, test_fn: Callable, result: SolverResult) -> None:
+        h = _source_hash(test_fn, self._db_checksum)
+        self._accessed.add(test_id)
+        self._data["entries"][test_id] = {
+            "input_hash": h,
+            "status": result.status.name,
+            "objective_value": result.objective_value,
+            "variable_values": result.variable_values,
+        }
+        self._dirty = True
+
+    def save(self, gc: bool = False) -> None:
+        if gc:
+            pruned = {
+                k: v
+                for k, v in self._data["entries"].items()
+                if k in self._accessed
+            }
+            if len(pruned) != len(self._data["entries"]):
+                self._data["entries"] = pruned
+                self._dirty = True
+        if not self._dirty:
+            return
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_PATH.write_text(
+            json.dumps(self._data, indent=2, sort_keys=True) + "\n"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Transparent solver wrapper
+# ---------------------------------------------------------------------------
+
+class CachedOracleSolver:
+    """Drop-in replacement for OracleSolver that caches solve() results.
+
+    On create_model(), checks the cache:
+      - Hit:  all subsequent model-building calls are no-ops;
+              solve() returns the cached SolverResult.
+      - Miss: delegates everything to the real solver;
+              solve() stores the result before returning.
+
+    If no real solver is available and the cache misses, the test is skipped.
+    """
+
+    def __init__(
+        self,
+        real_solver: OracleSolver | None,
+        test_id: str,
+        test_fn: Callable,
+        cache: OracleCache,
+    ):
+        self._real = real_solver
+        self._test_id = test_id
+        self._test_fn = test_fn
+        self._cache = cache
+        self._cached_result: SolverResult | None = None
+        self._model_active = False
+
+    def create_model(self, name: str) -> None:
+        cached = self._cache.lookup(self._test_id, self._test_fn)
+        if cached is not None:
+            self._cached_result = cached
+            self._model_active = False
+            return
+        self._cached_result = None
+        if self._real is None:
+            import pytest
+            pytest.skip(
+                f"No solver available and no cached oracle for {self._test_id}"
+            )
+        self._real.create_model(name)
+        self._model_active = True
+
+    def add_variable(
+        self,
+        name: str,
+        var_type: VarType = VarType.BINARY,
+        lb: float = 0.0,
+        ub: float | None = None,
+    ) -> None:
+        if self._model_active:
+            self._real.add_variable(name, var_type, lb, ub)
+
+    def add_constraint(
+        self,
+        coeffs: dict[str, float],
+        sense: str,
+        rhs: float,
+        name: str = "",
+    ) -> None:
+        if self._model_active:
+            self._real.add_constraint(coeffs, sense, rhs, name)
+
+    def set_objective(
+        self,
+        coeffs: dict[str, float],
+        sense: ObjSense,
+    ) -> None:
+        if self._model_active:
+            self._real.set_objective(coeffs, sense)
+
+    def solve(self, time_limit: float = 60.0) -> SolverResult:
+        if self._cached_result is not None:
+            return self._cached_result
+        if self._real is None:
+            import pytest
+            pytest.skip(
+                f"No solver available and no cached oracle for {self._test_id}"
+            )
+        result = self._real.solve(time_limit)
+        self._cache.store(self._test_id, self._test_fn, result)
+        return result
+
+    def solver_name(self) -> str:
+        if self._cached_result is not None:
+            return "cached"
+        if self._real is not None:
+            return self._real.solver_name()
+        return "cached"

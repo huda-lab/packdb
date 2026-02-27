@@ -10,7 +10,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.var_boolean
@@ -60,8 +60,8 @@ def test_q01_knapsack_binary(packdb_conn, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     # Compare objectives
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -69,6 +69,8 @@ def test_q01_knapsack_binary(packdb_conn, duckdb_conn, oracle_solver, perf_track
         "q01_knapsack_binary", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -116,8 +118,8 @@ def test_knapsack_lineitem(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -125,4 +127,6 @@ def test_knapsack_lineitem(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
         "knapsack_lineitem", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

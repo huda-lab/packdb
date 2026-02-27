@@ -14,7 +14,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.when_compound
@@ -69,8 +69,8 @@ def test_when_compound_and_aggregate(packdb_conn, duckdb_conn, oracle_solver, pe
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -78,6 +78,8 @@ def test_when_compound_and_aggregate(packdb_conn, duckdb_conn, oracle_solver, pe
         "when_cmpd_and_agg", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -132,8 +134,8 @@ def test_when_compound_or_aggregate(packdb_conn, duckdb_conn, oracle_solver, per
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -141,6 +143,8 @@ def test_when_compound_or_aggregate(packdb_conn, duckdb_conn, oracle_solver, per
         "when_cmpd_or_agg", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -197,8 +201,8 @@ def test_when_compound_and_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -206,6 +210,8 @@ def test_when_compound_and_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_
         "when_cmpd_and_perrow", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -264,8 +270,8 @@ def test_when_compound_and_objective(packdb_conn, duckdb_conn, oracle_solver, pe
     price_idx = packdb_cols.index("l_extendedprice")
     flag_idx = packdb_cols.index("l_returnflag")
     disc_idx = packdb_cols.index("l_discount")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx])
             if row[flag_idx] == 'R' and float(row[disc_idx]) >= 0.06
@@ -277,6 +283,8 @@ def test_when_compound_and_objective(packdb_conn, duckdb_conn, oracle_solver, pe
         "when_cmpd_and_obj", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -331,8 +339,8 @@ def test_when_compound_mixed_types(packdb_conn, duckdb_conn, oracle_solver, perf
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -340,6 +348,8 @@ def test_when_compound_mixed_types(packdb_conn, duckdb_conn, oracle_solver, perf
         "when_cmpd_mixed", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -396,8 +406,8 @@ def test_when_compound_or_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_t
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -405,4 +415,6 @@ def test_when_compound_or_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_t
         "when_cmpd_or_perrow", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

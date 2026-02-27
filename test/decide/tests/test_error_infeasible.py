@@ -42,3 +42,15 @@ class TestInfeasibleModels:
                 SUCH THAT SUM(x) >= 1 AND SUM(x * l_quantity) <= -1
                 MAXIMIZE SUM(x)
             """)
+
+    def test_infeasible_when_forces_all_zero(self, packdb_conn):
+        """WHEN forces all x=0 while aggregate requires SUM(x) >= 1."""
+        with pytest.raises(packdb.InvalidInputException, match=r"(?i)infeasible"):
+            packdb_conn.execute("""
+                SELECT l_orderkey, l_quantity, l_returnflag, x
+                FROM lineitem WHERE l_orderkey < 10
+                DECIDE x IS BOOLEAN
+                SUCH THAT x <= 0 WHEN l_quantity > 0
+                    AND SUM(x) >= 1
+                MAXIMIZE SUM(x * l_quantity)
+            """)

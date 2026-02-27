@@ -9,7 +9,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.var_integer
@@ -64,8 +64,8 @@ def test_q02_integer_procurement(packdb_conn, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     # For MAXIMIZE SUM(x), the objective coefficient per row is 1.0
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
@@ -73,4 +73,6 @@ def test_q02_integer_procurement(packdb_conn, duckdb_conn, oracle_solver, perf_t
         "q02_integer_procurement", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

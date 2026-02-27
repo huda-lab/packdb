@@ -15,7 +15,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.when_objective
@@ -69,8 +69,8 @@ def test_when_objective_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_t
 
     price_idx = packdb_cols.index("l_extendedprice")
     flag_idx = packdb_cols.index("l_returnflag")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
@@ -80,6 +80,8 @@ def test_when_objective_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_t
         "when_obj_max", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -134,8 +136,8 @@ def test_when_objective_minimize(packdb_conn, duckdb_conn, oracle_solver, perf_t
 
     qty_idx = packdb_cols.index("l_quantity")
     flag_idx = packdb_cols.index("l_returnflag")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[qty_idx]) if row[flag_idx] == 'A' else 0.0,
         },
@@ -145,6 +147,8 @@ def test_when_objective_minimize(packdb_conn, duckdb_conn, oracle_solver, perf_t
         "when_obj_min", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -198,8 +202,8 @@ def test_when_objective_no_match(packdb_conn, duckdb_conn, oracle_solver, perf_t
 
     price_idx = packdb_cols.index("l_extendedprice")
     flag_idx = packdb_cols.index("l_returnflag")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'Z' else 0.0,
         },
@@ -209,6 +213,8 @@ def test_when_objective_no_match(packdb_conn, duckdb_conn, oracle_solver, perf_t
         "when_obj_no_match", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -258,8 +264,8 @@ def test_when_objective_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -267,6 +273,8 @@ def test_when_objective_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_
         "when_obj_all_match", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -323,8 +331,8 @@ def test_when_constraint_and_objective_same_condition(
 
     price_idx = packdb_cols.index("l_extendedprice")
     flag_idx = packdb_cols.index("l_returnflag")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
@@ -334,6 +342,8 @@ def test_when_constraint_and_objective_same_condition(
         "when_same_cond", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -391,8 +401,8 @@ def test_when_constraint_and_objective_different_conditions(
 
     price_idx = packdb_cols.index("l_extendedprice")
     flag_idx = packdb_cols.index("l_returnflag")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
@@ -402,6 +412,8 @@ def test_when_constraint_and_objective_different_conditions(
         "when_diff_cond", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -460,8 +472,8 @@ def test_when_objective_with_unconditional_constraint(
 
     price_idx = packdb_cols.index("l_extendedprice")
     flag_idx = packdb_cols.index("l_returnflag")
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx]) if row[flag_idx] == 'R' else 0.0,
         },
@@ -471,4 +483,6 @@ def test_when_objective_with_unconditional_constraint(
         "when_obj_uncon", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

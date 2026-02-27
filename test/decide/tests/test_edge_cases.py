@@ -1,11 +1,10 @@
-"""Tests for comparison operators on aggregate constraints.
+"""Edge-case tests for DECIDE.
 
-<= and >= are exercised heavily in other test files. This file covers
-the remaining operators:
-  - SUM equality: SUM(x) = value
-  - Strict less-than: SUM(x * col) < value
-  - Strict greater-than: SUM(x) > value
-  - Not-equal: SUM(x) <> value
+Covers boundary conditions that other test files don't exercise:
+  - Single-row input (trivial solve)
+  - Very loose constraint (all variables selected)
+  - Constraint RHS = 0 (forces all decision vars to 0)
+  - Negative objective coefficients
 """
 
 import time
@@ -16,42 +15,44 @@ from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 
 
-@pytest.mark.cons_comparison
+@pytest.mark.edge_case
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_equality_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(x) = exact_value — fix the total count of selected items."""
+def test_single_row(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """Degenerate case: only 1 input row. Trivial knapsack."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
+        FROM lineitem
+        WHERE l_orderkey = 1 AND l_linenumber = 1
         DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) = 10
+        SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     packdb_result = packdb_conn.execute(sql).fetchall()
     packdb_cols = [d[0] for d in packdb_conn.description]
     packdb_time = time.perf_counter() - t0
+    assert len(packdb_result) == 1, f"Expected 1 row, got {len(packdb_result)}"
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
-        FROM lineitem WHERE l_orderkey < 50
+        FROM lineitem WHERE l_orderkey = 1 AND l_linenumber = 1
     """).fetchall()
 
     t_build = time.perf_counter()
-    oracle_solver.create_model("sum_eq")
+    oracle_solver.create_model("single_row")
     vnames = [f"x_{i}" for i in range(len(data))]
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
 
     oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(len(data))},
-        "=", 10.0, name="exact_count",
+        {vnames[i]: data[i][3] for i in range(len(data))},
+        "<=", 100.0, name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -66,7 +67,7 @@ def test_sum_equality_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_t
     )
 
     perf_tracker.record(
-        "sum_eq", packdb_time, build_time,
+        "single_row", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -74,18 +75,19 @@ def test_sum_equality_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_t
     )
 
 
-@pytest.mark.cons_comparison
+@pytest.mark.edge_case
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(x * qty) < 100 — strict less-than on aggregate."""
+def test_trivial_all_selected(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """Constraint so loose every x=1 is feasible. Optimal is all-ones."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
+        FROM lineitem
+        WHERE l_orderkey < 20
         DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x * l_quantity) < 100
+        SUCH THAT SUM(x * l_quantity) <= 999999
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -98,19 +100,18 @@ def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_trac
                CAST(l_linenumber AS BIGINT),
                CAST(l_extendedprice AS DOUBLE),
                CAST(l_quantity AS DOUBLE)
-        FROM lineitem WHERE l_orderkey < 50
+        FROM lineitem WHERE l_orderkey < 20
     """).fetchall()
 
     t_build = time.perf_counter()
-    oracle_solver.create_model("sum_strict_lt")
+    oracle_solver.create_model("trivial_all")
     vnames = [f"x_{i}" for i in range(len(data))]
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
 
-    # For integer variables, SUM < 100 ≡ SUM <= 99
     oracle_solver.add_constraint(
         {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 99.0, name="capacity_strict",
+        "<=", 999999.0, name="capacity",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -123,9 +124,10 @@ def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_trac
         packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
+    assert all(v == 1.0 for v in cmp.packdb_vector), "Expected all x=1"
 
     perf_tracker.record(
-        "sum_strict_lt", packdb_time, build_time,
+        "trivial_all_selected", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -133,19 +135,19 @@ def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_trac
     )
 
 
-@pytest.mark.cons_comparison
+@pytest.mark.edge_case
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_strict_greater_than(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(x) > 5 — strict greater-than on aggregate."""
+def test_rhs_zero_forces_all_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """SUM(x) <= 0 forces all boolean variables to 0."""
     sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
+        SELECT l_orderkey, l_linenumber, l_extendedprice, x
+        FROM lineitem
+        WHERE l_orderkey < 20
         DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) > 5
-            AND SUM(x * l_quantity) <= 200
+        SUCH THAT SUM(x) <= 0
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -156,25 +158,19 @@ def test_sum_strict_greater_than(packdb_conn, duckdb_conn, oracle_solver, perf_t
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
                CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE)
-        FROM lineitem WHERE l_orderkey < 50
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 20
     """).fetchall()
 
     t_build = time.perf_counter()
-    oracle_solver.create_model("sum_strict_gt")
+    oracle_solver.create_model("rhs_zero")
     vnames = [f"x_{i}" for i in range(len(data))]
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
 
-    # For integer variables, SUM(x) > 5 ≡ SUM(x) >= 6
     oracle_solver.add_constraint(
         {vnames[i]: 1.0 for i in range(len(data))},
-        ">=", 6.0, name="min_count_strict",
-    )
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 200.0, name="capacity",
+        "<=", 0.0, name="zero_budget",
     )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(len(data))},
@@ -187,34 +183,70 @@ def test_sum_strict_greater_than(packdb_conn, duckdb_conn, oracle_solver, perf_t
         packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
+    assert all(v == 0.0 for v in cmp.packdb_vector), "Expected all x=0"
+    assert cmp.packdb_objective == 0.0
 
     perf_tracker.record(
-        "sum_strict_gt", packdb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 2,
+        "rhs_zero", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
 
 
-@pytest.mark.cons_comparison
+@pytest.mark.edge_case
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.xfail(
-    reason="Not-equal (<>) on SUM is a disjunctive constraint — may not be supported",
-    strict=False,
-)
-def test_sum_not_equal(packdb_conn):
-    """SUM(x) <> 5 — not-equal on aggregate (disjunctive, hard for ILP)."""
-    result = packdb_conn.execute("""
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
-        FROM lineitem WHERE l_orderkey < 50
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_negative_objective_coefficients(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """Negative account balances as coefficients — solver must pick most negative."""
+    sql = """
+        SELECT c_custkey, c_acctbal, x
+        FROM customer
+        WHERE c_nationkey <= 3
         DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) <> 5
-            AND SUM(x * l_quantity) <= 200
-        MAXIMIZE SUM(x * l_extendedprice)
+        SUCH THAT SUM(x) >= 5
+        MINIMIZE SUM(x * c_acctbal)
+    """
+    t0 = time.perf_counter()
+    packdb_result = packdb_conn.execute(sql).fetchall()
+    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(c_custkey AS BIGINT),
+               CAST(c_acctbal AS DOUBLE)
+        FROM customer WHERE c_nationkey <= 3
     """).fetchall()
-    assert len(result) > 0
-    total = sum(row[4] for row in result)
-    assert total != 5, f"SUM(x) = {total}, expected <> 5"
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("neg_coeffs")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(len(data))},
+        ">=", 5.0, name="min_count",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(len(data))},
+        ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("c_acctbal")])},
+    )
+
+    perf_tracker.record(
+        "neg_coeffs", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )

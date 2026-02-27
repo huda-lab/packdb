@@ -1,7 +1,7 @@
 """Shared fixtures and configuration for DECIDE tests.
 
 Provides packdb/duckdb connections (with TPC-H data attached), an oracle
-solver instance, and performance tracking.
+solver instance (with transparent result caching), and performance tracking.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from solver.factory import get_solver
+from oracle_cache import OracleCache, CachedOracleSolver
 from performance.tracker import PerfTracker
 from performance.reporter import print_perf_table
 
@@ -30,7 +31,6 @@ _PACKDB_DB_CANDIDATES = [
 
 
 def _find_packdb_db() -> Path | None:
-    # Allow override via env var
     env = os.environ.get("PACKDB_DB_PATH")
     if env:
         p = Path(env)
@@ -83,12 +83,42 @@ def duckdb_conn(packdb_db_path):
 
 
 @pytest.fixture(scope="session")
-def oracle_solver():
-    """Auto-detected ILP solver (Gurobi preferred, HiGHS fallback)."""
+def _raw_oracle_solver():
+    """Underlying ILP solver, or None if unavailable."""
     try:
         return get_solver()
-    except ImportError as exc:
-        pytest.skip(str(exc))
+    except ImportError:
+        return None
+
+
+@pytest.fixture(scope="session")
+def _oracle_cache(packdb_db_path, request):
+    """Session-wide oracle result cache.  GC runs only on full (unfiltered) runs."""
+    cache = OracleCache(packdb_db_path)
+    yield cache
+    is_full_run = (
+        not getattr(request.config.option, "markexpr", "")
+        and not getattr(request.config.option, "keyword", "")
+    )
+    cache.save(gc=is_full_run)
+
+
+@pytest.fixture(scope="function")
+def oracle_solver(request, _raw_oracle_solver, _oracle_cache):
+    """Cache-aware oracle solver for the current test.
+
+    On first run (or after a test/db change) the real solver executes and
+    the result is written to results/oracle_cache.json.  Subsequent runs
+    return the cached value without invoking the solver at all.
+    """
+    if _raw_oracle_solver is None and _oracle_cache is None:
+        pytest.skip("No ILP solver available and no oracle cache")
+    return CachedOracleSolver(
+        _raw_oracle_solver,
+        request.node.nodeid,
+        request.function,
+        _oracle_cache,
+    )
 
 
 @pytest.fixture(scope="session")

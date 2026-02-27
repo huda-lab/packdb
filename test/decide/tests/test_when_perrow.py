@@ -13,7 +13,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.when_perrow
@@ -70,8 +70,8 @@ def test_when_perrow_force_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tr
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -79,6 +79,8 @@ def test_when_perrow_force_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tr
         "when_perrow_zero", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -135,8 +137,8 @@ def test_when_perrow_force_select(packdb_conn, duckdb_conn, oracle_solver, perf_
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -144,6 +146,8 @@ def test_when_perrow_force_select(packdb_conn, duckdb_conn, oracle_solver, perf_
         "when_perrow_select", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -197,8 +201,8 @@ def test_when_perrow_numeric_condition(packdb_conn, duckdb_conn, oracle_solver, 
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -206,6 +210,8 @@ def test_when_perrow_numeric_condition(packdb_conn, duckdb_conn, oracle_solver, 
         "when_perrow_numeric", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -259,8 +265,8 @@ def test_when_perrow_no_matches(packdb_conn, duckdb_conn, oracle_solver, perf_tr
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
     )
 
@@ -268,6 +274,8 @@ def test_when_perrow_no_matches(packdb_conn, duckdb_conn, oracle_solver, perf_tr
         "when_perrow_none", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 
@@ -320,8 +328,8 @@ def test_when_perrow_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_tra
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
     )
 
@@ -329,4 +337,6 @@ def test_when_perrow_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_tra
         "when_perrow_all", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )

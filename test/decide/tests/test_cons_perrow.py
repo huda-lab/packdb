@@ -9,7 +9,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
-from comparison.compare import assert_optimal_match
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.var_integer
@@ -60,8 +60,8 @@ def test_q07_row_wise_bounds(packdb_conn, duckdb_conn, oracle_solver, perf_track
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
     )
 
@@ -69,4 +69,65 @@ def test_q07_row_wise_bounds(packdb_conn, duckdb_conn, oracle_solver, perf_track
         "q07_row_wise_bounds", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_perrow
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_per_row_lower_bound(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+    """Per-row lower bound: x >= 1 forces all variables to at least 1."""
+    sql = """
+        SELECT ps_partkey, ps_suppkey, ps_supplycost, x
+        FROM partsupp
+        WHERE ps_partkey < 10
+        DECIDE x IS INTEGER
+        SUCH THAT x >= 1
+            AND SUM(x * ps_supplycost) <= 50000
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    packdb_result = packdb_conn.execute(sql).fetchall()
+    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT),
+               CAST(ps_suppkey AS BIGINT),
+               CAST(ps_supplycost AS DOUBLE)
+        FROM partsupp WHERE ps_partkey < 10
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("perrow_lb")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=1.0)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][2] for i in range(len(data))},
+        "<=", 50000.0, name="budget",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: 1.0 for i in range(len(data))},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 1.0},
+    )
+
+    perf_tracker.record(
+        "perrow_lb", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
