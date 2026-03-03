@@ -365,15 +365,15 @@ CLAUDE.md
 
 # HiGHS solver logs
 HiGHS.log
-test/automated/highs
-test/automated/highs.log
+test/automated-old/highs
+test/automated-old/highs.log
 
 # Gurobi solver logs
 gurobi.log
-test/automated/gurobi.log
+test/automated-old/gurobi.log
 
 # PackDB test results
-test/automated/results/
+test/automated-old/results/
 
 
 # wheels for testing
@@ -384,7 +384,7 @@ wheels-macos-14/
 *.egg-info/
 
 # Stray files from shell redirects
-test/automated/=
+test/automated-old/=
 
 
 # highs log
