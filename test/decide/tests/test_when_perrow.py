@@ -22,7 +22,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_force_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_force_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Block non-returned items: x <= 0 WHEN returnflag='N', plus capacity."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -35,8 +35,7 @@ def test_when_perrow_force_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -90,7 +89,7 @@ def test_when_perrow_force_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_force_select(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_force_select(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Force selection of high-discount items: x = 1 WHEN discount >= 0.09."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -103,8 +102,7 @@ def test_when_perrow_force_select(packdb_conn, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -157,7 +155,7 @@ def test_when_perrow_force_select(packdb_conn, duckdb_conn, oracle_solver, perf_
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_numeric_condition(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_numeric_condition(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Exclude large-quantity items: x <= 0 WHEN quantity > 40."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -169,8 +167,7 @@ def test_when_perrow_numeric_condition(packdb_conn, duckdb_conn, oracle_solver, 
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -221,7 +218,7 @@ def test_when_perrow_numeric_condition(packdb_conn, duckdb_conn, oracle_solver, 
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_no_matches(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_no_matches(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches nothing — per-row constraint is inert, only aggregate limits."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -234,8 +231,7 @@ def test_when_perrow_no_matches(packdb_conn, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -285,7 +281,7 @@ def test_when_perrow_no_matches(packdb_conn, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches all rows — equivalent to unconditional per-row bound."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
@@ -297,8 +293,7 @@ def test_when_perrow_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

@@ -16,7 +16,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_simple_test(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_simple_test(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Default integer variable: maximize extendedprice, sum <= 10000."""
     sql = """
         SELECT x, l_orderkey, l_linenumber, l_extendedprice, l_tax
@@ -27,8 +27,7 @@ def test_simple_test(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

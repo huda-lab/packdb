@@ -21,7 +21,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_equality_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_equality_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) = exact_value — fix the total count of selected items."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -31,8 +31,7 @@ def test_sum_equality_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -79,7 +78,7 @@ def test_sum_equality_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_strict_less_than(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x * qty) < 100 — strict less-than on aggregate."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -89,8 +88,7 @@ def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -138,7 +136,7 @@ def test_sum_strict_less_than(packdb_conn, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_strict_greater_than(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_strict_greater_than(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) > 5 — strict greater-than on aggregate."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -149,8 +147,7 @@ def test_sum_strict_greater_than(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -205,16 +202,16 @@ def test_sum_strict_greater_than(packdb_conn, duckdb_conn, oracle_solver, perf_t
     reason="Not-equal (<>) on SUM is a disjunctive constraint — may not be supported",
     strict=False,
 )
-def test_sum_not_equal(packdb_conn):
+def test_sum_not_equal(packdb_cli):
     """SUM(x) <> 5 — not-equal on aggregate (disjunctive, hard for ILP)."""
-    result = packdb_conn.execute("""
+    result, _ = packdb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <> 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
-    """).fetchall()
+    """)
     assert len(result) > 0
     total = sum(row[4] for row in result)
     assert total != 5, f"SUM(x) = {total}, expected <> 5"

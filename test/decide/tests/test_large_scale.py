@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_knapsack_large(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_knapsack_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Knapsack on a larger range (l_orderkey < 500)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -29,8 +29,7 @@ def test_knapsack_large(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -78,7 +77,7 @@ def test_knapsack_large(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_order_selection_large(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_order_selection_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Order selection on a wider date range (full year 1995)."""
     sql = """
         SELECT o_orderkey, o_totalprice, x
@@ -89,8 +88,7 @@ def test_order_selection_large(packdb_conn, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

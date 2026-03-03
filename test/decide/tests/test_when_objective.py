@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_objective_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_objective_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Only returned items contribute to profit: MAXIMIZE SUM(x*price) WHEN flag='R'."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -35,8 +35,7 @@ def test_when_objective_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -90,7 +89,7 @@ def test_when_objective_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_when_objective_minimize(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_objective_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Minimize accepted-item quantity: MINIMIZE SUM(x*qty) WHEN flag='A'."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -102,8 +101,7 @@ def test_when_objective_minimize(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MINIMIZE SUM(x * l_quantity) WHEN l_returnflag = 'A'
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -157,7 +155,7 @@ def test_when_objective_minimize(packdb_conn, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_objective_no_match(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_objective_no_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches nothing on objective — optimal objective is 0."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -169,8 +167,7 @@ def test_when_objective_no_match(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'Z'
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -223,7 +220,7 @@ def test_when_objective_no_match(packdb_conn, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_objective_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_objective_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches all rows on objective — equivalent to no WHEN."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -234,8 +231,7 @@ def test_when_objective_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_quantity > 0
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -285,7 +281,7 @@ def test_when_objective_all_match(packdb_conn, duckdb_conn, oracle_solver, perf_
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_constraint_and_objective_same_condition(
-    packdb_conn, duckdb_conn, oracle_solver, perf_tracker,
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
 ):
     """Same WHEN on both constraint and objective — non-R rows are invisible."""
     sql = """
@@ -298,8 +294,7 @@ def test_when_constraint_and_objective_same_condition(
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -354,7 +349,7 @@ def test_when_constraint_and_objective_same_condition(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_constraint_and_objective_different_conditions(
-    packdb_conn, duckdb_conn, oracle_solver, perf_tracker,
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
 ):
     """Constraint filters 'A' rows, objective rewards 'R' rows — disjoint filters."""
     sql = """
@@ -367,8 +362,7 @@ def test_when_constraint_and_objective_different_conditions(
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -424,7 +418,7 @@ def test_when_constraint_and_objective_different_conditions(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_objective_with_unconditional_constraint(
-    packdb_conn, duckdb_conn, oracle_solver, perf_tracker,
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
 ):
     """Unconditional constraints + WHEN on objective only."""
     sql = """
@@ -438,8 +432,7 @@ def test_when_objective_with_unconditional_constraint(
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

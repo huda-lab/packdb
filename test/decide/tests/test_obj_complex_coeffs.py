@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q03_complex_coeffs(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q03_complex_coeffs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Complex coefficients: discounted price with tax calculation."""
     sql = """
         SELECT l_orderkey, l_extendedprice, l_discount, l_tax, x
@@ -28,8 +28,7 @@ def test_q03_complex_coeffs(packdb_conn, duckdb_conn, oracle_solver, perf_tracke
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

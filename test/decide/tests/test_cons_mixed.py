@@ -19,7 +19,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q02_integer_procurement(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q02_integer_procurement(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Integer procurement: x <= availqty per row, budget SUM(x*cost) <= 10000."""
     sql = """
         SELECT ps_partkey, ps_suppkey, ps_supplycost, ps_availqty, x
@@ -31,8 +31,7 @@ def test_q02_integer_procurement(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

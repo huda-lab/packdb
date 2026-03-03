@@ -1,7 +1,18 @@
 """Shared fixtures and configuration for DECIDE tests.
 
-Provides packdb/duckdb connections (with TPC-H data attached), an oracle
-solver instance (with transparent result caching), and performance tracking.
+Provides a CLI wrapper for the native packdb executable, a vanilla duckdb
+connection for oracle data fetching (via dbgen-generated TPC-H data), an
+oracle solver instance (with transparent result caching), and performance
+tracking.
+
+Architecture
+------------
+- **PackDB (DECIDE queries)**: native ``build/release/packdb`` executable
+  invoked via subprocess (``PackDBCli``).  Reads ``packdb.db``.
+- **Oracle (data fetching)**: vanilla ``duckdb`` Python package reading a
+  separately generated TPC-H database (``_tpch_oracle.duckdb``).  The oracle
+  database is created once per session via ``CALL dbgen(sf=0.01)`` and cached
+  on disk.  This keeps the oracle completely independent of PackDB.
 """
 
 from __future__ import annotations
@@ -10,24 +21,33 @@ import os
 import sys
 from pathlib import Path
 
+import duckdb
 import pytest
 
-# Allow imports from the test/decide directory (solver, comparison, etc.)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from packdb_cli import PackDBCli
 from solver.factory import get_solver
 from oracle_cache import OracleCache, CachedOracleSolver
 from performance.tracker import PerfTracker
 from performance.reporter import print_perf_table
 
+_TPCH_SF = 0.01
+
 # ---------------------------------------------------------------------------
-# Locate packdb.db
+# Locate packdb.db and the packdb executable
 # ---------------------------------------------------------------------------
 
 _PACKDB_DB_CANDIDATES = [
     Path(__file__).resolve().parent.parent.parent / "packdb.db",
     Path(__file__).resolve().parent.parent.parent / "build" / "packdb.db",
 ]
+
+_PACKDB_EXE_CANDIDATES = [
+    Path(__file__).resolve().parent.parent.parent / "build" / "release" / "packdb",
+]
+
+_ORACLE_DB_PATH = Path(__file__).resolve().parent / "_tpch_oracle.duckdb"
 
 
 def _find_packdb_db() -> Path | None:
@@ -39,6 +59,30 @@ def _find_packdb_db() -> Path | None:
         if p.exists():
             return p
     return None
+
+
+def _find_packdb_exe() -> Path | None:
+    env = os.environ.get("PACKDB_EXE_PATH")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for p in _PACKDB_EXE_CANDIDATES:
+        if p.exists():
+            return p
+    return None
+
+
+def _ensure_oracle_db() -> Path:
+    """Generate the vanilla TPC-H database if it doesn't already exist."""
+    if _ORACLE_DB_PATH.exists():
+        return _ORACLE_DB_PATH
+    conn = duckdb.connect(str(_ORACLE_DB_PATH))
+    try:
+        conn.execute("INSTALL tpch; LOAD tpch;")
+        conn.execute(f"CALL dbgen(sf={_TPCH_SF})")
+    finally:
+        conn.close()
+    return _ORACLE_DB_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -55,29 +99,36 @@ def packdb_db_path():
     return str(path)
 
 
-@pytest.fixture(scope="function")
-def packdb_conn(packdb_db_path):
-    """In-memory PackDB connection with TPC-H data attached read-only."""
-    import packdb
-    conn = packdb.connect("")
-    conn.execute(f"ATTACH '{packdb_db_path}' AS tpch (READ_ONLY)")
-    conn.execute("SET search_path = 'tpch,main'")
-    yield conn
-    conn.close()
+@pytest.fixture(scope="session")
+def packdb_exe_path():
+    """Path to the native packdb executable."""
+    path = _find_packdb_exe()
+    if path is None:
+        pytest.skip(
+            "packdb executable not found — build first or set PACKDB_EXE_PATH"
+        )
+    return str(path)
 
 
-@pytest.fixture(scope="function")
-def duckdb_conn(packdb_db_path):
-    """In-memory connection for oracle data fetching (plain SQL, no DECIDE).
+@pytest.fixture(scope="session")
+def packdb_cli(packdb_exe_path, packdb_db_path):
+    """Session-wide CLI wrapper for the native packdb executable.
 
-    Uses packdb rather than vanilla duckdb because both register the same
-    pybind11 types and cannot coexist in one process.  Plain SQL works
-    identically in both.
+    Queries are executed via subprocess, allowing multi-core execution.
     """
-    import packdb
-    conn = packdb.connect("")
-    conn.execute(f"ATTACH '{packdb_db_path}' AS tpch (READ_ONLY)")
-    conn.execute("SET search_path = 'tpch,main'")
+    return PackDBCli(packdb_exe_path, packdb_db_path)
+
+
+@pytest.fixture(scope="session")
+def _oracle_db_path():
+    """Generate (once) and return the path to the vanilla TPC-H database."""
+    return str(_ensure_oracle_db())
+
+
+@pytest.fixture(scope="function")
+def duckdb_conn(_oracle_db_path):
+    """Per-test read-only connection to the vanilla TPC-H database."""
+    conn = duckdb.connect(_oracle_db_path, read_only=True)
     yield conn
     conn.close()
 

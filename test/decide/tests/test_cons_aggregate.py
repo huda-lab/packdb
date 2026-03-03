@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q08_marketing_campaign(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q08_marketing_campaign(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Marketing: select customers, cost=10/customer, budget=500."""
     sql = """
         SELECT c_custkey, c_acctbal, x
@@ -28,8 +28,7 @@ def test_q08_marketing_campaign(packdb_conn, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -75,7 +74,7 @@ def test_q08_marketing_campaign(packdb_conn, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_order_selection(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_order_selection(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Select orders: SUM(x) <= 300, maximize total price."""
     sql = """
         SELECT x, o_orderkey, o_totalprice
@@ -86,8 +85,7 @@ def test_order_selection(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -133,7 +131,7 @@ def test_order_selection(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_gte_with_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_gte_with_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Set-covering pattern: SUM(x) >= 10 with MAXIMIZE objective."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -145,8 +143,7 @@ def test_sum_gte_with_maximize(packdb_conn, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

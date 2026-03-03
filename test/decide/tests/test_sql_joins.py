@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q05_join_decide(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q05_join_decide(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Join: select orders from BUILDING segment, maximize total price."""
     sql = """
         SELECT o.o_orderkey, o.o_totalprice, c.c_mktsegment, x
@@ -31,8 +31,7 @@ def test_q05_join_decide(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * o.o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -83,7 +82,7 @@ def test_q05_join_decide(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_three_way_join(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_three_way_join(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Three-table join: lineitem + orders + customer."""
     sql = """
         SELECT l.l_orderkey, l.l_linenumber, l.l_extendedprice,
@@ -98,8 +97,7 @@ def test_three_way_join(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l.l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_and_aggregate(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_and_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AND compound: SUM(x*qty) <= 50 WHEN (returnflag='R' AND linestatus='F')."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -35,8 +35,7 @@ def test_when_compound_and_aggregate(packdb_conn, duckdb_conn, oracle_solver, pe
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -89,7 +88,7 @@ def test_when_compound_and_aggregate(packdb_conn, duckdb_conn, oracle_solver, pe
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_or_aggregate(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_or_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """OR compound: SUM(x*qty) <= 100 WHEN (returnflag='R' OR returnflag='A')."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -101,8 +100,7 @@ def test_when_compound_or_aggregate(packdb_conn, duckdb_conn, oracle_solver, per
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -155,7 +153,7 @@ def test_when_compound_or_aggregate(packdb_conn, duckdb_conn, oracle_solver, per
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_and_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_and_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AND compound on per-row: x <= 0 WHEN (returnflag='N' AND quantity > 30)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -168,8 +166,7 @@ def test_when_compound_and_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -221,7 +218,7 @@ def test_when_compound_and_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_and_objective(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_and_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AND compound on objective: MAXIMIZE WHEN (returnflag='R' AND discount >= 0.06)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -233,8 +230,7 @@ def test_when_compound_and_objective(packdb_conn, duckdb_conn, oracle_solver, pe
         MAXIMIZE SUM(x * l_extendedprice) WHEN (l_returnflag = 'R' AND l_discount >= 0.06)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -294,7 +290,7 @@ def test_when_compound_and_objective(packdb_conn, duckdb_conn, oracle_solver, pe
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_mixed_types(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_mixed_types(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Mixed string + numeric compound: WHEN (returnflag='A' AND quantity <= 25)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -306,8 +302,7 @@ def test_when_compound_mixed_types(packdb_conn, duckdb_conn, oracle_solver, perf
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -360,7 +355,7 @@ def test_when_compound_mixed_types(packdb_conn, duckdb_conn, oracle_solver, perf
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_or_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_or_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """OR compound on per-row: x = 1 WHEN (discount >= 0.09 OR quantity < 3)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -373,8 +368,7 @@ def test_when_compound_or_perrow(packdb_conn, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

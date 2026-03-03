@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q07_row_wise_bounds(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q07_row_wise_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Row-wise bounds: x <= 5 for each row, plus SUM(x) <= 100."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
@@ -30,8 +30,7 @@ def test_q07_row_wise_bounds(packdb_conn, duckdb_conn, oracle_solver, perf_track
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -79,7 +78,7 @@ def test_q07_row_wise_bounds(packdb_conn, duckdb_conn, oracle_solver, perf_track
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_row_lower_bound(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_row_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Per-row lower bound: x >= 1 forces all variables to at least 1."""
     sql = """
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
@@ -91,8 +90,7 @@ def test_per_row_lower_bound(packdb_conn, duckdb_conn, oracle_solver, perf_track
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

@@ -18,21 +18,18 @@ from comparison.compare import compare_solutions
 @pytest.mark.obj_maximize
 @pytest.mark.sql_subquery
 @pytest.mark.correctness
-def test_q04_subquery_rhs(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q04_subquery_rhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Subquery RHS: total price <= avg customer acctbal for nation 10."""
-    # Note: subquery table must be fully qualified — DECIDE subqueries
-    # are evaluated in a separate context that doesn't inherit search_path.
     sql = """
         SELECT o_orderkey, o_totalprice, x
         FROM orders
         WHERE o_orderkey < 100
         DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x * o_totalprice) <= (SELECT AVG(c_acctbal) FROM tpch.customer WHERE c_nationkey = 10)
+        SUCH THAT SUM(x * o_totalprice) <= (SELECT AVG(c_acctbal) FROM customer WHERE c_nationkey = 10)
         MAXIMIZE SUM(x * o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     # Fetch data + resolve subquery via duckdb
@@ -43,7 +40,7 @@ def test_q04_subquery_rhs(packdb_conn, duckdb_conn, oracle_solver, perf_tracker)
     """).fetchall()
 
     rhs_val = duckdb_conn.execute("""
-        SELECT CAST(AVG(c_acctbal) AS DOUBLE) FROM tpch.customer WHERE c_nationkey = 10
+        SELECT CAST(AVG(c_acctbal) AS DOUBLE) FROM customer WHERE c_nationkey = 10
     """).fetchone()[0]
 
     t_build = time.perf_counter()

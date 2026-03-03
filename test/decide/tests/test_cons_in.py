@@ -14,16 +14,16 @@ import pytest
     reason="IN domain constraints may not be fully supported by the solver",
     strict=False,
 )
-def test_in_domain_restriction(packdb_conn):
+def test_in_domain_restriction(packdb_cli):
     """x IN (0, 1, 3) — restrict integer variable to a sparse domain."""
-    result = packdb_conn.execute("""
+    result, _ = packdb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x
         SUCH THAT x IN (0, 1, 3)
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
-    """).fetchall()
+    """)
     assert len(result) > 0
     x_idx = 4
     for row in result:
@@ -37,16 +37,16 @@ def test_in_domain_restriction(packdb_conn):
     reason="IN domain constraints may not be fully supported by the solver",
     strict=False,
 )
-def test_in_binary_domain(packdb_conn):
+def test_in_binary_domain(packdb_cli):
     """x IN (0, 1) on an implicitly typed variable — equivalent to IS BOOLEAN."""
-    result = packdb_conn.execute("""
+    result, _ = packdb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x
         SUCH THAT x IN (0, 1)
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
-    """).fetchall()
+    """)
     assert len(result) > 0
     x_idx = 4
     for row in result:

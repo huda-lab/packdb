@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_q09_minimize_cost(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q09_minimize_cost(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Minimize cost: select >= 10 suppliers, minimize total acctbal."""
     # Uses nationkey <= 5 to ensure enough suppliers (20) for the >= 10 constraint.
     # The original query used nationkey = 5, but that only has 3 suppliers at SF-0.01.
@@ -30,8 +30,7 @@ def test_q09_minimize_cost(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
         MINIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -77,7 +76,7 @@ def test_q09_minimize_cost(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_min_cost_supplier(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_cost_supplier(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Minimize supply cost: need >= 1000 total availqty."""
     sql = """
         SELECT x, ps_partkey, ps_suppkey, ps_supplycost, ps_availqty
@@ -88,8 +87,7 @@ def test_min_cost_supplier(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
         MINIMIZE SUM(x * ps_supplycost)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -137,7 +135,7 @@ def test_min_cost_supplier(packdb_conn, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_minimize_count(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_minimize_count(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE SUM(x) — select fewest items meeting a threshold."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -148,8 +146,7 @@ def test_minimize_count(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

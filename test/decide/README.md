@@ -19,8 +19,8 @@ make decide-setup
 ```
 
 The `run_tests.sh` script automatically creates a virtualenv at
-`test/decide/.venv/` on first run, installs all dependencies (including
-packdb in editable mode), and then invokes pytest.
+`test/decide/.venv/` on first run, installs all dependencies, and then
+invokes pytest.
 
 ## Setup (Manual)
 
@@ -29,15 +29,17 @@ packdb in editable mode), and then invokes pytest.
 python3 -m venv test/decide/.venv
 source test/decide/.venv/bin/activate
 
-# Install dependencies
+# Install dependencies (vanilla duckdb, highspy, pytest)
 pip install -r test/decide/requirements.txt
 
-# Install packdb (editable, for development)
-cd tools/pythonpkg && pip install -e . && cd ../..
-
-# Ensure packdb.db exists (TPC-H data)
-# Either build PackDB or set PACKDB_DB_PATH
+# Ensure packdb executable + packdb.db exist
+make                   # build PackDB executable (build/release/packdb)
+# packdb.db should already exist; if not, generate TPC-H data via PackDB
 ```
+
+> **Note:** The PackDB Python package (`tools/pythonpkg`) is **not** required.
+> DECIDE queries run via the native CLI executable, and oracle data fetching
+> uses vanilla `duckdb` with a separately generated TPC-H database.
 
 ## Running Tests
 
@@ -209,8 +211,8 @@ rm test/decide/results/oracle_cache.json
 
 1. Choose the appropriate test file based on the primary feature being tested
 2. Follow the existing pattern:
-   - Run the DECIDE query via `packdb_conn`
-   - Fetch the same data via `duckdb_conn` (plain SQL, no DECIDE)
+   - Run the DECIDE query via `packdb_cli` (native executable, subprocess)
+   - Fetch the same data via `duckdb_conn` (vanilla duckdb, plain SQL, no DECIDE)
    - Build an oracle model using `oracle_solver`
    - Compare with `compare_solutions` (returns `ComparisonResult` with status and vectors)
    - Record performance with `perf_tracker` (include `comparison_status` and `decide_vector`)
@@ -227,13 +229,34 @@ the comparison status (`identical`/`optimal`), and the full decide vector.
 
 ```
 test/decide/
-├── conftest.py          # Fixtures (connections, solver, oracle cache, perf tracker)
+├── conftest.py          # Fixtures (CLI wrapper, duckdb conn, solver, cache, perf)
+├── packdb_cli.py        # Subprocess wrapper for build/release/packdb executable
 ├── oracle_cache.py      # Oracle result cache + CachedOracleSolver wrapper
 ├── solver/              # Solver abstraction (Gurobi / HiGHS)
 ├── comparison/          # Solution comparison (objective + variable vector)
 ├── performance/         # Perf tracking and reporting
+├── _tpch_oracle.duckdb  # Auto-generated vanilla TPC-H database (gitignored)
 ├── results/             # JSON output (gitignored)
 │   ├── oracle_cache.json
 │   └── perf_*.json
 └── tests/               # All test files by category
 ```
+
+### Data Flow
+
+```
+┌─────────────────────────────────┐    ┌──────────────────────────────────┐
+│  PackDB (DECIDE queries)        │    │  Oracle (data fetching + ILP)    │
+│                                 │    │                                  │
+│  build/release/packdb (CLI)     │    │  vanilla duckdb (Python package) │
+│        ↕ subprocess             │    │        ↕ in-process              │
+│  packdb.db (PackDB format)      │    │  _tpch_oracle.duckdb (vanilla)  │
+│                                 │    │  generated via CALL dbgen(sf=0.01)│
+└─────────────────────────────────┘    └──────────────────────────────────┘
+         │                                        │
+         └──── compare_solutions() ◄──────────────┘
+```
+
+Both databases contain identical TPC-H data (same deterministic dbgen
+algorithm and scale factor).  The oracle is completely independent of
+PackDB — no `import packdb` anywhere in the test code.

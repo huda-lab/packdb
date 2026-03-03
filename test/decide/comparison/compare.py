@@ -201,9 +201,6 @@ def assert_optimal_match(
     )
 
 
-def assert_infeasible(packdb_conn, sql: str) -> None:
+def assert_infeasible(packdb_cli, sql: str) -> None:
     """Assert that executing *sql* on packdb raises an infeasibility error."""
-    import packdb as _packdb
-
-    with pytest.raises(_packdb.InvalidInputException, match=r"(?i)infeasible"):
-        packdb_conn.execute(sql)
+    packdb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")

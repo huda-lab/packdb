@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.sql_joins
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q06_multi_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_q06_multi_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Multiple constraints: weight (quantity) <= 500 AND volume (size) <= 1000."""
     sql = """
         SELECT l.l_orderkey, l.l_quantity, p.p_size, x
@@ -31,8 +31,7 @@ def test_q06_multi_constraint(packdb_conn, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

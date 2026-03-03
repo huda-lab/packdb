@@ -20,7 +20,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_single_row(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_single_row(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Degenerate case: only 1 input row. Trivial knapsack."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -31,8 +31,7 @@ def test_single_row(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
     assert len(packdb_result) == 1, f"Expected 1 row, got {len(packdb_result)}"
 
@@ -80,7 +79,7 @@ def test_single_row(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_trivial_all_selected(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_trivial_all_selected(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Constraint so loose every x=1 is feasible. Optimal is all-ones."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -91,8 +90,7 @@ def test_trivial_all_selected(packdb_conn, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -140,7 +138,7 @@ def test_trivial_all_selected(packdb_conn, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_rhs_zero_forces_all_zero(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_rhs_zero_forces_all_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) <= 0 forces all boolean variables to 0."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -151,8 +149,7 @@ def test_rhs_zero_forces_all_zero(packdb_conn, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
@@ -200,7 +197,7 @@ def test_rhs_zero_forces_all_zero(packdb_conn, duckdb_conn, oracle_solver, perf_
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_negative_objective_coefficients(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
+def test_negative_objective_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Negative account balances as coefficients — solver must pick most negative."""
     sql = """
         SELECT c_custkey, c_acctbal, x
@@ -211,8 +208,7 @@ def test_negative_objective_coefficients(packdb_conn, duckdb_conn, oracle_solver
         MINIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""

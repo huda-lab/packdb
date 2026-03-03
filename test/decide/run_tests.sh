@@ -21,17 +21,15 @@ if [ ! -d "${VENV_DIR}" ]; then
     echo "Creating virtualenv at ${VENV_DIR} ..."
     python3 -m venv "${VENV_DIR}"
     echo "Installing dependencies ..."
-    "${VENV_DIR}/bin/pip" install --upgrade pip -q
-    "${VENV_DIR}/bin/pip" install -r "${REQ_FILE}" -q
-    # Install packdb in editable mode
-    if [ -d "${REPO_ROOT}/tools/pythonpkg" ]; then
-        echo "Installing packdb (editable) ..."
-        "${VENV_DIR}/bin/pip" install -e "${REPO_ROOT}/tools/pythonpkg" -q
-    fi
+    "${VENV_DIR}/bin/pip" install --upgrade pip -q \
+        --trusted-host pypi.org --trusted-host files.pythonhosted.org
+    "${VENV_DIR}/bin/pip" install -r "${REQ_FILE}" -q \
+        --trusted-host pypi.org --trusted-host files.pythonhosted.org
     echo "Virtualenv ready."
 else
     # Ensure deps are up to date (fast no-op if already satisfied)
-    "${VENV_DIR}/bin/pip" install -r "${REQ_FILE}" -q 2>/dev/null || true
+    "${VENV_DIR}/bin/pip" install -r "${REQ_FILE}" -q \
+        --trusted-host pypi.org --trusted-host files.pythonhosted.org 2>/dev/null || true
 fi
 
 # ── Handle --setup-only ──────────────────────────────────────────────────

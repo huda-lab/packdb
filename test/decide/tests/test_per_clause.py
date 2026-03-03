@@ -10,9 +10,9 @@ import pytest
 
 @pytest.mark.per_clause
 @pytest.mark.xfail(reason="PER keyword not yet implemented", strict=True)
-def test_per_basic(packdb_conn):
+def test_per_basic(packdb_cli):
     """PER keyword should partition constraints by group."""
-    packdb_conn.execute("""
+    packdb_cli.execute("""
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <= 5 PER s_nationkey
@@ -22,9 +22,9 @@ def test_per_basic(packdb_conn):
 
 @pytest.mark.per_clause
 @pytest.mark.xfail(reason="PER keyword not yet implemented", strict=True)
-def test_per_with_integer_variable(packdb_conn):
+def test_per_with_integer_variable(packdb_cli):
     """PER with integer variables and a weighted constraint."""
-    packdb_conn.execute("""
+    packdb_cli.execute("""
         SELECT ps_partkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
         DECIDE x IS INTEGER
@@ -36,9 +36,9 @@ def test_per_with_integer_variable(packdb_conn):
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 @pytest.mark.xfail(reason="PER keyword not yet implemented", strict=True)
-def test_per_combined_with_when(packdb_conn):
+def test_per_combined_with_when(packdb_cli):
     """PER and WHEN used together — group-level constraint with row filter."""
-    packdb_conn.execute("""
+    packdb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
