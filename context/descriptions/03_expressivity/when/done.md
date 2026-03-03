@@ -189,23 +189,56 @@ Decomposing into multiple WHEN constraints fails here because the conditions ove
 
 ---
 
+## Interaction with PER
+
+WHEN composes with `PER`. When both are present, `WHEN` filters rows first, then `PER` groups the remaining rows. Each group gets its own constraint.
+
+```sql
+-- WHEN filters to 'active' rows, PER groups by department
+SUM(x * hours) <= 40 WHEN status = 'active' PER department
+```
+
+Internally, WHEN is a special case of a unified row-grouping system:
+
+| Modifier | `row_group_ids` | `num_groups` |
+|----------|-----------------|--------------|
+| Neither | empty (fast path) | 0 |
+| WHEN only | `0` (included) or `INVALID_INDEX` (excluded) | 1 |
+| PER only | `0..K-1` (group assignment) or `INVALID_INDEX` (NULL PER value) | K |
+| WHEN + PER | WHEN filters first, PER groups the rest | K (of filtered rows) |
+
+---
+
 ## Code Pointers
 
 - **Grammar**: `third_party/libpg_query/grammar/statements/select.y`
-  - Lines 211-214: `decide_objective_item` rule with WHEN support
-  - Lines 250-254: `decide_constraint_item` rule with WHEN support
+  - Lines 210-215: `decide_objective_item` rule with WHEN (and WHEN+PER) support
+  - Lines 265-270: `decide_constraint_item` rule with WHEN (and WHEN+PER) support
 
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
-  - `BindWhenConstraint()` (lines 258-302): Extracts the WHEN condition as a separate boolean expression. Validates that the condition references only table columns, not decision variables.
+  - `BindWhenConstraint()` (line 258): Extracts the WHEN condition as a separate boolean expression. Validates that the condition references only table columns, not decision variables.
+  - Line 415: Dispatch — recognizes `WHEN_CONSTRAINT_TAG` and calls `BindWhenConstraint`.
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
-  - Lines 29-66: Handles WHEN condition extraction on the objective expression.
+  - Lines 29-37: PER on objective is stripped (currently a no-op; see `per/done.md`).
+  - Lines 38-76: Handles WHEN condition extraction on the objective expression.
 
 - **Execution**: `src/execution/operator/decide/physical_decide.cpp`
-  - Lines 200-203: WHEN condition stored with `WHEN_CONSTRAINT_TAG` alias
-  - Lines 263-282: Per-row WHEN mask evaluation — boolean mask created from the condition, applied to coefficient arrays before constructing the ILP matrix
+  - `AnalyzeConstraint` (line 195): Signature takes `when_condition` and `per_column`. PER tag (line 206) is unwrapped first (outermost), then WHEN tag (line 211) is unwrapped inside it.
+  - Lines 717-720: `has_when` / `has_per` flags determine evaluation path.
+  - Lines 768-792: WHEN condition evaluated into a `when_mask` boolean vector.
+  - Lines 826-858: Unified row-group assignment — WHEN-only maps to group `0` or `INVALID_INDEX`; WHEN+PER filters with `when_mask` before PER grouping.
 
-- **Tag constant**: `src/include/duckdb/common/enums/decide.hpp:31`
+- **Data structures**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
+  - `LinearConstraint::when_condition` (line 29): Optional WHEN condition expression.
+  - `LinearConstraint::per_column` (line 30): Optional PER grouping column.
+
+- **Evaluated constraint**: `src/include/duckdb/packdb/solver_input.hpp`
+  - `EvaluatedConstraint::row_group_ids` (line 32): Per-row group assignment (`INVALID_INDEX` = excluded).
+  - `EvaluatedConstraint::num_groups` (line 33): `0` = ungrouped fast path, `1` = WHEN-only, `>1` = PER groups.
+
+- **Tag constants**: `src/include/duckdb/common/enums/decide.hpp`
   ```cpp
-  WHEN_CONSTRAINT_TAG = "__when_constraint__"
+  WHEN_CONSTRAINT_TAG = "__when_constraint__"  // line 31
+  PER_CONSTRAINT_TAG  = "__per_constraint__"   // line 34
   ```
