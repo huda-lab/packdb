@@ -24,7 +24,13 @@ struct EvaluatedConstraint {
     vector<double> rhs_values;                // [row_idx] = RHS value
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
-    vector<bool> row_mask;                    // PackDB WHEN: per-row mask (empty = unconditional)
+
+    //! Unified WHEN+PER row→group mapping
+    //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
+    //! DConstants::INVALID_INDEX = row excluded (WHEN filter or NULL PER value)
+    //! 0..K-1 = group assignment
+    vector<idx_t> row_group_ids;
+    idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
 };
 
 //! Input for the deterministic solver

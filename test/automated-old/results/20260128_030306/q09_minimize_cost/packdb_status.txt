@@ -1,0 +1,24 @@
+Status: FAILED
+Error: [31mFile /home/hqr9411/working_code/packdb/src/packdb/naive/deterministic_naive.cpp, Line 18[0m
+"\nSetting = 
+Setting HiGHS log to console
+INTERNAL Error: DECIDE optimization infeasible: constraints cannot be satisfied (model_status=8)
+
+Stack Trace:
+
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x6134b8) [0x5957743e44b8]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x613538) [0x5957743e4538]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x616425) [0x5957743e7425]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x130ca67) [0x5957750dda67]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x31db81) [0x5957740eeb81]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x11edc2c) [0x595774fbec2c]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x8dd72b) [0x5957746ae72b]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x8cf574) [0x5957746a0574]
+/home/hqr9411/working_code/packdb/build/release/packdb(+0x8d7f2b) [0x5957746a8f2b]
+/lib/x86_64-linux-gnu/libstdc++.so.6(+0xecdb4) [0x761c9e6ecdb4]
+/lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x761c9e29caa4]
+/lib/x86_64-linux-gnu/libc.so.6(+0x129c6c) [0x761c9e329c6c]
+
+This error signals an assertion failure within DuckDB. This usually occurs due to unexpected conditions or errors in the program's logic.
+For more information, see https://duckdb.org/docs/dev/internal_errors
+

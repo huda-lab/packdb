@@ -928,6 +928,17 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
                 result->is_operator = true;
                 return std::move(result);
             }
+            if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
+                // Normalize the inner constraint (child[0]), pass through PER column (child[1])
+                auto normalized_constraint = NormalizeConstraintsRecursive(*func.children[0], decide_variables);
+                auto col_copy = func.children[1]->Copy();
+                vector<unique_ptr<ParsedExpression>> args;
+                args.push_back(std::move(normalized_constraint));
+                args.push_back(std::move(col_copy));
+                auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(args));
+                result->is_operator = true;
+                return std::move(result);
+            }
             return expr.Copy();
         }
         default:
@@ -942,11 +953,33 @@ unique_ptr<ParsedExpression> NormalizeDecideConstraints(const ParsedExpression &
 
 unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
                                                       const case_insensitive_map_t<idx_t> &decide_variables) {
-    // Expect SUM(inner)
+    // Expect SUM(inner), possibly wrapped in WHEN or PER
     if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
         return expr.Copy();
     }
     auto &f = expr.Cast<FunctionExpression>();
+    // PackDB: Handle WHEN wrapper — normalize inner objective, pass through condition
+    if (f.is_operator && f.function_name == WHEN_CONSTRAINT_TAG) {
+        auto normalized = NormalizeDecideObjective(*f.children[0], decide_variables);
+        auto cond = f.children[1]->Copy();
+        vector<unique_ptr<ParsedExpression>> args;
+        args.push_back(std::move(normalized));
+        args.push_back(std::move(cond));
+        auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(args));
+        result->is_operator = true;
+        return std::move(result);
+    }
+    // PackDB: Handle PER wrapper — normalize inner objective, pass through PER column
+    if (f.is_operator && f.function_name == PER_CONSTRAINT_TAG) {
+        auto normalized = NormalizeDecideObjective(*f.children[0], decide_variables);
+        auto col = f.children[1]->Copy();
+        vector<unique_ptr<ParsedExpression>> args;
+        args.push_back(std::move(normalized));
+        args.push_back(std::move(col));
+        auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(args));
+        result->is_operator = true;
+        return std::move(result);
+    }
     if (StringUtil::Lower(f.function_name) != "sum" || f.children.empty()) {
         return expr.Copy();
     }

@@ -218,6 +218,17 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		result->is_operator = true;
 		return std::move(result);
 	}
+	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT: {
+		// PackDB: constraint PER column
+		auto constraint_expr = TransformExpression(root.lexpr);
+		auto per_column_expr = TransformExpression(root.rexpr);
+		vector<unique_ptr<ParsedExpression>> children;
+		children.push_back(std::move(constraint_expr));
+		children.push_back(std::move(per_column_expr));
+		auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(children));
+		result->is_operator = true;
+		return std::move(result);
+	}
 
 	default:
 		break;

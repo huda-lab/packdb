@@ -1,0 +1,126 @@
+Model status
+Optimal
+
+# Primal solution values
+Feasible
+Objective -906116.22
+# Columns 110
+R0_x 0
+R1_x 0
+R2_x 0
+R3_x 0
+R4_x 0
+R5_x 0
+R6_x 0
+R7_x 0
+R8_x 0
+R9_x 0
+R10_x 0
+R11_x 0
+R12_x 0
+R13_x 1
+R14_x 0
+R15_x 0
+R16_x 0
+R17_x 0
+R18_x 0
+R19_x 0
+R20_x 1
+R21_x 0
+R22_x 0
+R23_x 0
+R24_x 0
+R25_x 0
+R26_x 1
+R27_x 0
+R28_x 0
+R29_x 1
+R30_x 0
+R31_x 0
+R32_x 0
+R33_x 0
+R34_x 0
+R35_x 1
+R36_x 1
+R37_x 0
+R38_x 0
+R39_x 0
+R40_x 0
+R41_x 1
+R42_x 0
+R43_x 0
+R44_x 0
+R45_x 0
+R46_x 0
+R47_x 0
+R48_x 0
+R49_x 0
+R50_x 1
+R51_x 0
+R52_x 0
+R53_x 0
+R54_x 1
+R55_x 1
+R56_x 0
+R57_x 0
+R58_x 0
+R59_x 0
+R60_x 0
+R61_x 0
+R62_x 0
+R63_x 1
+R64_x 1
+R65_x 0
+R66_x 0
+R67_x 0
+R68_x 0
+R69_x 0
+R70_x 1
+R71_x 0
+R72_x 0
+R73_x 0
+R74_x 0
+R75_x 0
+R76_x 0
+R77_x 0
+R78_x 1
+R79_x 0
+R80_x 0
+R81_x 1
+R82_x 0
+R83_x 0
+R84_x 0
+R85_x 0
+R86_x 0
+R87_x 0
+R88_x 0
+R89_x 1
+R90_x 0
+R91_x 1
+R92_x 0
+R93_x 0
+R94_x 0
+R95_x 0
+R96_x 0
+R97_x 0
+R98_x 0
+R99_x 0
+R100_x 0
+R101_x 1
+R102_x 0
+R103_x 0
+R104_x 0
+R105_x 0
+R106_x 0
+R107_x 0
+R108_x 0
+R109_x 0
+# Rows 1
+C0 500
+
+# Dual solution values
+None
+
+# Basis
+HiGHS_basis_file v2
+None

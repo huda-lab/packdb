@@ -208,10 +208,24 @@ typed_decide_variable_list:
 		;
 
 decide_objective_item:
-			a_expr WHEN b_expr
+			a_expr WHEN b_expr PER columnref
+				{
+					/* PackDB: objective WHEN condition PER column */
+					PGNode *when_node = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
+				}
+			| a_expr WHEN b_expr
 				{
 					/* PackDB: objective WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+				}
+			| a_expr PER columnref
+				{
+					/* PackDB: objective PER column */
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
 			| a_expr
 				{ $$ = $1; }
@@ -249,10 +263,24 @@ decide_constraint_list:
 		;
 
 decide_constraint_item:
-			a_expr WHEN b_expr
+			a_expr WHEN b_expr PER columnref
+				{
+					/* PackDB: constraint WHEN condition PER column */
+					PGNode *when_node = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
+				}
+			| a_expr WHEN b_expr
 				{
 					/* PackDB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+				}
+			| a_expr PER columnref
+				{
+					/* PackDB: constraint PER column */
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
 			| a_expr
 				{ $$ = $1; }

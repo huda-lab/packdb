@@ -30,4 +30,7 @@ enum class DeterministicConstraintSense : uint8_t {
 //! Tag used to identify WHEN-conditional constraints throughout the pipeline
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 
+//! Tag used to identify PER-grouped constraints throughout the pipeline
+static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
+
 } // namespace duckdb

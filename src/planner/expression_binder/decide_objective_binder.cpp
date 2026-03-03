@@ -26,6 +26,15 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	}
 	case ExpressionClass::FUNCTION: {
 	    auto &func = expr.Cast<FunctionExpression>();
+	    // TODO(PER): PER on objective is currently a no-op (treated as global SUM).
+	    // Revisit when partition-solve is implemented — see context/descriptions/04_optimizer/problem_reduction/
+	    if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
+	        D_ASSERT(func.children.size() == 2);
+	        // Strip the PER wrapper, bind only the inner objective (child[0])
+	        // child[1] (the PER column) is intentionally discarded
+	        expr_ptr = std::move(func.children[0]);
+	        return BindExpression(expr_ptr, depth, root_expression);
+	    }
 	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition
 	    if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
 	        D_ASSERT(func.children.size() == 2);

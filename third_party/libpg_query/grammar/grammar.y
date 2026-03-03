@@ -3,7 +3,7 @@
 %}
 #line 5 "third_party/libpg_query/grammar/grammar.y"
 %pure-parser
-%expect 1
+%expect 3
 %name-prefix="base_yy"
 %locations
 

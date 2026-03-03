@@ -234,7 +234,8 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_BETWEEN_SYM,     /* name must be "BETWEEN SYMMETRIC" */
 	PG_AEXPR_NOT_BETWEEN_SYM, /* name must be "NOT BETWEEN SYMMETRIC" */
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
-	PG_AEXPR_WHEN_CONSTRAINT  /* PackDB: constraint WHEN condition */
+	PG_AEXPR_WHEN_CONSTRAINT, /* PackDB: constraint WHEN condition */
+	PG_AEXPR_PER_CONSTRAINT   /* PackDB: constraint PER column */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {

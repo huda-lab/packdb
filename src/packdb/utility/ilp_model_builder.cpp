@@ -91,57 +91,90 @@ ILPModel ILPModel::Build(const SolverInput &input) {
     // 3. Build constraints
     //===--------------------------------------------------------------------===//
 
+    // Helper: apply comparison sense to an ILP constraint
+    auto ApplyComparisonSense = [](ILPConstraint &constr, ExpressionType cmp, double rhs) {
+        if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+            constr.sense = '>'; constr.rhs = rhs;
+        } else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
+            constr.sense = '>'; constr.rhs = std::floor(rhs) + 1.0;
+        } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+            constr.sense = '<'; constr.rhs = rhs;
+        } else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
+            constr.sense = '<'; constr.rhs = std::ceil(rhs) - 1.0;
+        } else if (cmp == ExpressionType::COMPARE_EQUAL) {
+            constr.sense = '='; constr.rhs = rhs;
+        } else {
+            throw InternalException("Unsupported comparison type in ILP model builder");
+        }
+    };
+
     for (auto &eval_const : input.constraints) {
         bool is_aggregate = eval_const.lhs_is_aggregate;
-        bool has_mask = !eval_const.row_mask.empty();
+        bool has_groups = !eval_const.row_group_ids.empty();
 
         if (is_aggregate) {
-            // AGGREGATE CONSTRAINT: one constraint summing across all rows
-            ILPConstraint constr;
+            if (!has_groups) {
+                // FAST PATH: no WHEN, no PER — one constraint summing all rows
+                ILPConstraint constr;
 
-            for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
-                if (decide_var_idx != DConstants::INVALID_INDEX) {
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        if (has_mask && !eval_const.row_mask[row]) {
-                            continue;
+                    if (decide_var_idx != DConstants::INVALID_INDEX) {
+                        for (idx_t row = 0; row < num_rows; row++) {
+                            double coeff = eval_const.row_coefficients[term_idx][row];
+                            idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                            constr.indices.push_back((int)var_idx);
+                            constr.coefficients.push_back(coeff);
                         }
-                        double coeff = eval_const.row_coefficients[term_idx][row];
-                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
-                        constr.indices.push_back((int)var_idx);
-                        constr.coefficients.push_back(coeff);
                     }
                 }
-            }
 
-            double rhs = eval_const.rhs_values[0];
+                double rhs = eval_const.rhs_values[0];
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
+                model.constraints.push_back(std::move(constr));
 
-            if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                constr.sense = '>';
-                constr.rhs = rhs;
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-                constr.sense = '>';
-                constr.rhs = std::floor(rhs) + 1.0;
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                constr.sense = '<';
-                constr.rhs = rhs;
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-                constr.sense = '<';
-                constr.rhs = std::ceil(rhs) - 1.0;
-            } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                constr.sense = '=';
-                constr.rhs = rhs;
             } else {
-                throw InternalException("Unsupported comparison type in ILP model builder");
-            }
+                // UNIFIED PATH: WHEN and/or PER — build group→rows index, emit one constraint per group
+                vector<vector<idx_t>> group_rows(eval_const.num_groups);
+                for (idx_t row = 0; row < num_rows; row++) {
+                    idx_t gid = eval_const.row_group_ids[row];
+                    if (gid == DConstants::INVALID_INDEX) {
+                        continue;
+                    }
+                    group_rows[gid].push_back(row);
+                }
 
-            model.constraints.push_back(std::move(constr));
+                for (idx_t g = 0; g < eval_const.num_groups; g++) {
+                    if (group_rows[g].empty()) {
+                        continue;
+                    }
+                    ILPConstraint constr;
+
+                    for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                        idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+
+                        if (decide_var_idx != DConstants::INVALID_INDEX) {
+                            for (idx_t row : group_rows[g]) {
+                                double coeff = eval_const.row_coefficients[term_idx][row];
+                                idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                                constr.indices.push_back((int)var_idx);
+                                constr.coefficients.push_back(coeff);
+                            }
+                        }
+                    }
+
+                    double rhs = eval_const.rhs_values[0];
+                    ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
+                    model.constraints.push_back(std::move(constr));
+                }
+            }
 
         } else {
             // PER-ROW CONSTRAINT: one constraint per row
             for (idx_t row = 0; row < num_rows; row++) {
-                if (has_mask && !eval_const.row_mask[row]) {
+                // Skip rows excluded by WHEN (row_group_ids with INVALID_INDEX)
+                if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
                     continue;
                 }
                 ILPConstraint constr;
@@ -158,26 +191,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                 }
 
                 double rhs = eval_const.rhs_values[row];
-
-                if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                    constr.sense = '>';
-                    constr.rhs = rhs;
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHAN) {
-                    constr.sense = '>';
-                    constr.rhs = std::floor(rhs) + 1.0;
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                    constr.sense = '<';
-                    constr.rhs = rhs;
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
-                    constr.sense = '<';
-                    constr.rhs = std::ceil(rhs) - 1.0;
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_EQUAL) {
-                    constr.sense = '=';
-                    constr.rhs = rhs;
-                } else {
-                    throw InternalException("Unsupported comparison type in ILP model builder");
-                }
-
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
                 model.constraints.push_back(std::move(constr));
             }
         }

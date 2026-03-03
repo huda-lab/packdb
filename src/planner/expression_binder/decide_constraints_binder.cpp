@@ -8,7 +8,7 @@
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/expression/subquery_expression.hpp">
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -302,6 +302,96 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
     return BindResult(std::move(result));
 }
 
+//! Check if a parsed constraint expression is aggregate (SUM-based).
+//! Unwraps optional WHEN wrapper to inspect the inner comparison.
+static bool IsAggregateConstraint(const ParsedExpression &expr) {
+    const ParsedExpression *inner = &expr;
+    // Unwrap WHEN wrapper if present
+    if (inner->GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = inner->Cast<FunctionExpression>();
+        if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
+            inner = func.children[0].get();
+        }
+    }
+    // Check if the comparison's LHS is a SUM function
+    if (inner->GetExpressionClass() == ExpressionClass::COMPARISON) {
+        auto &comp = inner->Cast<ComparisonExpression>();
+        if (comp.left->GetExpressionClass() == ExpressionClass::FUNCTION) {
+            auto &lhs = comp.left->Cast<FunctionExpression>();
+            if (StringUtil::Lower(lhs.function_name) == "sum") {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+    auto &func = expr_ptr->Cast<FunctionExpression>();
+    D_ASSERT(func.children.size() == 2);
+
+    auto &constraint_child = func.children[0];  // constraint (possibly WHEN-wrapped)
+    auto &column_child = func.children[1];       // PER column (ColumnRefExpression)
+
+    // Validate: PER column must not reference a DECIDE variable
+    if (ExpressionContainsDecideVariable(*column_child, variables)) {
+        return BindResult(BinderException::Unsupported(*expr_ptr,
+            "PER column cannot be a DECIDE variable. "
+            "PER must group by a table column."));
+    }
+
+    // Validate: PER column must be a simple column reference
+    if (column_child->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+        return BindResult(BinderException::Unsupported(*expr_ptr,
+            "PER currently supports only a single table column reference "
+            "(e.g., PER empID). Expressions are not supported."));
+    }
+
+    // Validate: constraint must be aggregate (SUM-based)
+    if (!IsAggregateConstraint(*constraint_child)) {
+        return BindResult(BinderException::Unsupported(*expr_ptr,
+            "PER can only be applied to aggregate (SUM) constraints. "
+            "Per-row constraints (e.g., 'x <= 5 PER col') are not supported "
+            "because each row already has its own constraint."));
+    }
+
+    // Bind the constraint child through normal dispatch (handles WHEN recursively)
+    is_top_expression = true;
+    ErrorData constraint_error;
+    BindChild(func.children[0], depth, constraint_error);
+    if (constraint_error.HasError()) {
+        return BindResult(std::move(constraint_error));
+    }
+
+    // Bind the PER column using the base ExpressionBinder
+    // (reuse binding_when_condition flag to bypass DECIDE-specific dispatch)
+    is_top_expression = false;
+    binding_when_condition = true;
+    ErrorData column_error;
+    try {
+        BindChild(func.children[1], depth, column_error);
+    } catch (...) {
+        binding_when_condition = false;
+        throw;
+    }
+    binding_when_condition = false;
+    if (column_error.HasError()) {
+        return BindResult(std::move(column_error));
+    }
+
+    // Construct tagged bound result:
+    // child[0] = bound constraint (possibly WHEN-wrapped)
+    // child[1] = bound PER column (BoundColumnRefExpression)
+    auto &bound_constraint = BoundExpression::GetExpression(*func.children[0]);
+    auto &bound_column = BoundExpression::GetExpression(*func.children[1]);
+
+    auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+    result->children.push_back(std::move(bound_constraint));
+    result->children.push_back(std::move(bound_column));
+    result->alias = PER_CONSTRAINT_TAG;
+    return BindResult(std::move(result));
+}
+
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
 	if (binding_when_condition) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
@@ -316,8 +406,12 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
         break;
     }
     case ExpressionClass::FUNCTION: {
-        // PackDB: Check for __when_constraint__ operator
         auto &func = expr.Cast<FunctionExpression>();
+        // PackDB: PER constraint wrapper (outermost, wraps optional WHEN)
+        if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
+            return BindPerConstraint(expr_ptr, depth);
+        }
+        // PackDB: Check for __when_constraint__ operator
         if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
             return BindWhenConstraint(expr_ptr, depth);
         }

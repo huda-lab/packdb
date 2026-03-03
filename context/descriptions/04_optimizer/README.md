@@ -22,7 +22,7 @@ This folder documents the optimization strategies for Constrained Optimization P
 |---|---|---|
 | [query_rewriting/](query_rewriting/) | WHERE filtering, WHEN coefficient zeroing | Big-M, push-down, pull-out, bound conversion |
 | [reformulation/](reformulation/) | *(nothing)* | LP relaxation, constraint tightening, symmetry breaking |
-| [problem_reduction/](problem_reduction/) | *(nothing)* | Skyband indexing, Progressive Shading, LGS |
+| [problem_reduction/](problem_reduction/) | *(nothing)* | **Partition-solve (PER decomposition)**, Skyband indexing, Progressive Shading, LGS |
 | [adaptive_processing/](adaptive_processing/) | *(nothing)* | Solver timeout, constraint softening, incremental reasoning |
 | [physical_planning/](physical_planning/) | Solver selection (Gurobi/HiGHS) | Cost-based strategy selection |
 
@@ -40,6 +40,7 @@ This folder documents the optimization strategies for Constrained Optimization P
 | Constraint pull-out | **Not implemented** |
 | Constraint-to-bound conversion | **Not implemented** |
 | LP relaxation + rounding | **Not implemented** |
+| Partition-solve (PER decomposition) | **Not implemented** (enabled by PER `row_group_ids` design) |
 | Skyband indexing | **Not implemented** |
 | Progressive Shading | **Not implemented** |
 | Solver time limit | **Not implemented** |
