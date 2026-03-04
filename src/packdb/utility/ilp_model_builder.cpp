@@ -27,9 +27,9 @@ ILPModel ILPModel::Build(const SolverInput &input) {
         auto logical_type = input.variable_types[var];
 
         if (logical_type == LogicalType::DOUBLE || logical_type == LogicalType::FLOAT) {
-            throw InternalException(
-                "DECIDE variable has DOUBLE type, but DECIDE variables must be INTEGER "
-                "(they represent tuple cardinality). This should have been caught in the binder.");
+            per_var_binary[var] = false;
+            per_var_lower[var] = 0.0;
+            per_var_upper[var] = 1e30;
         } else if (logical_type == LogicalType::BOOLEAN) {
             per_var_binary[var] = true;
             per_var_lower[var] = 0.0;
@@ -54,7 +54,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
     // Expand per-variable config to all rows
     model.col_lower.resize(total_vars);
     model.col_upper.resize(total_vars);
-    model.is_integer.resize(total_vars, true);  // All DECIDE vars are integer
+    model.is_integer.resize(total_vars, false);
     model.is_binary.resize(total_vars, false);
 
     for (idx_t row = 0; row < num_rows; row++) {
@@ -62,6 +62,8 @@ ILPModel ILPModel::Build(const SolverInput &input) {
             idx_t var_idx = row * num_decide_vars + var;
             model.col_lower[var_idx] = per_var_lower[var];
             model.col_upper[var_idx] = per_var_upper[var];
+            model.is_integer[var_idx] = !(input.variable_types[var] == LogicalType::DOUBLE ||
+                                          input.variable_types[var] == LogicalType::FLOAT);
             model.is_binary[var_idx] = per_var_binary[var];
         }
     }

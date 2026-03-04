@@ -920,6 +920,29 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
             if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
                 // Normalize the inner constraint (child[0]), pass through condition (child[1])
                 auto normalized_constraint = NormalizeConstraintsRecursive(*func.children[0], decide_variables);
+
+                // Fix grammar ambiguity: "A AND B WHEN C" parses as "(A AND B) WHEN C"
+                // due to a_expr absorbing AND via shift/reduce. The user's intent is
+                // "A AND (B WHEN C)" — WHEN binds to the rightmost constraint only.
+                // Fix: pull all-but-last AND children out, wrap only the last with WHEN.
+                if (normalized_constraint->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
+                    auto &conj = normalized_constraint->Cast<ConjunctionExpression>();
+                    if (conj.children.size() >= 2) {
+                        // Wrap only the last child with WHEN
+                        auto cond_copy = func.children[1]->Copy();
+                        vector<unique_ptr<ParsedExpression>> when_args;
+                        when_args.push_back(std::move(conj.children.back()));
+                        when_args.push_back(std::move(cond_copy));
+                        auto when_expr = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(when_args));
+                        when_expr->is_operator = true;
+
+                        // Rebuild: unwrapped children AND WHEN(last, condition)
+                        conj.children.pop_back();
+                        conj.children.push_back(std::move(when_expr));
+                        return std::move(normalized_constraint);
+                    }
+                }
+
                 auto condition_copy = func.children[1]->Copy();
                 vector<unique_ptr<ParsedExpression>> args;
                 args.push_back(std::move(normalized_constraint));

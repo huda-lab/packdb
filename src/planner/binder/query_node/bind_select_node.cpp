@@ -408,6 +408,36 @@ void Binder::BindWhereStarExpression(unique_ptr<ParsedExpression> &expr) {
 	}
 }
 
+// Rewrite COUNT(x) → SUM(x) for BOOLEAN decision variables (pre-normalization).
+// COUNT over a BOOLEAN var is semantically "how many rows have x=1", which equals SUM(x).
+static void RewriteCountToSum(unique_ptr<ParsedExpression> &expr,
+                               const case_insensitive_map_t<idx_t> &variables,
+                               const vector<bool> &is_boolean_var) {
+	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr->Cast<FunctionExpression>();
+		if (StringUtil::CIEquals(func.function_name, "count") && func.children.size() == 1) {
+			auto &child = *func.children[0];
+			if (child.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+				auto &colref = child.Cast<ColumnRefExpression>();
+				auto it = variables.find(colref.GetColumnName());
+				if (it != variables.end()) {
+					if (!is_boolean_var[it->second]) {
+						throw BinderException(*expr,
+						    "COUNT(%s) requires a BOOLEAN decision variable. "
+						    "For INTEGER/REAL variables, COUNT is not yet supported.",
+						    colref.GetColumnName());
+					}
+					func.function_name = "sum";
+					return;
+				}
+			}
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+		RewriteCountToSum(child, variables, is_boolean_var);
+	});
+}
+
 unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_ptr<BoundTableRef> from_table) {
 	D_ASSERT(from_table);
 	D_ASSERT(!statement.from_table);
@@ -466,14 +496,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration.");
             }
             
-            // Validate type marker
-            if (type_marker == "real_variable") {
-                throw BinderException(*expr_ptr, 
-                    "DECIDE variable '%s' cannot be REAL type. "
-                    "DECIDE variables represent tuple cardinality (count) and must be INTEGER or BOOLEAN.",
-                    name);
-            }
-            
             if (bind_context.GetMatchingBinding(name)) {
                 throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
             }
@@ -482,7 +504,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             }
             decide_variable_names.emplace(name, var_names.size());
             var_names.push_back(name);
-            var_types.push_back(LogicalType::INTEGER);  // All DECIDE vars are INTEGER internally
+            var_types.push_back(type_marker == "real_variable" ? LogicalType::DOUBLE : LogicalType::INTEGER);
             is_boolean_var.push_back(type_marker == "bool_variable");
         }
         
@@ -512,6 +534,14 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             }
         }
 
+
+        // Rewrite COUNT(var) -> SUM(var) for BOOLEAN decision variables
+        if (statement.decide_constraints) {
+            RewriteCountToSum(statement.decide_constraints, decide_variable_names, is_boolean_var);
+        }
+        if (statement.decide_objective) {
+            RewriteCountToSum(statement.decide_objective, decide_variable_names, is_boolean_var);
+        }
 
         if (statement.decide_constraints) {
             // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));

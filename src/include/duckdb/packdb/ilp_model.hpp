@@ -29,7 +29,7 @@ struct ILPModel {
     //! Per-variable configuration (size = num_vars)
     vector<double> col_lower;  //!< Lower bounds
     vector<double> col_upper;  //!< Upper bounds
-    vector<bool> is_integer;   //!< True if integer (all DECIDE vars are integer)
+    vector<bool> is_integer;   //!< True for INTEGER/BOOLEAN vars, false for REAL (continuous)
     vector<bool> is_binary;    //!< True if binary (0/1), subset of integer
 
     //! Objective function

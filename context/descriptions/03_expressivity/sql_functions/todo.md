@@ -25,34 +25,18 @@ This transformation should be applied automatically during query planning (see [
 
 ### Dependencies
 
-- Requires `IS REAL` variable support (see [../decide/todo.md](../decide/todo.md)) — the auxiliary `d` variable must be continuous
+- ~~Requires `IS REAL` variable support~~ — **done** (see [../decide/done.md](../decide/done.md))
 - Requires optimizer support for introducing auxiliary variables
 
 ---
 
-## COUNT() Over Decision Variables
+## COUNT() Over INTEGER/REAL Decision Variables
 
-**Priority: Medium**
+**Priority: Low**
 
-`COUNT(x)` over boolean decision variables can be supported by automatic rewriting to `SUM(x)`:
+`COUNT(x)` for BOOLEAN variables is implemented (see `done.md`). For INTEGER and REAL variables, COUNT semantics are ambiguous — does it mean "count of non-zero values"? "count of rows"? This is currently rejected with a clear error message.
 
-```sql
--- NOT SUPPORTED (currently)
-SUCH THAT COUNT(x) >= 10
-MAXIMIZE COUNT(x)
-
--- Equivalent (user must write this today):
-SUCH THAT SUM(x) >= 10     -- where x IS BOOLEAN
-MAXIMIZE SUM(x)
-```
-
-### Suggested Implementation
-
-1. In the constraint binder (`decide_constraints_binder.cpp`) and objective binder (`decide_objective_binder.cpp`), detect `COUNT(var)` where `var` is a boolean decision variable
-2. Rewrite to `SUM(var)` before the rest of binding proceeds
-3. Reject `COUNT(var)` when `var` is INTEGER (semantically ambiguous — what does "count" mean for integer-valued variables?)
-
-This is a syntactic convenience — no solver changes needed.
+If needed, a possible approach would be to introduce an auxiliary BOOLEAN variable `y_i` with constraints `y_i <= x_i` and `y_i * M >= x_i` (Big-M), then rewrite `COUNT(x)` to `SUM(y)`. This requires Big-M infrastructure.
 
 ---
 

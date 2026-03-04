@@ -17,6 +17,19 @@ SUCH THAT SUM(x * weight) <= 50
 
 **Code**: Validated in `decide_objective_binder.cpp:91-100` and `decide_constraints_binder.cpp:358-367` — any aggregate other than SUM is rejected with an error.
 
+### COUNT() — BOOLEAN variables only
+
+`COUNT(x)` is automatically rewritten to `SUM(x)` when `x IS BOOLEAN`. This is semantically correct because for a {0,1} variable, "how many rows have x=1" is exactly `SUM(x)`.
+
+```sql
+SUCH THAT COUNT(x) >= 5     -- where x IS BOOLEAN
+MAXIMIZE COUNT(x)           -- maximize number of selected rows
+```
+
+The rewrite happens early, before normalization and binding, in `bind_select_node.cpp` via the `RewriteCountToSum()` function. This means COUNT inherits all SUM capabilities (WHEN, PER, all comparison operators) for free.
+
+`COUNT(x)` is **rejected** for INTEGER and REAL variables with a clear error message, since COUNT semantics are ambiguous for non-binary variables.
+
 ---
 
 ## Arithmetic Operators
@@ -102,6 +115,7 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | Function / Operator | In Constraints | In Objective | In WHEN / WHERE |
 |---|---|---|---|
 | `SUM()` over dec. vars | Yes | Yes | N/A |
+| `COUNT()` (BOOLEAN only) | Yes | Yes | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `+`, `-` | Yes | Yes | Yes |
 | `=`, `<>`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |
