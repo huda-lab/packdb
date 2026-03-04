@@ -196,17 +196,15 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
     auto &op = expr.Cast<OperatorExpression>();
     switch (op.type) {
     case ExpressionType::COMPARE_IN:{
-        if (!IsVariableExpression(*op.children.front(), variables)) {
-            return BindResult(BinderException::Unsupported(expr, StringUtil::Format("Only DECIDE variables are allowed for IN expression, found '%s'", expr.ToString())));
+        if (IsVariableExpression(*op.children.front(), variables)) {
+            return BindResult(BinderException::Unsupported(expr,
+                "IN domain constraints on DECIDE variables are not yet supported. "
+                "For binary domains, use IS BOOLEAN. "
+                "For bounded integers, use comparison constraints (e.g., x >= 0 AND x <= 5)"));
         }
-        for (size_t i = 1; i < op.children.size(); ++i) {
-            auto &child = op.children[i];
-            if (HasVariableExpression(*child, variables)) {
-                return BindResult(BinderException::Unsupported(expr, StringUtil::Format("IN Right-hand side cannot contain DECIDE variables, found '%s'", expr.ToString())));
-            }
-        }
-        is_top_expression = false;
-        return ExpressionBinder::BindExpression(expr_ptr, depth);
+        // IN on table columns in SUCH THAT is not meaningful — use WHERE instead
+        return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
+            "IN on table columns should be in WHERE, not SUCH THAT. Found '%s'", expr.ToString())));
     }
     default:
         return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT constraint clause does not support '%s'(ExpressionType::%s)", expr.ToString(), EnumUtil::ToString(op.type))));

@@ -22,7 +22,9 @@ Multiple constraints are separated by `AND`. Each constraint evaluates to a bool
 
 Any comparison involving at least one decision variable (or aggregate over one).
 
-**Supported operators**: `=`, `<>`, `<`, `<=`, `>`, `>=`
+**Supported operators**: `=`, `<`, `<=`, `>`, `>=`
+
+> **Note**: `<>` (not-equal) is accepted by the parser but **rejected by the binder on aggregates** (e.g., `SUM(x) <> 5`). Not-equal is a disjunctive constraint that requires Big-M reformulation — see [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md).
 
 ```sql
 SUCH THAT
@@ -42,12 +44,14 @@ SUCH THAT
 
 ### IN
 
-`x IN (val1, val2, ...)` constrains a value to be in the provided set.
+`column IN (val1, val2, ...)` constrains a **table column** value to be in the provided set.
 
 ```sql
 SUCH THAT
-    category IN ('A', 'B', 'C')    -- row-level filter on a column
+    category IN ('A', 'B', 'C')    -- row-level filter on a table column
 ```
+
+> **Limitation**: `IN` on **decision variables** (e.g., `x IN (0, 1, 3)`) is parsed and bound but **does not enforce the domain restriction** at the solver level. The constraint silently has no effect. Proper support requires auxiliary binary variables — see [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md).
 
 ---
 
@@ -135,7 +139,7 @@ SUCH THAT
 ## Code Pointers
 
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
-  - `BindComparison()` — handles `=`, `<>`, `<`, `<=`, `>`, `>=`
+  - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=` (`<>` is rejected on aggregates)
   - `BindBetween()` (lines 216-232) — desugars to two comparison constraints
   - `BindOperator()` (lines 198-210) — handles IN clause
   - `BindWhenConstraint()` (lines 258-302) — handles WHEN modifier

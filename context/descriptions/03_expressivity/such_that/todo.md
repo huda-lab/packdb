@@ -26,12 +26,11 @@ Implement a binder rule to **unnest** correlated subqueries into joins before th
 
 ---
 
-## PER (Group-Scoped Constraints)
+## PER (Group-Scoped Constraints) — IMPLEMENTED
 
-The `PER` keyword automatically generates one constraint per distinct value of a column. See [per/todo.md](../per/todo.md) for full design and implementation plan.
+PER is now implemented. See [per/done.md](../per/done.md) for full documentation.
 
 ```sql
--- NOT YET IMPLEMENTED
 SUCH THAT
     SUM(new_hours) <= 40 PER empID
 ```

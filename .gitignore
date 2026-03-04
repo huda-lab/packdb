@@ -389,3 +389,7 @@ test/automated-old/=
 
 # highs log
 highs.log
+
+
+# notes
+context/descriptions/todo.md

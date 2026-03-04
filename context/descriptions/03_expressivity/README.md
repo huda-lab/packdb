@@ -12,10 +12,10 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, multiple vars, scope, linearity | IS REAL variables |
-| [such_that/](such_that/) | Comparisons, BETWEEN, IN, AND, subqueries, WHEN | Correlated subqueries, PER integration |
+| [such_that/](such_that/) | Comparisons, BETWEEN, IN, AND, subqueries, WHEN, PER | Correlated subqueries |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic, WHEN on objective | ABS, PER on objective, COUNT/AVG |
-| [when/](when/) | Full implementation (constraints + objectives) | Interaction with PER |
-| [per/](per/) | *(nothing implemented)* | Full PER design + implementation plan |
+| [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
+| [per/](per/) | PER on constraints, WHEN+PER composition, row_group_ids architecture | Multi-column PER, PER on objective (partition-solve), row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, arithmetic, comparisons, BETWEEN, IN, NULL | ABS, COUNT, AVG, MIN/MAX linearization |
 
 ---
@@ -29,22 +29,25 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `DECIDE x IS REAL` | **No** | [decide/todo.md](decide/todo.md) |
 | `DECIDE x` (default INTEGER) | Yes | — |
 | Multiple variables: `DECIDE x, y` | Yes | — |
-| `SUCH THAT` with `=`, `<>`, `<`, `<=`, `>`, `>=` | Yes | — |
+| `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=` | Yes | — |
+| `<>` (not-equal) on aggregates | **No** (rejected by binder) | Needs Big-M |
 | `AND` constraint separator | Yes | — |
 | `BETWEEN ... AND ...` | Yes | — |
-| `IN (...)` | Yes | — |
+| `IN (...)` on table columns | Yes | — |
+| `IN (...)` on decision variables | **No** (silently ignored) | Needs auxiliary variables |
 | Uncorrelated scalar subqueries | Yes | — |
 | Correlated subqueries | **No** | [such_that/todo.md](such_that/todo.md) |
 | Linear constraints | Yes | — |
 | Non-linear constraints (`x * y`) | Not supported (by design) | — |
 | `WHEN` on constraints | Yes | — |
 | `WHEN` on objective | Yes | — |
-| `PER` on constraints | **No** | [per/todo.md](per/todo.md) |
-| `PER` on objective | **No** | [per/todo.md](per/todo.md) |
+| `PER` on constraints | Yes | — |
+| `PER` on objective | Accepted (no-op) | [per/todo.md](per/todo.md) (partition-solve) |
 | `MAXIMIZE SUM(...)` | Yes | — |
 | `MINIMIZE SUM(...)` | Yes | — |
 | `SUM()` over decision variables | Yes | — |
-| `COUNT()` over decision variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
+| `COUNT()` over BOOLEAN variables | Yes (rewritten to SUM) | — |
+| `COUNT()` over INTEGER/REAL variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
 | `AVG()` over decision variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
 | `ABS()` | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
 | `MIN()` / `MAX()` over dec. vars | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
@@ -53,10 +56,10 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 ## Development Priorities
 
-1. **PER keyword** — enables per-group constraints (most impactful expressivity gain)
-2. **COUNT/AVG aggregates** — syntactic convenience, linearizable for common cases
-3. **IS REAL variables** — unlocks imputation, repair, and synthesis tasks
-4. **ABS()** — needed for repair objectives (depends on IS REAL + Big-M)
+1. **IS REAL variables** — unlocks imputation, repair, and synthesis tasks
+2. **AVG() aggregate** — syntactic convenience, linearizable for common cases
+3. **ABS()** — needed for repair objectives (depends on IS REAL + Big-M)
+4. **`<>` and `IN` on decision variables** — requires Big-M / auxiliary variable infrastructure
 
 ---
 

@@ -55,15 +55,17 @@ SUM(x * a + y * b) -- OK: linear combination in aggregate
 
 ## Comparison Operators
 
-### =, <>, <, <=, >, >=
+### =, <, <=, >, >=
 
-All six standard comparison operators are supported in constraints.
+Five standard comparison operators are supported in constraints.
 
 ```sql
 SUCH THAT x <= 1
 SUCH THAT SUM(x * w) >= 10
 SUCH THAT SUM(x) = 5
 ```
+
+> **Note**: `<>` (not-equal) is parsed but **rejected by the binder on aggregates** (e.g., `SUM(x) <> 5`). It creates a disjunctive constraint that requires Big-M reformulation. See [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md).
 
 ### BETWEEN ... AND ...
 
@@ -76,11 +78,13 @@ SUCH THAT SUM(x) BETWEEN 10 AND 50
 
 ### IN (...)
 
-Constrains a value to be in a literal set.
+Constrains a **table column** value to be in a literal set.
 
 ```sql
 SUCH THAT category IN ('A', 'B', 'C')
 ```
+
+> **Limitation**: `IN` on **decision variables** (e.g., `x IN (0, 1, 3)`) is parsed and bound but does not enforce the domain restriction at the solver level. Proper support requires auxiliary binary variables.
 
 ---
 
@@ -118,9 +122,10 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | `COUNT()` (BOOLEAN only) | Yes | Yes | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `+`, `-` | Yes | Yes | Yes |
-| `=`, `<>`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |
+| `=`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |
+| `<>` (not-equal) | Rejected on aggregates | N/A | Yes |
 | `BETWEEN` | Yes | N/A | Yes |
-| `IN (...)` | Yes | N/A | Yes |
+| `IN (...)` | Table columns only | N/A | Yes |
 | `IS NULL` / `IS NOT NULL` | N/A | N/A | Yes |
 | `AND` (constraint sep.) | Yes | N/A | N/A |
 | `AND` / `OR` (logical) | N/A | N/A | Yes |

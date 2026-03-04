@@ -33,9 +33,10 @@ DECIDE x IS BOOLEAN, y IS INTEGER  -- multiple typed variables
 
 Constraints must evaluate to a boolean. Multiple constraints are separated by `AND`.
 
-- **Supported Operators**: `=`, `<>`, `<`, `<=`, `>`, `>=`.
+- **Supported Operators**: `=`, `<`, `<=`, `>`, `>=`.
+  - `<>` (not-equal): Parsed but **rejected on aggregates** (requires Big-M reformulation).
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
-- **In**: `x IN (1, 2, 3)`.
+- **In**: `column IN (1, 2, 3)` — works on table columns. On decision variables, parsed but **not enforced** (requires auxiliary variables).
 - **Linearity**: Any sub-expression involving a decision variable must be linear.
   - `x * 5`: OK.
   - `x + y`: OK.
@@ -51,7 +52,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 ## 5. Aggregations
 
 - Only `SUM()` is supported over decision variables.
-- `COUNT(x)` is **Not Supported** (Use `SUM(x)` where x is boolean).
+- `COUNT(x)` is supported for **BOOLEAN variables only** (automatically rewritten to `SUM(x)`).
 - `AVG(x)` is **Not Supported** (Non-linear ratio).
 
 ## 6. Conditional Expressions — `WHEN`
@@ -90,3 +91,31 @@ MINIMIZE SUM(x * cost) WHEN region = 'US'
   SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
   ```
 - Expressions without `WHEN` apply unconditionally to all rows.
+
+## 7. Group-Scoped Constraints — `PER`
+
+The `PER` keyword generates one constraint per distinct value of a column.
+
+**Syntax**: `SUM(expr) comparison rhs PER column`
+
+```sql
+SUCH THAT
+    SUM(x * hours) <= 40 PER empID
+```
+
+### 7.1 PER + WHEN Composition
+
+WHEN filters rows first, then PER groups the remaining rows:
+
+```sql
+SUCH THAT
+    SUM(x * hours) <= 30 WHEN title = 'Director' PER empID
+```
+
+### 7.2 Restrictions
+
+- **Aggregate-only**: PER requires a SUM constraint (per-row constraints are rejected).
+- **Single-column**: Only `PER column` (not `PER (col1, col2)`).
+- **Constant RHS**: The right-hand side must be constant across groups.
+- **Table columns only**: PER column must be a table column, not a decision variable.
+- **NULL handling**: Rows where the PER column is NULL are excluded.
