@@ -197,14 +197,16 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
     switch (op.type) {
     case ExpressionType::COMPARE_IN:{
         if (IsVariableExpression(*op.children.front(), variables)) {
+            // x IN (1,2,3) — decision variable with domain restriction
             return BindResult(BinderException::Unsupported(expr,
                 "IN domain constraints on DECIDE variables are not yet supported. "
                 "For binary domains, use IS BOOLEAN. "
                 "For bounded integers, use comparison constraints (e.g., x >= 0 AND x <= 5)"));
         }
-        // IN on table columns in SUCH THAT is not meaningful — use WHERE instead
+        // SUM(x) IN (...), table_col IN (...), etc.
         return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
-            "IN on table columns should be in WHERE, not SUCH THAT. Found '%s'", expr.ToString())));
+            "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
+            op.children.front()->ToString())));
     }
     default:
         return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT constraint clause does not support '%s'(ExpressionType::%s)", expr.ToString(), EnumUtil::ToString(op.type))));

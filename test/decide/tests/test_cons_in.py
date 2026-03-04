@@ -1,7 +1,9 @@
 """Tests for IN (...) constraints on decision variables.
 
 x IN (0, 1, 3) restricts the variable's domain to a discrete set.
-The binder accepts this syntax; whether the solver handles it is unverified.
+Currently rejected by the binder — IN domain constraints require auxiliary
+binary variables which are not yet implemented. These tests define the
+expected behavior for when support is added.
 """
 
 import pytest
@@ -11,7 +13,7 @@ import pytest
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
 @pytest.mark.xfail(
-    reason="IN domain constraints may not be fully supported by the solver",
+    reason="IN domain constraints on DECIDE variables are not yet supported",
     strict=False,
 )
 def test_in_domain_restriction(packdb_cli):
@@ -34,7 +36,7 @@ def test_in_domain_restriction(packdb_cli):
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.xfail(
-    reason="IN domain constraints may not be fully supported by the solver",
+    reason="IN domain constraints on DECIDE variables are not yet supported",
     strict=False,
 )
 def test_in_binary_domain(packdb_cli):

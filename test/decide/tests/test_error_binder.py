@@ -38,7 +38,7 @@ class TestBinderErrors:
                 DECIDE y
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"Only DECIDE variables are allowed for IN")
+            """, match=r"does not support IN on")
 
     def test_is_null_unsupported(self, packdb_cli):
         """IS NULL is not supported in SUCH THAT."""
@@ -56,7 +56,7 @@ class TestBinderErrors:
                 DECIDE x
                 SUCH THAT SUM(x) IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"Only DECIDE variables are allowed for IN")
+            """, match=r"does not support IN on")
 
     def test_non_decide_variable_in_constraint(self, packdb_cli):
         """Using a regular column (not a DECIDE var) as a constrained value."""
@@ -126,13 +126,13 @@ class TestBinderErrors:
             """, match=r"cannot be compared.*DECIDE")
 
     def test_in_rhs_with_decide_variable(self, packdb_cli):
-        """IN list cannot contain DECIDE variables."""
+        """IN domain constraints on DECIDE variables are not yet supported."""
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT x IN (1,2,x)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"cannot contain DECIDE")
+            """, match=r"IN domain constraints on DECIDE variables are not yet supported")
 
     def test_sum_rhs_non_scalar(self, packdb_cli):
         """SUM comparison RHS must be a scalar."""
