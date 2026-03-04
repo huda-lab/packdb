@@ -511,3 +511,62 @@ def test_when_not_equal(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.when_constraint
+@pytest.mark.cons_multi
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_when_constraint_ordering_invariance(packdb_cli):
+    """WHEN must apply only to its constraint regardless of AND ordering.
+
+    Regression test: the grammar has a shift/reduce ambiguity where
+    "A AND B WHEN C" can parse as "(A AND B) WHEN C" instead of
+    "A AND (B WHEN C)". The normalization layer must fix this so
+    constraint ordering doesn't change semantics.
+    """
+    # Order 1: unconditional BEFORE WHEN
+    sql_before = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
+               l_returnflag, x
+        FROM lineitem
+        WHERE l_orderkey < 100
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <= 20
+            AND SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    # Order 2: unconditional AFTER WHEN
+    sql_after = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
+               l_returnflag, x
+        FROM lineitem
+        WHERE l_orderkey < 100
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+            AND SUM(x) <= 20
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    result_before, cols_before = packdb_cli.execute(sql_before)
+    result_after, cols_after = packdb_cli.execute(sql_after)
+
+    assert cols_before == cols_after, "Column names should match"
+    assert len(result_before) == len(result_after), "Row counts should match"
+
+    # Sort by non-decision columns for deterministic comparison
+    key_indices = [i for i, c in enumerate(cols_before) if c != "x"]
+    sort_key = lambda row: tuple(row[i] for i in key_indices)
+
+    sorted_before = sorted(result_before, key=sort_key)
+    sorted_after = sorted(result_after, key=sort_key)
+
+    for rb, ra in zip(sorted_before, sorted_after):
+        for i in range(len(rb)):
+            try:
+                assert abs(float(rb[i]) - float(ra[i])) < 1e-6, (
+                    f"Ordering changed results: before={rb} vs after={ra}"
+                )
+            except (ValueError, TypeError):
+                assert rb[i] == ra[i], (
+                    f"Ordering changed results: before={rb} vs after={ra}"
+                )

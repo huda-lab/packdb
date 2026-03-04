@@ -200,6 +200,28 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
 
+    # --- COUNT error cases ---
+
+    @pytest.mark.count_rewrite
+    def test_count_integer_rejected(self, packdb_cli):
+        """COUNT(x) where x IS INTEGER should be rejected."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x
+                SUCH THAT COUNT(x) >= 5
+                MAXIMIZE SUM(x * l_quantity) LIMIT 1
+            """, match=r"COUNT.*requires a BOOLEAN")
+
+    @pytest.mark.count_rewrite
+    def test_count_real_rejected(self, packdb_cli):
+        """COUNT(x) where x IS REAL should be rejected."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT COUNT(x) >= 5
+                MAXIMIZE SUM(x * l_quantity) LIMIT 1
+            """, match=r"COUNT.*requires a BOOLEAN")
+
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, packdb_cli):
         """WHEN compound condition must not hide a DECIDE variable."""

@@ -60,7 +60,7 @@ make decide-test
 ./test/decide/run_tests.sh -m when_objective         # WHEN on objectives
 ./test/decide/run_tests.sh -m when_perrow            # WHEN on per-row bounds
 ./test/decide/run_tests.sh -m when_compound          # compound WHEN (AND/OR)
-./test/decide/run_tests.sh -m per_clause             # PER keyword (xfail)
+./test/decide/run_tests.sh -m per_clause             # PER keyword
 ./test/decide/run_tests.sh -m sql_joins              # JOIN tests
 ./test/decide/run_tests.sh -m large_scale            # performance / scaling
 
@@ -139,11 +139,11 @@ make decide-test
 | `error_binder` | `test_error_binder.py` | 21 | passing |
 | `error_infeasible` | `test_error_infeasible.py` | 4 | passing |
 
-### Not Yet Implemented
+### PER Keyword
 
 | Marker | File | Tests | Status |
 |--------|------|-------|--------|
-| `per_clause` | `test_per_clause.py` | 3 | xfail (PER keyword) |
+| `per_clause` | `test_per_clause.py` | 3 | passing |
 
 ### Scale & Performance
 

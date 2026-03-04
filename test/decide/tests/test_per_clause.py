@@ -1,4 +1,4 @@
-"""Tests for the PER keyword (not yet implemented).
+"""Tests for the PER keyword.
 
 PER partitions constraints by group:
     SUM(x) <= 5 PER s_nationkey
@@ -9,7 +9,6 @@ import pytest
 
 
 @pytest.mark.per_clause
-@pytest.mark.xfail(reason="PER keyword not yet implemented", strict=True)
 def test_per_basic(packdb_cli):
     """PER keyword should partition constraints by group."""
     packdb_cli.execute("""
@@ -21,7 +20,6 @@ def test_per_basic(packdb_cli):
 
 
 @pytest.mark.per_clause
-@pytest.mark.xfail(reason="PER keyword not yet implemented", strict=True)
 def test_per_with_integer_variable(packdb_cli):
     """PER with integer variables and a weighted constraint."""
     packdb_cli.execute("""
@@ -35,7 +33,6 @@ def test_per_with_integer_variable(packdb_cli):
 
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
-@pytest.mark.xfail(reason="PER keyword not yet implemented", strict=True)
 def test_per_combined_with_when(packdb_cli):
     """PER and WHEN used together — group-level constraint with row filter."""
     packdb_cli.execute("""

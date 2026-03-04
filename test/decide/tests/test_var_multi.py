@@ -1,8 +1,7 @@
 """Tests for multiple decision variables (DECIDE x, y, ...).
 
 Multiple DECIDE variables allow modeling richer problems where rows have
-more than one decision per tuple.  The binder accepts this syntax;
-whether the solver fully handles it is unverified.
+more than one decision per tuple.
 """
 
 import pytest
@@ -13,10 +12,6 @@ import pytest
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-@pytest.mark.xfail(
-    reason="Multiple DECIDE variables may not be fully supported",
-    strict=False,
-)
 def test_two_variables_separate_constraints(packdb_cli):
     """DECIDE x IS BOOLEAN, y IS INTEGER with independent constraints."""
     result, _ = packdb_cli.execute("""
@@ -35,10 +30,6 @@ def test_two_variables_separate_constraints(packdb_cli):
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-@pytest.mark.xfail(
-    reason="Multiple DECIDE variables may not be fully supported",
-    strict=False,
-)
 def test_two_boolean_variables(packdb_cli):
     """Two boolean variables with a cross-constraint."""
     result, _ = packdb_cli.execute("""
