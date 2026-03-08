@@ -36,6 +36,11 @@ PackDB supports **uncorrelated scalar subqueries** in the bounds of constraints.
 - Example: `SUM(x) <= (SELECT COUNT(*) FROM Drivers)`
 - **Mechanism**: These subqueries are executed immediately during the Binding phase. The result is replaced by a constant value in the bound, ensuring the Solver receives a static problem definition.
 
+### 3.3 Operator Restrictions
+
+- **IN operator**: The binder explicitly rejects `IN` on decision variables with a clear error message. This is because `x IN (1, 2, 3)` is a disjunctive constraint that cannot be expressed as a single linear constraint.
+- **Standard comparisons** (`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`): Supported on both per-row and aggregate constraints.
+
 ## 4. Type Inference & Syntactic Sugar
 
 Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x IS BOOLEAN`). The binder translates these into the appropriate internal representation and adds implicit constraints.
@@ -45,8 +50,9 @@ Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x I
 | `DECIDE x IS INTEGER` | `x` (Type: Integer)     | `x >= 0`              |
 | `DECIDE x IS BOOLEAN` | `x` (Type: Integer)     | `x >= 0` AND `x <= 1` |
 | `DECIDE x`            | `x` (Type: Integer)     | `x >= 0` (default)    |
+| `DECIDE x IS REAL`    | `x` (Type: Double)      | `x >= 0`              |
 
-Note: DuckDB's internal `LogicalType::INTEGER` is used for all decision variables. `IS BOOLEAN` is strictly a domain constraint, not a storage type.
+Note: DuckDB's internal `LogicalType::INTEGER` is used for INTEGER and BOOLEAN decision variables. `IS BOOLEAN` is strictly a domain constraint, not a storage type. `IS REAL` variables use `LogicalType::DOUBLE` internally and generate continuous (non-integer) solver variables.
 
 ## 5. `WHEN` Condition Validation
 
@@ -68,3 +74,46 @@ The `DecideObjectiveBinder` handles WHEN on the objective (`MAXIMIZE SUM(...) WH
 3. **Objective binding**: The objective (child[0]) is bound through normal objective binding (SUM validation, linearity check).
 4. **Condition binding**: The condition (child[1]) is bound via `ExpressionBinder` using the `binding_when_condition` flag bypass.
 5. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG`, identical in structure to the constraint WHEN output.
+
+### 5.3 PER Constraint Validation
+
+- PER expressions must reference a table column (not a decision variable, not a constant).
+- PER is only valid on aggregate constraints (constraints using SUM/COUNT/AVG).
+- The PER column creates one constraint per distinct value of that column.
+- Combined WHEN+PER: WHEN filters rows first, then PER groups the remaining rows.
+
+## 6. Rewrite Passes (Proto-Optimizer)
+
+These algebraic rewrites live in `bind_select_node.cpp` and are applied during binding. They are **optimizer candidates** — algebraic rewrites that logically belong in a dedicated optimizer pass but currently live in the binder for simplicity.
+
+### 6.1 COUNT → SUM Rewrite
+
+- **BOOLEAN variables**: `COUNT(x)` is directly rewritten to `SUM(x)` since a BOOLEAN var is 0 or 1, so counting non-zero = summing.
+- **INTEGER variables**: Creates an indicator variable `__count_ind_VAR__` (BOOLEAN), rewrites `COUNT(x)` → `SUM(indicator)`. At execution time, Big-M linking constraints are generated: `x <= M * indicator` and `x >= indicator` (ensuring indicator=1 iff x>0).
+- **REAL variables**: Not yet supported; throws an explicit error.
+- **Code**: `RewriteCountToSum()` in `bind_select_node.cpp` (lines ~413-466)
+
+### 6.2 AVG → SUM Rewrite
+
+- `AVG(expr)` is rewritten to `SUM(expr)` with a special tag (`AVG_REWRITE_TAG` alias).
+- At execution time, the model builder detects this tag and scales the RHS by the number of rows in each group, effectively converting `AVG(expr) <= K` into `SUM(expr) <= K * N`.
+- **Code**: `RewriteAvgToSum()` in `bind_select_node.cpp` (lines ~490-505)
+
+### 6.3 ABS Linearization
+
+- `ABS(expr)` where `expr` contains decision variables is linearized using a standard LP technique:
+  - Creates an auxiliary REAL variable `__abs_aux_N__`
+  - Generates two linearization constraints: `aux >= expr` and `aux >= -expr`
+  - Replaces `ABS(expr)` with `aux` in the original expression
+- This works because minimizing `aux` subject to `aux >= expr` and `aux >= -expr` forces `aux = |expr|`.
+- **Code**: `RewriteAbsInExpression()` / `RewriteAbsLinearization()` in `bind_select_node.cpp` (lines ~510-591)
+
+> **Note**: All three rewrites are tagged as **optimizer candidates** — they perform algebraic transformations, not semantic validation, and should eventually migrate to a `LogicalDecideOptimizer` pass.
+
+## 7. Auxiliary Variable Management
+
+When rewrite passes create auxiliary variables (COUNT indicators, ABS auxiliary vars), they are tracked on the `BoundSelectNode` and carried forward to `LogicalDecide` / `PhysicalDecide`:
+
+- **`num_auxiliary_vars`**: Count of auxiliary variables appended after user-declared variables.
+- **`count_indicator_links`**: Vector of `(indicator_var_index, original_var_index)` pairs used at execution time to generate Big-M linking constraints.
+- **Hiding from SELECT ***: Auxiliary variables are pruned from the bind context (lines ~748-758 of `bind_select_node.cpp`) so they don't appear in query results. They exist only in the solver's variable space.

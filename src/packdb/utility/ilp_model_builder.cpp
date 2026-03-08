@@ -133,6 +133,9 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                 }
 
                 double rhs = eval_const.rhs_values[0];
+                if (eval_const.was_avg_rewrite) {
+                    rhs *= static_cast<double>(num_rows);
+                }
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
                 model.constraints.push_back(std::move(constr));
 
@@ -167,6 +170,9 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                     }
 
                     double rhs = eval_const.rhs_values[0];
+                    if (eval_const.was_avg_rewrite) {
+                        rhs *= static_cast<double>(group_rows[g].size());
+                    }
                     ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
                     model.constraints.push_back(std::move(constr));
                 }

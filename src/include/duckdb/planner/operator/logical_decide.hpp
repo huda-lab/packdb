@@ -42,6 +42,9 @@ public:
     // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
 
+    // Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
+    vector<pair<idx_t, idx_t>> count_indicator_links;
+
 public:
     // --- Implement virtual functions ---
 

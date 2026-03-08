@@ -13,6 +13,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         op.decide_index, std::move(op.decide_variables),
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
     decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
+    decide_op->count_indicator_links = std::move(op.count_indicator_links);
     return std::move(decide_op);
 }
 

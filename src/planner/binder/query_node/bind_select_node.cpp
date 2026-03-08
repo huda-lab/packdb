@@ -408,11 +408,14 @@ void Binder::BindWhereStarExpression(unique_ptr<ParsedExpression> &expr) {
 	}
 }
 
-// Rewrite COUNT(x) → SUM(x) for BOOLEAN decision variables (pre-normalization).
-// COUNT over a BOOLEAN var is semantically "how many rows have x=1", which equals SUM(x).
+// Rewrite COUNT(x) → SUM(x) for BOOLEAN decision variables (pre-normalization),
+// or COUNT(x) → SUM(indicator) for INTEGER decision variables using Big-M indicators.
 static void RewriteCountToSum(unique_ptr<ParsedExpression> &expr,
-                               const case_insensitive_map_t<idx_t> &variables,
-                               const vector<bool> &is_boolean_var) {
+                               case_insensitive_map_t<idx_t> &variables,
+                               vector<bool> &is_boolean_var,
+                               vector<string> &var_names,
+                               vector<LogicalType> &var_types,
+                               case_insensitive_map_t<idx_t> &count_indicator_map) {
 	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr->Cast<FunctionExpression>();
 		if (StringUtil::CIEquals(func.function_name, "count") && func.children.size() == 1) {
@@ -421,20 +424,44 @@ static void RewriteCountToSum(unique_ptr<ParsedExpression> &expr,
 				auto &colref = child.Cast<ColumnRefExpression>();
 				auto it = variables.find(colref.GetColumnName());
 				if (it != variables.end()) {
-					if (!is_boolean_var[it->second]) {
+					if (is_boolean_var[it->second]) {
+						// BOOLEAN: COUNT(x) = SUM(x) directly
+						func.function_name = "sum";
+						return;
+					}
+					if (var_types[it->second] == LogicalType::DOUBLE) {
 						throw BinderException(*expr,
-						    "COUNT(%s) requires a BOOLEAN decision variable. "
-						    "For INTEGER/REAL variables, COUNT is not yet supported.",
+						    "COUNT(%s) requires a BOOLEAN or INTEGER decision variable. "
+						    "For REAL variables, COUNT is not yet supported.",
 						    colref.GetColumnName());
 					}
+					// INTEGER: introduce indicator variable and rewrite COUNT(x) → SUM(indicator)
+					string var_name = colref.GetColumnName();
+					auto ind_it = count_indicator_map.find(var_name);
+					string indicator_name;
+					if (ind_it != count_indicator_map.end()) {
+						// Reuse existing indicator for same variable
+						indicator_name = var_names[ind_it->second];
+					} else {
+						// Create new indicator variable
+						indicator_name = "__count_ind_" + var_name + "__";
+						idx_t indicator_idx = var_names.size();
+						var_names.push_back(indicator_name);
+						var_types.push_back(LogicalType::INTEGER);
+						is_boolean_var.push_back(true);
+						variables.emplace(indicator_name, indicator_idx);
+						count_indicator_map.emplace(var_name, indicator_idx);
+					}
+					// Rewrite: COUNT(x) → SUM(__count_ind_x__)
 					func.function_name = "sum";
+					func.children[0] = make_uniq<ColumnRefExpression>(indicator_name);
 					return;
 				}
 			}
 		}
 	}
 	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-		RewriteCountToSum(child, variables, is_boolean_var);
+		RewriteCountToSum(child, variables, is_boolean_var, var_names, var_types, count_indicator_map);
 	});
 }
 
@@ -637,16 +664,39 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         }
 
 
-        // Rewrite COUNT(var) -> SUM(var) for BOOLEAN decision variables
+        // Capture user var count BEFORE any rewrites that add auxiliary variables
+        idx_t num_user_vars = var_names.size();
+
+        // Rewrite COUNT(var) -> SUM(var) for BOOLEAN decision variables,
+        // or COUNT(var) -> SUM(indicator) for INTEGER variables (adds indicator vars)
+        case_insensitive_map_t<idx_t> count_indicator_map;
         if (statement.decide_constraints) {
-            RewriteCountToSum(statement.decide_constraints, decide_variable_names, is_boolean_var);
+            RewriteCountToSum(statement.decide_constraints, decide_variable_names,
+                              is_boolean_var, var_names, var_types, count_indicator_map);
         }
         if (statement.decide_objective) {
-            RewriteCountToSum(statement.decide_objective, decide_variable_names, is_boolean_var);
+            RewriteCountToSum(statement.decide_objective, decide_variable_names,
+                              is_boolean_var, var_names, var_types, count_indicator_map);
+        }
+
+        // Generate implicit bounds (0 <= z <= 1) for newly created indicator variables
+        for (auto &entry : count_indicator_map) {
+            idx_t ind_idx = entry.second;
+            auto z_ref = make_uniq<ColumnRefExpression>(var_names[ind_idx]);
+            auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
+            auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
+            auto lower = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, z_ref->Copy(), std::move(zero));
+            auto upper = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(z_ref), std::move(one));
+            auto bounds = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower), std::move(upper));
+            if (statement.decide_constraints) {
+                statement.decide_constraints = make_uniq<ConjunctionExpression>(
+                    ExpressionType::CONJUNCTION_AND, std::move(bounds), std::move(statement.decide_constraints));
+            } else {
+                statement.decide_constraints = std::move(bounds);
+            }
         }
 
         // Rewrite ABS(expr) → auxiliary variable + linearization constraints
-        idx_t num_user_vars = var_names.size();
         RewriteAbsLinearization(statement.decide_constraints, statement.decide_objective,
                                 decide_variable_names, var_names, var_types, is_boolean_var);
         idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
@@ -687,6 +737,13 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             result->decide_variables.push_back(std::move(bound_col_ref));
         }
         result->num_auxiliary_vars = num_auxiliary_vars;
+
+        // Build count_indicator_links from the map
+        for (auto &entry : count_indicator_map) {
+            idx_t indicator_idx = entry.second;
+            idx_t original_idx = decide_variable_names[entry.first];
+            result->count_indicator_links.emplace_back(indicator_idx, original_idx);
+        }
 
         // Hide auxiliary vars from SELECT * by truncating the bind context binding.
         // The decide_variables vector still has ALL vars (user + aux) for the execution layer,

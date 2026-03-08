@@ -17,7 +17,7 @@ The objective expression must be a single aggregate expression using `SUM()`.
 
 ## Requirements
 
-1. Must use `SUM()` — other aggregates are not supported over decision variables (see [sql_functions/todo.md](../sql_functions/todo.md) for planned support).
+1. Must use `SUM()` — COUNT is also supported (see [sql_functions/done.md](../sql_functions/done.md)); other aggregates like AVG/MIN/MAX are not yet supported (see [sql_functions/todo.md](../sql_functions/todo.md) for planned support).
 2. Must be **linear** in the decision variables.
 3. Must involve at least one decision variable.
 

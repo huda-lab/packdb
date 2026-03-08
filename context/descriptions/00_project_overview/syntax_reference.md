@@ -51,9 +51,9 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 
 ## 5. Aggregations
 
-- Only `SUM()` is supported over decision variables.
-- `COUNT(x)` is supported for **BOOLEAN variables only** (automatically rewritten to `SUM(x)`).
-- `AVG(x)` is **Not Supported** (Non-linear ratio).
+- `SUM()` is the primary aggregate over decision variables.
+- `COUNT(x)` is supported for **BOOLEAN and INTEGER variables**. BOOLEAN is rewritten to `SUM(x)`; INTEGER uses a Big-M indicator variable rewrite.
+- `AVG(expr)` is supported. Rewritten to `SUM(expr)` with RHS scaled by row count N at execution time. For objectives, `AVG` and `SUM` share the same argmax/argmin. For constraints, `AVG(expr) op K` becomes `SUM(expr) op K*N` where N is the row count (adjusted for WHEN/PER context).
 
 ## 6. Conditional Expressions — `WHEN`
 

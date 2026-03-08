@@ -22,6 +22,68 @@
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
+// Expression Transform Helpers
+//===--------------------------------------------------------------------===//
+// These static functions replace BoundColumnRefExpression nodes with
+// BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
+// evaluate expressions against data chunks (which use positional indices).
+
+//! Transform a coefficient/value expression for ExpressionExecutor.
+//! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_AGGREGATE (count_star→constant),
+//! BOUND_COMPARISON, BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
+static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context,
+                                                         idx_t num_rows = 0) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		vector<unique_ptr<Expression>> new_children;
+		for (auto &child : func.children) {
+			new_children.push_back(TransformToChunkExpression(*child, context, num_rows));
+		}
+		unique_ptr<FunctionData> new_bind_info;
+		if (func.bind_info) {
+			new_bind_info = func.bind_info->Copy();
+		}
+		return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function,
+		                                                           std::move(new_children), std::move(new_bind_info));
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		auto transformed_child = TransformToChunkExpression(*cast.child, context, num_rows);
+		return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		auto &agg = expr.Cast<BoundAggregateExpression>();
+		if (agg.function.name == "count_star") {
+			return make_uniq_base<Expression, BoundConstantExpression>(Value::BIGINT(num_rows));
+		}
+		throw InternalException("Unsupported aggregate '%s' in constraint RHS. "
+		                        "Only count_star() is supported.", agg.function.name);
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		auto &comp = expr.Cast<BoundComparisonExpression>();
+		auto left = TransformToChunkExpression(*comp.left, context, num_rows);
+		auto right = TransformToChunkExpression(*comp.right, context, num_rows);
+		return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
+		for (auto &child : conj.children) {
+			result->children.push_back(TransformToChunkExpression(*child, context, num_rows));
+		}
+		return std::move(result);
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+		auto &op_expr = expr.Cast<BoundOperatorExpression>();
+		auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
+		for (auto &child : op_expr.children) {
+			result->children.push_back(TransformToChunkExpression(*child, context, num_rows));
+		}
+		return std::move(result);
+	} else {
+		return expr.Copy();
+	}
+}
+
+//===--------------------------------------------------------------------===//
 // Expression Analysis Helper Functions
 //===--------------------------------------------------------------------===//
 
@@ -318,10 +380,11 @@ public:
                 }
 
                 if (lhs->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-                    // SUM(...) constraint
+                    // SUM(...) or AVG(...) constraint — both are treated as aggregate constraints
                     auto &agg = lhs->Cast<BoundAggregateExpression>();
                     op.ExtractLinearTerms(*agg.children[0], constraint->lhs_terms);
                     constraint->lhs_is_aggregate = true;
+                    constraint->was_avg_rewrite = StringUtil::CIEquals(agg.function.name, "avg");
                 } else {
                     // Per-row constraint (e.g., x <= 5, or multi-variable: d >= x - c)
                     constraint->lhs_is_aggregate = false;
@@ -538,14 +601,6 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
-    auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
-    ExpressionExecutor coef_executor (context.client);
-    ExpressionExecutor rhs_executor (context.client);
-    // for (const auto& con : gstate.cons) {
-    //     coef_executor.AddExpression(con->coef);
-    //     rhs_executor.AddExpression(con->rhs);
-    // }
-    // coef_executor.AddExpression(gstate.obj->coef);
     lstate.data.Append(lstate.append_state, chunk);
     return SinkResultType::NEED_MORE_INPUT;
 }
@@ -594,6 +649,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         eval_const.comparison_type = constraint->comparison_type;
         // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
+        eval_const.was_avg_rewrite = constraint->was_avg_rewrite;
 
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
@@ -615,54 +671,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
                 auto &term = constraint->lhs_terms[term_idx];
 
-                // Transform BoundColumnRefExpression to BoundReferenceExpression
-                // The coefficient expressions contain BoundColumnRefExpression which reference
-                // columns by table binding, but ExpressionExecutor expects BoundReferenceExpression
-                // which reference columns by index in the chunk.
-                //
-                // The child operator's output is stored in gstate.data. We need to map
-                // BoundColumnRefExpression (binding.table_index, binding.column_index) to
-                // the corresponding index in gstate.data.
-                //
-                // Build a mapping: for each column in gstate.data, find its binding
-                // Actually, gstate.data.Types() gives us the types, and the columns are in the
-                // order they were appended. We stored the child operator's output directly.
-                //
-                // SIMPLE SOLUTION: The child operator's columns are indexed 0, 1, 2, ...
-                // When we stored them in gstate.data, they kept the same order.
-                // BoundColumnRefExpression has binding.column_index which should map directly.
-
-                // Transform the coefficient expression to replace BoundColumnRefExpression with BoundReferenceExpression
-                std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
-                TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
-                    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                        auto &colref = expr.Cast<BoundColumnRefExpression>();
-                        // Map to chunk column index - assume column_index maps directly
-                        return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
-                    } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                        auto &func = expr.Cast<BoundFunctionExpression>();
-                        vector<unique_ptr<Expression>> new_children;
-                        for (auto &child : func.children) {
-                            new_children.push_back(TransformExpression(*child));
-                        }
-                        // Copy bind_info if it exists
-                        unique_ptr<FunctionData> new_bind_info;
-                        if (func.bind_info) {
-                            new_bind_info = func.bind_info->Copy();
-                        }
-                        return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
-                    } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                        auto &cast = expr.Cast<BoundCastExpression>();
-                        // Transform the child and wrap in a new cast
-                        auto transformed_child = TransformExpression(*cast.child);
-                        return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-                    } else {
-                        // Constants and other expressions: just copy
-                        return expr.Copy();
-                    }
-                };
-
-                auto transformed_coef = TransformExpression(*term.coefficient);
+                auto transformed_coef = TransformToChunkExpression(*term.coefficient, context);
 
                 // Create executor and evaluate this term
                 ExpressionExecutor term_executor(context);
@@ -728,42 +737,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // RHS is a complex expression. It might be row-varying (e.g., column ref) or scalar (aggregate).
             // We evaluate it against the data chunks.
             
-            // Transform expression to use BoundReferenceExpression (same as LHS)
-            std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
-            TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
-                if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    auto &colref = expr.Cast<BoundColumnRefExpression>();
-                    return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
-                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                    auto &func = expr.Cast<BoundFunctionExpression>();
-                    vector<unique_ptr<Expression>> new_children;
-                    for (auto &child : func.children) {
-                        new_children.push_back(TransformExpression(*child));
-                    }
-                    unique_ptr<FunctionData> new_bind_info;
-                    if (func.bind_info) {
-                        new_bind_info = func.bind_info->Copy();
-                    }
-                    return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
-                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    auto &cast = expr.Cast<BoundCastExpression>();
-                    auto transformed_child = TransformExpression(*cast.child);
-                    return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-                } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-                    // Handle count_star() aggregate - replace with num_rows constant
-                    auto &agg = expr.Cast<BoundAggregateExpression>();
-                    if (agg.function.name == "count_star") {
-                        return make_uniq_base<Expression, BoundConstantExpression>(Value::BIGINT(num_rows));
-                    }
-                    // Other aggregates are not supported in RHS
-                    throw InternalException("Unsupported aggregate '%s' in constraint RHS. "
-                                          "Only count_star() is supported.", agg.function.name);
-                } else {
-                    return expr.Copy();
-                }
-            };
-
-            auto transformed_rhs = TransformExpression(*constraint->rhs_expr);
+            auto transformed_rhs = TransformToChunkExpression(*constraint->rhs_expr, context, num_rows);
 
             // Prepare executor
             ExpressionExecutor rhs_executor(context);
@@ -823,56 +797,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool has_per = (constraint->per_column != nullptr);
 
         if (has_when || has_per) {
-            // We need a TransformExpr lambda to convert BoundColumnRef → BoundReference
-            // for evaluation against data chunks
-            std::function<unique_ptr<Expression>(const Expression&)> TransformCondExpr;
-            TransformCondExpr = [&](const Expression &cond_expr) -> unique_ptr<Expression> {
-                if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    auto &colref = cond_expr.Cast<BoundColumnRefExpression>();
-                    return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                    auto &func = cond_expr.Cast<BoundFunctionExpression>();
-                    vector<unique_ptr<Expression>> new_children;
-                    for (auto &child : func.children) {
-                        new_children.push_back(TransformCondExpr(*child));
-                    }
-                    unique_ptr<FunctionData> new_bind_info;
-                    if (func.bind_info) {
-                        new_bind_info = func.bind_info->Copy();
-                    }
-                    return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    auto &cast = cond_expr.Cast<BoundCastExpression>();
-                    auto transformed_child = TransformCondExpr(*cast.child);
-                    return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-                    auto &comp = cond_expr.Cast<BoundComparisonExpression>();
-                    auto left = TransformCondExpr(*comp.left);
-                    auto right = TransformCondExpr(*comp.right);
-                    return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-                    auto &conj = cond_expr.Cast<BoundConjunctionExpression>();
-                    auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
-                    for (auto &child : conj.children) {
-                        result->children.push_back(TransformCondExpr(*child));
-                    }
-                    return std::move(result);
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-                    auto &op_expr = cond_expr.Cast<BoundOperatorExpression>();
-                    auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
-                    for (auto &child : op_expr.children) {
-                        result->children.push_back(TransformCondExpr(*child));
-                    }
-                    return std::move(result);
-                } else {
-                    return cond_expr.Copy();
-                }
-            };
-
             // Step 1: Evaluate WHEN condition (if present) to get per-row booleans
             vector<bool> when_mask;
             if (has_when) {
-                auto transformed_condition = TransformCondExpr(*constraint->when_condition);
+                auto transformed_condition = TransformToChunkExpression(*constraint->when_condition, context);
                 ExpressionExecutor cond_executor(context);
                 cond_executor.AddExpression(*transformed_condition);
 
@@ -902,7 +830,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // Step 2: Evaluate PER column (if present) to get per-row values
             vector<Value> per_values;
             if (has_per) {
-                auto transformed_col = TransformCondExpr(*constraint->per_column);
+                auto transformed_col = TransformToChunkExpression(*constraint->per_column, context);
                 ExpressionExecutor per_executor(context);
                 per_executor.AddExpression(*transformed_col);
 
@@ -971,37 +899,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 2. Evaluate objective
     if (gstate.objective) {
-        // Transform expressions (same as for constraints)
-        std::function<unique_ptr<Expression>(const Expression&)> TransformExpression;
-        TransformExpression = [&](const Expression &expr) -> unique_ptr<Expression> {
-            if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                auto &colref = expr.Cast<BoundColumnRefExpression>();
-                return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
-            } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                auto &func = expr.Cast<BoundFunctionExpression>();
-                vector<unique_ptr<Expression>> new_children;
-                for (auto &child : func.children) {
-                    new_children.push_back(TransformExpression(*child));
-                }
-                unique_ptr<FunctionData> new_bind_info;
-                if (func.bind_info) {
-                    new_bind_info = func.bind_info->Copy();
-                }
-                return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
-            } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                auto &cast = expr.Cast<BoundCastExpression>();
-                auto transformed_child = TransformExpression(*cast.child);
-                return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-            } else {
-                return expr.Copy();
-            }
-        };
-
         // Build transformed expressions
         vector<unique_ptr<Expression>> transformed_coefficients;
         for (auto &term : gstate.objective->terms) {
             gstate.objective_variable_indices.push_back(term.variable_index);
-            transformed_coefficients.push_back(TransformExpression(*term.coefficient));
+            transformed_coefficients.push_back(TransformToChunkExpression(*term.coefficient, context));
         }
 
         gstate.evaluated_objective_coefficients.resize(gstate.objective->terms.size());
@@ -1061,51 +963,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         // PackDB: Apply WHEN mask to objective coefficients
         if (gstate.objective->when_condition) {
-            std::function<unique_ptr<Expression>(const Expression&)> TransformCondExpr;
-            TransformCondExpr = [&](const Expression &cond_expr) -> unique_ptr<Expression> {
-                if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    auto &colref = cond_expr.Cast<BoundColumnRefExpression>();
-                    return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                    auto &func = cond_expr.Cast<BoundFunctionExpression>();
-                    vector<unique_ptr<Expression>> new_children;
-                    for (auto &child : func.children) {
-                        new_children.push_back(TransformCondExpr(*child));
-                    }
-                    unique_ptr<FunctionData> new_bind_info;
-                    if (func.bind_info) {
-                        new_bind_info = func.bind_info->Copy();
-                    }
-                    return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    auto &cast = cond_expr.Cast<BoundCastExpression>();
-                    auto transformed_child = TransformCondExpr(*cast.child);
-                    return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-                    auto &comp = cond_expr.Cast<BoundComparisonExpression>();
-                    auto left = TransformCondExpr(*comp.left);
-                    auto right = TransformCondExpr(*comp.right);
-                    return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-                    auto &conj = cond_expr.Cast<BoundConjunctionExpression>();
-                    auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
-                    for (auto &child : conj.children) {
-                        result->children.push_back(TransformCondExpr(*child));
-                    }
-                    return std::move(result);
-                } else if (cond_expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-                    auto &op_expr = cond_expr.Cast<BoundOperatorExpression>();
-                    auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
-                    for (auto &child : op_expr.children) {
-                        result->children.push_back(TransformCondExpr(*child));
-                    }
-                    return std::move(result);
-                } else {
-                    return cond_expr.Copy();
-                }
-            };
-
-            auto transformed_condition = TransformCondExpr(*gstate.objective->when_condition);
+            auto transformed_condition = TransformToChunkExpression(*gstate.objective->when_condition, context);
 
             ExpressionExecutor cond_executor(context);
             cond_executor.AddExpression(*transformed_condition);
@@ -1141,10 +999,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
 
     //===--------------------------------------------------------------------===//
-    // PHASE 3: Build and Solve ILP with HiGHS
-    //===--------------------------------------------------------------------===//
-
-    //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
     //===--------------------------------------------------------------------===//
 
@@ -1170,7 +1024,39 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     
     // Extract bounds from constraints
     gstate.ExtractVariableBounds(solver_input.lower_bounds, solver_input.upper_bounds);
-    
+
+    // Generate Big-M linking constraints for COUNT indicator variables
+    for (auto &link : count_indicator_links) {
+        idx_t indicator_idx = link.first;
+        idx_t original_idx = link.second;
+
+        double M = solver_input.upper_bounds[original_idx];
+        if (M >= 1e20) {
+            // No explicit upper bound found; use a large default
+            M = 1e6;
+        }
+
+        // Constraint 1: z <= x  (i.e., z - x <= 0)
+        // Forces z=0 when x=0
+        EvaluatedConstraint ec1;
+        ec1.variable_indices = {indicator_idx, original_idx};
+        ec1.row_coefficients = {vector<double>(num_rows, 1.0), vector<double>(num_rows, -1.0)};
+        ec1.rhs_values.assign(num_rows, 0.0);
+        ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec1.lhs_is_aggregate = false;
+        gstate.evaluated_constraints.push_back(std::move(ec1));
+
+        // Constraint 2: x <= M*z  (i.e., x - M*z <= 0)
+        // Forces z=1 when x>0
+        EvaluatedConstraint ec2;
+        ec2.variable_indices = {original_idx, indicator_idx};
+        ec2.row_coefficients = {vector<double>(num_rows, 1.0), vector<double>(num_rows, -M)};
+        ec2.rhs_values.assign(num_rows, 0.0);
+        ec2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec2.lhs_is_aggregate = false;
+        gstate.evaluated_constraints.push_back(std::move(ec2));
+    }
+
     // Constraints
     solver_input.constraints = std::move(gstate.evaluated_constraints);
     

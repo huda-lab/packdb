@@ -24,6 +24,7 @@ struct EvaluatedConstraint {
     vector<double> rhs_values;                // [row_idx] = RHS value
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
+    bool was_avg_rewrite = false;              // True if originally AVG (RHS scaled by row count)
 
     //! Unified WHEN+PER row→group mapping
     //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)

@@ -23,14 +23,3 @@ Implement a binder rule to **unnest** correlated subqueries into joins before th
 1. Detect correlated subqueries during binding
 2. Rewrite them as left joins with the correlated table
 3. The join result provides per-row constants that can be used as coefficients
-
----
-
-## PER (Group-Scoped Constraints) — IMPLEMENTED
-
-PER is now implemented. See [per/done.md](../per/done.md) for full documentation.
-
-```sql
-SUCH THAT
-    SUM(new_hours) <= 40 PER empID
-```

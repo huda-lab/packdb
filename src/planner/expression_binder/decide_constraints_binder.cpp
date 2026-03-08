@@ -50,7 +50,8 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                 }
                 return true;
             }
-            if (StringUtil::Lower(func.function_name) == "sum") {
+            auto fn = StringUtil::Lower(func.function_name);
+            if (fn == "sum" || fn == "avg") {
                 if (func.children.empty()) {
                     return false;
                 }
@@ -165,11 +166,12 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
             }
             case DecideExpression::SUM: {
                 if (comp.left->GetExpressionClass() != ExpressionClass::FUNCTION) {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...)"));
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...) or AVG(...)"));
                 }
                 auto &lhs_func = comp.left->Cast<FunctionExpression>();
-                if (!lhs_func.is_operator && StringUtil::Lower(lhs_func.function_name) != "sum") {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...)"));
+                auto lhs_fname = StringUtil::Lower(lhs_func.function_name);
+                if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg") {
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...) or AVG(...)"));
                 }
                 if (!IsAllowedConstraintRHS(right, variables) || HasVariableExpression(right, variables)) {
                     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
@@ -316,7 +318,8 @@ static bool IsAggregateConstraint(const ParsedExpression &expr) {
         auto &comp = inner->Cast<ComparisonExpression>();
         if (comp.left->GetExpressionClass() == ExpressionClass::FUNCTION) {
             auto &lhs = comp.left->Cast<FunctionExpression>();
-            if (StringUtil::Lower(lhs.function_name) == "sum") {
+            auto lhs_fn = StringUtil::Lower(lhs.function_name);
+            if (lhs_fn == "sum" || lhs_fn == "avg") {
                 return true;
             }
         }
@@ -447,14 +450,15 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     }
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
-		if (StringUtil::Lower(func.function_name) == "sum") {
+		auto fname = StringUtil::Lower(func.function_name);
+		if (fname == "sum" || fname == "avg") {
             if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
             return DecideExpression::SUM;
 		} else {
-            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM is allowed.", func.function_name);
+            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM or AVG is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
     }

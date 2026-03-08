@@ -26,6 +26,7 @@ struct LinearConstraint {
     unique_ptr<Expression> rhs_expr;    // RHS expression (may contain aggregates)
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
+    bool was_avg_rewrite = false;        // True if this aggregate was originally AVG (RHS needs scaling)
     unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
     unique_ptr<Expression> per_column;     // PackDB: optional PER grouping column (nullptr = no grouping)
 
@@ -74,6 +75,9 @@ public:
 
     // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
+
+    // Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
+    vector<pair<idx_t, idx_t>> count_indicator_links;
 
 public:
     // Source interface

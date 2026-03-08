@@ -67,14 +67,14 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"must be one of the DECIDE variables")
 
-    def test_non_sum_function_in_constraint(self, packdb_cli):
-        """AVG(x) is not supported — only SUM is allowed."""
+    def test_non_sum_avg_function_in_constraint(self, packdb_cli):
+        """MAX(x) is not supported — only SUM or AVG is allowed."""
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
-                SUCH THAT AVG(x) <= 5
+                SUCH THAT MAX(x) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"only SUM is allowed")
+            """, match=r"only SUM or AVG is allowed")
 
     def test_no_decide_variable_in_sum(self, packdb_cli):
         """SUM over a regular column without DECIDE variable."""
@@ -211,14 +211,15 @@ class TestBinderErrors:
     # --- COUNT error cases ---
 
     @pytest.mark.count_rewrite
-    def test_count_integer_rejected(self, packdb_cli):
-        """COUNT(x) where x IS INTEGER should be rejected."""
-        packdb_cli.assert_error("""
+    def test_count_integer_succeeds(self, packdb_cli):
+        """COUNT(x) where x IS INTEGER should now succeed (indicator variable rewrite)."""
+        rows, cols = packdb_cli.execute("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT COUNT(x) >= 5
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"COUNT.*requires a BOOLEAN")
+            """)
+        assert len(rows) > 0
 
     @pytest.mark.count_rewrite
     def test_count_real_rejected(self, packdb_cli):
@@ -228,7 +229,7 @@ class TestBinderErrors:
                 DECIDE x IS REAL
                 SUCH THAT COUNT(x) >= 5
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"COUNT.*requires a BOOLEAN")
+            """, match=r"COUNT.*requires a BOOLEAN or INTEGER")
 
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, packdb_cli):

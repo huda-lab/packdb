@@ -125,3 +125,62 @@ This generates one matrix row per input row. But `x <= 1` is just an upper bound
 ### Implementation
 
 Add a pass that scans constraints before matrix construction, identifies bound-equivalent ones, removes them from the constraint list, and sets bounds directly on the solver variables.
+
+---
+
+## Migrate Binder Rewrite Passes to Optimizer
+
+**Priority: Medium** (cleanup / architecture improvement)
+
+Several algebraic rewrite passes currently live in `bind_select_node.cpp` as part of the binder. These are not semantic validation — they are algebraic transformations that should live in a dedicated optimizer layer.
+
+### Current Binder Rewrites (Proto-Optimizer)
+
+1. **COUNT → SUM** (`RewriteCountToSum`, lines ~413-466):
+   - BOOLEAN: `COUNT(x)` → `SUM(x)` (direct)
+   - INTEGER: Creates indicator variable + Big-M linking constraints
+   - This is an algebraic rewrite, not validation
+
+2. **AVG → SUM** (`RewriteAvgToSum`, lines ~490-505):
+   - Tags the rewrite so RHS is scaled by row count at execution time
+   - Pure algebraic transformation
+
+3. **ABS Linearization** (`RewriteAbsLinearization`, lines ~510-591):
+   - Creates auxiliary REAL variable + 2 linearization constraints
+   - Standard LP technique, not validation logic
+
+### Target Architecture
+
+These should become rules in a `LogicalDecideOptimizer` that runs after binding but before physical planning. DuckDB's optimizer framework uses rules registered in `src/optimizer/optimizer.cpp` — a `DecideOptimizer` would follow the same pattern:
+
+```
+Binder → LogicalDecide → DecideOptimizer (rewrite rules) → PhysicalDecide
+```
+
+### Benefits of Migration
+
+- **Reduced DuckDB core footprint**: `bind_select_node.cpp` is a core DuckDB file; moving rewrites to `src/packdb/` reduces merge conflicts on version upgrades.
+- **Composability**: New rewrites (MIN/MAX linearization, conditional constraints) can be added as independent rules.
+- **Testability**: Individual rewrite rules can be unit-tested in isolation.
+
+### Implementation Steps
+
+1. Create `src/packdb/optimizer/decide_rewrite.cpp` + header
+2. Move `RewriteCountToSum`, `RewriteAvgToSum`, `RewriteAbsLinearization` to new file
+3. Call from a `DecideOptimizer` pass or as a post-bind hook
+4. Update `bind_select_node.cpp` to import and call the extracted functions
+
+### Expression Analysis Migration (Optional, Longer-Term)
+
+The expression analysis functions in `physical_decide.cpp` (lines 28-254) — `AnalyzeConstraint()`, `AnalyzeObjective()`, `TraverseBoundsConstraints()`, `ExtractVariableBounds()` — could also move to logical optimization. This would allow the physical layer to focus solely on coefficient evaluation, and would enable future optimizer rules like bound tightening to operate on the analyzed constraint structure.
+
+---
+
+## Bound Tightening
+
+**Priority: Low** (future optimization, requires expression analysis migration first)
+
+Once variable bounds are extracted at the logical level, an optimizer pass could:
+1. Derive tighter bounds from constraint interactions (e.g., `SUM(x) <= 5` with 10 BOOLEAN variables implies at most 5 can be 1)
+2. Fix variables that are forced by constraints (e.g., `x >= 1` and `x <= 1` → fix `x = 1`)
+3. Pass tighter bounds to the solver for faster solving

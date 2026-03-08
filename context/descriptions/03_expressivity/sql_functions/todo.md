@@ -2,46 +2,17 @@
 
 ---
 
-## ~~ABS()~~ — **DONE**
-
-Moved to [done.md](done.md). Implemented via early rewrite (auxiliary REAL variable linearization) in `bind_select_node.cpp`.
-
----
-
-## COUNT() Over INTEGER/REAL Decision Variables
+## COUNT() Over REAL Decision Variables
 
 **Priority: Low**
 
-`COUNT(x)` for BOOLEAN variables is implemented (see `done.md`). For INTEGER and REAL variables, COUNT semantics are ambiguous — does it mean "count of non-zero values"? "count of rows"? This is currently rejected with a clear error message.
-
-If needed, a possible approach would be to introduce an auxiliary BOOLEAN variable `y_i` with constraints `y_i <= x_i` and `y_i * M >= x_i` (Big-M), then rewrite `COUNT(x)` to `SUM(y)`. This requires Big-M infrastructure.
+`COUNT(x)` for REAL variables is not yet supported. The Big-M indicator approach used for INTEGER variables could theoretically work for REAL, but the semantics of "non-zero" for continuous variables are problematic (floating-point tolerance issues). Currently rejected with a clear error message.
 
 ---
 
-## AVG() Over Decision Variables
+## ~~AVG() Over Decision Variables~~ — DONE
 
-**Priority: Medium**
-
-`AVG(x * col)` expands to `SUM(x * col) / COUNT(*)`, which is a non-linear ratio. However, it **can** be linearized when the denominator is a known constant:
-
-```sql
--- NOT SUPPORTED (currently)
-SUCH THAT AVG(x * weight) <= 10
-
--- Linearized form (multiply both sides by N, the row count):
-SUCH THAT SUM(x * weight) <= 10 * N
-```
-
-### Suggested Implementation
-
-1. Detect `AVG(expr)` in constraints/objectives where `expr` involves decision variables
-2. Determine the row count `N` (from the input relation, after WHERE/WHEN filtering)
-3. Rewrite: `AVG(expr) <= K` becomes `SUM(expr) <= K * N`
-4. For `AVG(expr) = K`: becomes `SUM(expr) = K * N`
-
-**Caveat**: When combined with `WHEN`, `N` is the count of WHEN-matching rows, which may not be known at bind time. This may require deferred rewriting at execution time.
-
-**Caveat**: When `x IS BOOLEAN`, `AVG(x * col)` means "average of `col` among selected rows" — the denominator is `SUM(x)` (unknown), not `N`. This is genuinely non-linear and cannot be linearized without approximation.
+Implemented. See `done.md` for details. Uses standard SQL AVG semantics (divide by total row count, not "average among selected").
 
 ---
 

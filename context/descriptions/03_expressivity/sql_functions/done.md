@@ -17,18 +17,55 @@ SUCH THAT SUM(x * weight) <= 50
 
 **Code**: Validated in `decide_objective_binder.cpp:91-100` and `decide_constraints_binder.cpp:358-367` — any aggregate other than SUM is rejected with an error.
 
-### COUNT() — BOOLEAN variables only
+### COUNT() — BOOLEAN and INTEGER variables
 
-`COUNT(x)` is automatically rewritten to `SUM(x)` when `x IS BOOLEAN`. This is semantically correct because for a {0,1} variable, "how many rows have x=1" is exactly `SUM(x)`.
+`COUNT(x)` counts the number of rows where the decision variable `x` is non-zero. It is supported for both BOOLEAN and INTEGER variables (REAL is not yet supported).
+
+**BOOLEAN variables**: `COUNT(x)` is rewritten to `SUM(x)` directly, since for a {0,1} variable, "how many rows have x=1" equals `SUM(x)`.
+
+**INTEGER variables**: `COUNT(x)` uses the Big-M indicator variable technique:
+1. A hidden binary indicator variable `z` is introduced for `x`
+2. Two linking constraints enforce the relationship: `z <= x` (z=0 when x=0) and `x <= M*z` (z=1 when x>0)
+3. `COUNT(x)` is rewritten to `SUM(z)`, which counts non-zero assignments
+4. M is derived from the upper bound of `x` (defaults to 1e6 if no bound specified)
 
 ```sql
-SUCH THAT COUNT(x) >= 5     -- where x IS BOOLEAN
-MAXIMIZE COUNT(x)           -- maximize number of selected rows
+SUCH THAT COUNT(x) >= 5     -- where x IS BOOLEAN or INTEGER
+MAXIMIZE COUNT(x)           -- maximize number of non-zero rows
+SUCH THAT COUNT(x) <= 2     -- at most 2 non-zero assignments
 ```
 
-The rewrite happens early, before normalization and binding, in `bind_select_node.cpp` via the `RewriteCountToSum()` function. This means COUNT inherits all SUM capabilities (WHEN, PER, all comparison operators) for free.
+The rewrite happens early, before normalization and binding, in `bind_select_node.cpp` via the `RewriteCountToSum()` function. This means COUNT inherits all SUM capabilities (WHEN, PER, all comparison operators) for free. Multiple `COUNT(x)` references to the same variable reuse a single indicator.
 
-`COUNT(x)` is **rejected** for INTEGER and REAL variables with a clear error message, since COUNT semantics are ambiguous for non-binary variables.
+`COUNT(x)` is **rejected** for REAL variables with a clear error message.
+
+---
+
+### AVG() — Rewritten to SUM with RHS Scaling
+
+`AVG(expr)` over decision variables is rewritten to `SUM(expr)` early in the bind phase, with an alias tag (`__avg_rewrite__`) that signals the model builder to scale the constraint RHS by the row count N.
+
+**Semantics**: Standard SQL AVG — divide by count of all rows (decision variables are never NULL). This is always linear since N is a data-determined constant.
+
+**Constraints**: `AVG(expr) op K` becomes `SUM(expr) op K*N` where N depends on context:
+- No WHEN/PER: N = total row count
+- WHEN: N = count of WHEN-matching rows
+- PER: N = count of rows in each group
+- WHEN+PER: N = count of WHEN-matching rows per group
+
+**Objectives**: `MAXIMIZE/MINIMIZE AVG(expr)` simply becomes `SUM(expr)` — same argmax/argmin since N > 0 is constant.
+
+```sql
+SUCH THAT AVG(x * weight) <= 10         -- SUM(x*weight) <= 10*N
+SUCH THAT AVG(x) <= 0.5                 -- at most half the rows selected (BOOLEAN)
+SUCH THAT AVG(x * cost) <= 5 WHEN active -- only among active rows
+SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
+MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
+```
+
+**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. At execution time (`physical_decide.cpp`), `BoundAggregateExpression::function.name == "avg"` sets `LinearConstraint::was_avg_rewrite`, propagated to `EvaluatedConstraint::was_avg_rewrite`. RHS scaling applied in `ilp_model_builder.cpp` at model build time.
+
+**Tests**: `test/decide/tests/test_avg.py` — 9 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, and no-decide-var passthrough.
 
 ---
 
@@ -148,7 +185,8 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | Function / Operator | In Constraints | In Objective | In WHEN / WHERE |
 |---|---|---|---|
 | `SUM()` over dec. vars | Yes | Yes | N/A |
-| `COUNT()` (BOOLEAN only) | Yes | Yes | N/A |
+| `AVG()` over dec. vars | Yes (RHS scaled) | Yes (→SUM) | N/A |
+| `COUNT()` (BOOLEAN, INTEGER) | Yes | Yes | N/A |
 | `ABS()` over dec. vars | Yes (linearized) | Yes (linearized) | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `+`, `-` | Yes | Yes | Yes |
