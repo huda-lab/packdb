@@ -59,6 +59,17 @@ MINIMIZE SUM(x * cost) WHEN region = 'US'
 
 See [when/done.md](../when/done.md) for full details.
 
+### ABS() in Objective
+
+`ABS(expr)` is supported in objectives via automatic linearization. Each `ABS(expr)` over decision variables is rewritten to an auxiliary variable with two linearization constraints.
+
+```sql
+MINIMIZE SUM(ABS(new_hours - hours))    -- minimize total absolute deviation
+MINIMIZE SUM(ABS(x - a) + ABS(y - b))  -- multiple ABS terms
+```
+
+The rewrite happens before normalization in `bind_select_node.cpp` via `RewriteAbsLinearization()`. Auxiliary variables are hidden from query output. See [sql_functions/done.md](../sql_functions/done.md) for the full linearization details.
+
 ---
 
 ## Objective and Solver Behavior
@@ -84,6 +95,7 @@ When a `WHEN` condition is present, coefficients for non-matching rows are set t
 | Maximize retained data after cleaning | `MAXIMIZE SUM(keep)` |
 | Outlier removal | `MAXIMIZE SUM(keep)` |
 | Entity resolution / deduplication | `MAXIMIZE SUM(keepS) + SUM(keepP)` |
+| Data repair / imputation | `MINIMIZE SUM(ABS(new_val - old_val))` |
 
 ---
 

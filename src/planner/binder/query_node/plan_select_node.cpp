@@ -43,6 +43,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             std::move(statement.decide_objective)
         );
 
+        decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
         decide_op->AddChild(std::move(root));
         root = std::move(decide_op);
     }

@@ -438,6 +438,108 @@ static void RewriteCountToSum(unique_ptr<ParsedExpression> &expr,
 	});
 }
 
+// Check if a parsed expression references any DECIDE variable.
+static bool ReferencesDecideVariable(ParsedExpression &expr,
+                                     const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		auto &colref = expr.Cast<ColumnRefExpression>();
+		return variables.count(colref.GetColumnName()) > 0;
+	}
+	bool found = false;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](unique_ptr<ParsedExpression> &child) {
+		if (!found && child) {
+			found = ReferencesDecideVariable(*child, variables);
+		}
+	});
+	return found;
+}
+
+// Walk an expression tree and replace ABS(expr) with an auxiliary variable when expr
+// references a DECIDE variable.  For each replacement, two linearization constraints
+// (aux >= expr, aux >= -expr) are accumulated in new_constraints.
+static void RewriteAbsInExpression(unique_ptr<ParsedExpression> &expr,
+                                   vector<unique_ptr<ParsedExpression>> &new_constraints,
+                                   case_insensitive_map_t<idx_t> &variables,
+                                   vector<string> &var_names,
+                                   vector<LogicalType> &var_types,
+                                   vector<bool> &is_boolean_var,
+                                   idx_t &abs_counter) {
+	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr->Cast<FunctionExpression>();
+		if (StringUtil::CIEquals(func.function_name, "abs") && func.children.size() == 1) {
+			if (ReferencesDecideVariable(*func.children[0], variables)) {
+				// Create auxiliary REAL variable
+				string aux_name = "__abs_aux_" + to_string(abs_counter++) + "__";
+				idx_t aux_idx = var_names.size();
+				var_names.push_back(aux_name);
+				var_types.push_back(LogicalType::DOUBLE);
+				is_boolean_var.push_back(false);
+				variables.emplace(aux_name, aux_idx);
+
+				auto &inner = func.children[0];
+
+				// Constraint 1: aux >= inner_expr
+				auto c1 = make_uniq<ComparisonExpression>(
+				    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+				    make_uniq<ColumnRefExpression>(aux_name), inner->Copy());
+
+				// Constraint 2: aux >= -(inner_expr)   i.e.  aux >= 0 - inner_expr
+				vector<unique_ptr<ParsedExpression>> neg_children;
+				neg_children.push_back(make_uniq<ConstantExpression>(Value::INTEGER(0)));
+				neg_children.push_back(inner->Copy());
+				auto neg_inner = make_uniq<FunctionExpression>("-", std::move(neg_children));
+				auto c2 = make_uniq<ComparisonExpression>(
+				    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+				    make_uniq<ColumnRefExpression>(aux_name), std::move(neg_inner));
+
+				new_constraints.push_back(std::move(c1));
+				new_constraints.push_back(std::move(c2));
+
+				// Replace ABS(inner) in-place with a column reference to the aux variable
+				expr = make_uniq<ColumnRefExpression>(aux_name);
+				return;
+			}
+		}
+	}
+	// Recurse into children
+	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+		RewriteAbsInExpression(child, new_constraints, variables, var_names,
+		                       var_types, is_boolean_var, abs_counter);
+	});
+}
+
+// Rewrite ABS(expr) → auxiliary variable + linearization constraints for both
+// the constraint tree and the objective tree.
+static void RewriteAbsLinearization(unique_ptr<ParsedExpression> &constraints,
+                                    unique_ptr<ParsedExpression> &objective,
+                                    case_insensitive_map_t<idx_t> &variables,
+                                    vector<string> &var_names,
+                                    vector<LogicalType> &var_types,
+                                    vector<bool> &is_boolean_var) {
+	idx_t abs_counter = 0;
+	vector<unique_ptr<ParsedExpression>> new_constraints;
+
+	if (constraints) {
+		RewriteAbsInExpression(constraints, new_constraints, variables,
+		                       var_names, var_types, is_boolean_var, abs_counter);
+	}
+	if (objective) {
+		RewriteAbsInExpression(objective, new_constraints, variables,
+		                       var_names, var_types, is_boolean_var, abs_counter);
+	}
+
+	// Append linearization constraints to the constraint tree
+	for (auto &nc : new_constraints) {
+		if (constraints) {
+			constraints = make_uniq<ConjunctionExpression>(
+			    ExpressionType::CONJUNCTION_AND,
+			    std::move(constraints), std::move(nc));
+		} else {
+			constraints = std::move(nc);
+		}
+	}
+}
+
 unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_ptr<BoundTableRef> from_table) {
 	D_ASSERT(from_table);
 	D_ASSERT(!statement.from_table);
@@ -543,6 +645,12 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             RewriteCountToSum(statement.decide_objective, decide_variable_names, is_boolean_var);
         }
 
+        // Rewrite ABS(expr) → auxiliary variable + linearization constraints
+        idx_t num_user_vars = var_names.size();
+        RewriteAbsLinearization(statement.decide_constraints, statement.decide_objective,
+                                decide_variable_names, var_names, var_types, is_boolean_var);
+        idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
+
         if (statement.decide_constraints) {
             // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
             statement.decide_constraints = NormalizeDecideConstraints(*statement.decide_constraints, decide_variable_names);
@@ -572,11 +680,24 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         bind_context.GetBindingsList().back()->types = var_types;
         for (idx_t i = 0; i < var_names.size(); i++) {
             auto bound_col_ref = make_uniq<BoundColumnRefExpression>(
-                var_names[i], 
-                var_types[i], 
+                var_names[i],
+                var_types[i],
                 ColumnBinding(result->decide_index, i)
             );
             result->decide_variables.push_back(std::move(bound_col_ref));
+        }
+        result->num_auxiliary_vars = num_auxiliary_vars;
+
+        // Hide auxiliary vars from SELECT * by truncating the bind context binding.
+        // The decide_variables vector still has ALL vars (user + aux) for the execution layer,
+        // but the bind context only exposes user vars for star expansion.
+        if (num_auxiliary_vars > 0) {
+            auto &binding = *bind_context.GetBindingsList().back();
+            for (idx_t i = num_user_vars; i < var_names.size(); i++) {
+                binding.name_map.erase(var_names[i]);
+            }
+            binding.names.resize(num_user_vars);
+            binding.types.resize(num_user_vars);
         }
     }
 

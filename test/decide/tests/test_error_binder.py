@@ -117,13 +117,16 @@ class TestBinderErrors:
             """, match=r"not a scalar")
 
     def test_decide_between_decide_variable(self, packdb_cli):
-        """DECIDE variable cannot appear in BETWEEN bounds."""
-        packdb_cli.assert_error("""
+        """Multi-variable per-row constraints are now supported (e.g. x BETWEEN y AND 1).
+        This is needed for ABS linearization which generates constraints like d >= x - c."""
+        # This used to be an error; now valid (x >= y AND x <= 1)
+        result, cols = packdb_cli.execute("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x, y
                 SUCH THAT x BETWEEN y AND 1
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"cannot be compared.*DECIDE")
+            """)
+        assert len(result) > 0
 
     def test_in_rhs_with_decide_variable(self, packdb_cli):
         """IN domain constraints on DECIDE variables are not yet supported."""
@@ -144,13 +147,18 @@ class TestBinderErrors:
             """, match=r"not a scalar")
 
     def test_decide_variable_rhs_with_decide(self, packdb_cli):
-        """DECIDE variable compared to another DECIDE variable."""
-        packdb_cli.assert_error("""
+        """Multi-variable per-row constraints are now supported (e.g. x <= y).
+        This is needed for ABS linearization which generates constraints like d >= x - c."""
+        # This used to be an error; now valid (x - y <= 0)
+        # Use small dataset + SUM bound (otherwise MAXIMIZE is unbounded)
+        result, cols = packdb_cli.execute("""
                 SELECT l_quantity FROM lineitem
+                WHERE l_orderkey <= 3
                 DECIDE x, y
-                SUCH THAT x <= y
-                MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"cannot be compared.*DECIDE")
+                SUCH THAT x <= y AND SUM(y) <= 100
+                MAXIMIZE SUM(x*l_quantity)
+            """)
+        assert len(result) > 0
 
     def test_sum_equal_non_scalar(self, packdb_cli):
         """SUM = non-scalar expression."""

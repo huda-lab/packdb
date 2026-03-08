@@ -72,6 +72,9 @@ public:
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
 
+    // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
+    idx_t num_auxiliary_vars = 0;
+
 public:
     // Source interface
     unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;

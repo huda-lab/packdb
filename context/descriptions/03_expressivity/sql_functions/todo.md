@@ -2,31 +2,9 @@
 
 ---
 
-## ABS()
+## ~~ABS()~~ — **DONE**
 
-**Priority: High** (needed for repair and imputation objectives)
-
-`ABS(expr)` is needed for minimizing absolute deviations — the core objective for data repair tasks.
-
-```sql
--- NOT YET IMPLEMENTED
-MINIMIZE SUM(ABS(new_hours - hours))
-```
-
-### Linearization Approach
-
-`ABS(expr)` is non-linear but can be linearized with standard ILP technique:
-
-1. Introduce an auxiliary REAL variable `d_i` for each row `i`
-2. Add two constraints per row: `d_i >= expr_i` and `d_i >= -expr_i`
-3. Replace `ABS(expr_i)` with `d_i` in the objective
-
-This transformation should be applied automatically during query planning (see [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md) for Big-M reformulation).
-
-### Dependencies
-
-- ~~Requires `IS REAL` variable support~~ — **done** (see [../decide/done.md](../decide/done.md))
-- Requires optimizer support for introducing auxiliary variables
+Moved to [done.md](done.md). Implemented via early rewrite (auxiliary REAL variable linearization) in `bind_select_node.cpp`.
 
 ---
 

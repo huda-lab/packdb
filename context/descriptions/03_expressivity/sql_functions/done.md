@@ -32,6 +32,35 @@ The rewrite happens early, before normalization and binding, in `bind_select_nod
 
 ---
 
+## ABS() — Linearized Automatically
+
+`ABS(expr)` over decision variables is automatically linearized using the standard ILP technique. For each `ABS(expr)` that references a DECIDE variable, the system:
+
+1. Introduces an auxiliary REAL variable `d` (hidden from query output)
+2. Adds two constraints: `d >= expr` and `d >= -expr`
+3. Replaces `ABS(expr)` with `d`
+
+This works in both constraints and objectives:
+
+```sql
+-- In objectives: minimize total absolute deviation
+MINIMIZE SUM(ABS(new_hours - hours))
+
+-- In per-row constraints: bound deviation per row
+SUCH THAT ABS(new_qty - l_quantity) <= 5
+
+-- In aggregate constraints: bound total deviation
+SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
+```
+
+`ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
+
+**Code**: The rewrite happens early in `bind_select_node.cpp` via `RewriteAbsLinearization()`, before normalization and binding. Auxiliary variables are included in the DECIDE variable pipeline but hidden from `SELECT *` by truncating the bind context after binding.
+
+**Tests**: `test/decide/tests/test_abs_linearization.py` — 8 test cases covering objectives, constraints, WHEN, PER, multiple ABS terms, no-decide-var, and mixed variable types.
+
+---
+
 ## Arithmetic Operators
 
 ### Multiplication (`*`) — variable x constant or variable x column
@@ -120,6 +149,7 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 |---|---|---|---|
 | `SUM()` over dec. vars | Yes | Yes | N/A |
 | `COUNT()` (BOOLEAN only) | Yes | Yes | N/A |
+| `ABS()` over dec. vars | Yes (linearized) | Yes (linearized) | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `+`, `-` | Yes | Yes | Yes |
 | `=`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |

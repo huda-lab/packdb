@@ -13,10 +13,10 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 |---|---|---|
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, multiple vars, scope, linearity | IS REAL variables |
 | [such_that/](such_that/) | Comparisons, BETWEEN, IN, AND, subqueries, WHEN, PER | Correlated subqueries |
-| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic, WHEN on objective | ABS, PER on objective, COUNT/AVG |
+| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic, WHEN on objective, ABS | PER on objective, COUNT/AVG |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
 | [per/](per/) | PER on constraints, WHEN+PER composition, row_group_ids architecture | Multi-column PER, PER on objective (partition-solve), row-varying RHS |
-| [sql_functions/](sql_functions/) | SUM, arithmetic, comparisons, BETWEEN, IN, NULL | ABS, COUNT, AVG, MIN/MAX linearization |
+| [sql_functions/](sql_functions/) | SUM, ABS, arithmetic, comparisons, BETWEEN, IN, NULL | COUNT, AVG, MIN/MAX linearization |
 
 ---
 
@@ -26,7 +26,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 |---|---|---|
 | `DECIDE x IS BOOLEAN` | Yes | — |
 | `DECIDE x IS INTEGER` | Yes | — |
-| `DECIDE x IS REAL` | **No** | [decide/todo.md](decide/todo.md) |
+| `DECIDE x IS REAL` | Yes | — |
 | `DECIDE x` (default INTEGER) | Yes | — |
 | Multiple variables: `DECIDE x, y` | Yes | — |
 | `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=` | Yes | — |
@@ -49,16 +49,16 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `COUNT()` over BOOLEAN variables | Yes (rewritten to SUM) | — |
 | `COUNT()` over INTEGER/REAL variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
 | `AVG()` over decision variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
-| `ABS()` | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
+| `ABS()` | Yes (linearized) | — |
 | `MIN()` / `MAX()` over dec. vars | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
 
 ---
 
 ## Development Priorities
 
-1. **IS REAL variables** — unlocks imputation, repair, and synthesis tasks
+1. ~~**IS REAL variables**~~ — **done**
 2. **AVG() aggregate** — syntactic convenience, linearizable for common cases
-3. **ABS()** — needed for repair objectives (depends on IS REAL + Big-M)
+3. ~~**ABS()**~~ — **done** (linearized via auxiliary variables)
 4. **`<>` and `IN` on decision variables** — requires Big-M / auxiliary variable infrastructure
 
 ---

@@ -179,6 +179,81 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
 // OLD STRUCTS - REMOVED (now using LinearConstraint and LinearObjective from header)
 
 //===--------------------------------------------------------------------===//
+// Multi-variable per-row constraint helpers
+//===--------------------------------------------------------------------===//
+
+//! Collect DECIDE variable references from a bound expression, tracking sign
+//! through subtraction operators. Used for multi-variable per-row constraints.
+struct ExprVarRef {
+    idx_t var_idx;
+    int sign; // +1 or -1
+};
+
+static void CollectDecideVarRefs(const Expression &expr, int sign,
+                                  vector<ExprVarRef> &refs,
+                                  const PhysicalDecide &op) {
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+        idx_t var_idx = op.FindDecideVariable(expr);
+        if (var_idx != DConstants::INVALID_INDEX) {
+            refs.push_back({var_idx, sign});
+        }
+        return;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+        auto &func = expr.Cast<BoundFunctionExpression>();
+        if (func.function.name == "-" && func.children.size() == 2) {
+            CollectDecideVarRefs(*func.children[0], sign, refs, op);
+            CollectDecideVarRefs(*func.children[1], -sign, refs, op);
+            return;
+        }
+        if (func.function.name == "+" && func.children.size() == 2) {
+            CollectDecideVarRefs(*func.children[0], sign, refs, op);
+            CollectDecideVarRefs(*func.children[1], sign, refs, op);
+            return;
+        }
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        auto &cast = expr.Cast<BoundCastExpression>();
+        CollectDecideVarRefs(*cast.child, sign, refs, op);
+        return;
+    }
+    // Constants, data columns, etc.: no DECIDE vars
+}
+
+//! Replace all DECIDE variable references in a bound expression with constant 0.
+//! Returns a data-only expression that can be evaluated per-row from the input chunk.
+static unique_ptr<Expression> StripDecideVars(const Expression &expr, const PhysicalDecide &op) {
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+        idx_t var_idx = op.FindDecideVariable(expr);
+        if (var_idx != DConstants::INVALID_INDEX) {
+            return make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(0.0));
+        }
+        return expr.Copy();
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+        auto &func = expr.Cast<BoundFunctionExpression>();
+        vector<unique_ptr<Expression>> new_children;
+        for (auto &child : func.children) {
+            new_children.push_back(StripDecideVars(*child, op));
+        }
+        unique_ptr<FunctionData> new_bind_info;
+        if (func.bind_info) {
+            new_bind_info = func.bind_info->Copy();
+        }
+        return make_uniq_base<Expression, BoundFunctionExpression>(
+            func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        auto &cast = expr.Cast<BoundCastExpression>();
+        auto new_child = StripDecideVars(*cast.child, op);
+        // Recreate the cast
+        return make_uniq_base<Expression, BoundCastExpression>(
+            std::move(new_child), cast.return_type, cast.bound_cast.Copy(), cast.try_cast);
+    }
+    return expr.Copy();
+}
+
+//===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 class DecideGlobalSinkState : public GlobalSinkState {
@@ -248,15 +323,45 @@ public:
                     op.ExtractLinearTerms(*agg.children[0], constraint->lhs_terms);
                     constraint->lhs_is_aggregate = true;
                 } else {
-                    // Simple variable constraint (e.g., x <= 5)
-                    idx_t var_idx = op.FindDecideVariable(*comp.left);
-                    if (var_idx != DConstants::INVALID_INDEX) {
-                        constraint->lhs_terms.push_back(LinearTerm{
-                            var_idx,
-                            make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))
-                        });
-                    }
+                    // Per-row constraint (e.g., x <= 5, or multi-variable: d >= x - c)
                     constraint->lhs_is_aggregate = false;
+
+                    // Check if RHS contains DECIDE variables (multi-variable constraint)
+                    vector<ExprVarRef> rhs_refs;
+                    CollectDecideVarRefs(*comp.right, +1, rhs_refs, op);
+
+                    if (!rhs_refs.empty()) {
+                        // Multi-variable per-row constraint (e.g., ABS linearization: d >= x - c)
+                        // Collect LHS DECIDE vars
+                        vector<ExprVarRef> lhs_refs;
+                        CollectDecideVarRefs(*lhs, +1, lhs_refs, op);
+
+                        // LHS vars keep their sign; RHS vars move to LHS with negated sign
+                        for (auto &ref : lhs_refs) {
+                            constraint->lhs_terms.push_back(LinearTerm{
+                                ref.var_idx,
+                                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(ref.sign))
+                            });
+                        }
+                        for (auto &ref : rhs_refs) {
+                            constraint->lhs_terms.push_back(LinearTerm{
+                                ref.var_idx,
+                                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(-ref.sign))
+                            });
+                        }
+
+                        // RHS becomes data-only: DECIDE vars replaced with constant 0
+                        constraint->rhs_expr = StripDecideVars(*comp.right, op);
+                    } else {
+                        // Simple single-variable constraint (e.g., x <= 5)
+                        idx_t var_idx = op.FindDecideVariable(*comp.left);
+                        if (var_idx != DConstants::INVALID_INDEX) {
+                            constraint->lhs_terms.push_back(LinearTerm{
+                                var_idx,
+                                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))
+                            });
+                        }
+                    }
                 }
 
                 constraints.push_back(std::move(constraint));
@@ -1113,13 +1218,14 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
         return SourceResultType::FINISHED;
     }
 
-    idx_t num_decide_vars = decide_variables.size();
+    // All DECIDE vars (user + auxiliary) are in the output; projection above prunes aux vars
+    idx_t total_decide_vars = decide_variables.size();
     idx_t chunk_size = chunk.size();
 
-    // Fill in the DECIDE variable columns with solution values from ILP solver
-    for (idx_t decide_var_idx = 0; decide_var_idx < num_decide_vars; decide_var_idx++) {
+    // Fill in ALL DECIDE variable columns with solution values from ILP solver
+    for (idx_t decide_var_idx = 0; decide_var_idx < total_decide_vars; decide_var_idx++) {
         // The DECIDE columns are appended at the end of the output
-        idx_t column_idx = types.size() - num_decide_vars + decide_var_idx;
+        idx_t column_idx = types.size() - total_decide_vars + decide_var_idx;
 
         auto &output_vector = chunk.data[column_idx];
 
@@ -1138,7 +1244,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+                    idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -1152,7 +1258,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+                    idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -1168,7 +1274,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+                idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -1182,7 +1288,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+                idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -1197,7 +1303,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = global_row * num_decide_vars + decide_var_idx;
+                idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {

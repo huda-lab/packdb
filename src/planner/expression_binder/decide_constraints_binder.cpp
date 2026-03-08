@@ -160,9 +160,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
         switch (left_type) {
             case DecideExpression::VARIABLE: {
-                if (HasVariableExpression(right, variables)) {
-                    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("DECIDE variable cannot be compared to an expression with DECIDE variables, found '%s'", expr.ToString())));
-                }
+                // Multi-variable per-row constraints allowed (e.g., ABS linearization: d >= x - c)
                 break;
             }
             case DecideExpression::SUM: {

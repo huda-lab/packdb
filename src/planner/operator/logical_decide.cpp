@@ -17,10 +17,10 @@ LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DE
 }
 
 vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
-    // Return all child columns plus the new decide variables
+    // Return all child columns plus ALL decide variables (including auxiliary).
+    // Auxiliary vars (e.g. from ABS linearization) must be visible for column binding
+    // resolution in constraint/objective expressions. The projection above prunes them.
     auto result = children[0]->GetColumnBindings();
-    
-    // Add the new columns produced by this operator (the decide variables)
     for (idx_t i = 0; i < decide_variables.size(); i++) {
         result.emplace_back(decide_index, i);
     }
@@ -28,12 +28,11 @@ vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
 }
 
 void LogicalDecide::ResolveTypes() {
-    // Get all child types
     types = children[0]->types;
-    
-    // Add the types of the new decide variables
-    for (const auto& var : decide_variables) {
-        types.push_back(var->return_type);
+    // Include ALL decide variable types (user + auxiliary).
+    // Auxiliary vars are pruned by the projection operator above.
+    for (idx_t i = 0; i < decide_variables.size(); i++) {
+        types.push_back(decide_variables[i]->return_type);
     }
 }
 
