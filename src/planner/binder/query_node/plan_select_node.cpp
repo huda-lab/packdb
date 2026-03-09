@@ -48,6 +48,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->ne_indicator_indices = std::move(statement.ne_indicator_indices);
         decide_op->minmax_indicator_links = std::move(statement.minmax_indicator_links);
         decide_op->minmax_objective_type = std::move(statement.minmax_objective_type);
+        decide_op->per_inner_objective_type = std::move(statement.per_inner_objective_type);
+        decide_op->per_outer_objective_type = std::move(statement.per_outer_objective_type);
         decide_op->AddChild(std::move(root));
         root = std::move(decide_op);
     }

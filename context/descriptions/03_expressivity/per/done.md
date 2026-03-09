@@ -36,9 +36,9 @@ constraint_expression [WHEN condition] PER column
 -- Constraint: multi-column PER
 constraint_expression [WHEN condition] PER (column1, column2, ...)
 
--- Objective (accepted, treated as global SUM — see Deferred Features in todo.md)
-MAXIMIZE SUM(...) PER column
-MAXIMIZE SUM(...) PER (column1, column2, ...)
+-- Objective: nested aggregate PER
+MAXIMIZE OUTER(INNER(...)) PER column
+MINIMIZE OUTER(INNER(...)) PER (column1, column2, ...)
 ```
 
 **Examples**:
@@ -77,14 +77,21 @@ SUCH THAT SUM(x * hours) <= 30 WHEN title = 'Director' PER empID
 
 **Execution order**: WHEN (filter) → PER (partition → generate one constraint per group).
 
-### PER on Objective (No-Op)
+### PER on Objective — Nested Aggregate Syntax
 
-PER is accepted on objectives by the grammar and binder, but currently treated as equivalent to the global SUM (no-op). This will become meaningful when partition-solve is implemented.
+PER on objectives is fully implemented using nested aggregate syntax: `OUTER(INNER(expr)) PER col`, where `OUTER` and `INNER` are each one of `SUM`, `MIN`, or `MAX`. All 9 combinations are supported.
 
 ```sql
--- Currently equivalent to: MINIMIZE SUM(x * cost)
-MINIMIZE SUM(x * cost) PER department
+MINIMIZE SUM(MAX(x * cost)) PER department     -- minimize sum of per-dept max costs
+MAXIMIZE MIN(SUM(x * profit)) PER region       -- maximize the worst-performing region
+MINIMIZE MAX(SUM(x * hours)) PER empID          -- minimize the peak workload
 ```
+
+**Flat aggregate + PER behavior**:
+- `SUM(expr) PER col` or `AVG(expr) PER col`: Accepted as a no-op (global sum of per-group sums equals the global sum).
+- `MIN(expr) PER col` or `MAX(expr) PER col` (flat, no nested aggregate): **Error** — ambiguous semantics. The nested form is required.
+
+The formulation uses two levels of auxiliary variables: inner (per-group) and outer (across-group), each with easy/hard classification. See [../maximize_minimize/done.md](../maximize_minimize/done.md) for the full formulation details.
 
 ---
 
@@ -170,6 +177,7 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 - `src/parser/transform/expression/transform_operator.cpp` — transformer
 - `src/packdb/symbolic/decide_symbolic.cpp` — normalizer passthrough
 - `src/planner/expression_binder/decide_constraints_binder.cpp/.hpp` — `BindPerConstraint`
-- `src/planner/expression_binder/decide_objective_binder.cpp` — PER strip (no-op)
+- `src/planner/expression_binder/decide_objective_binder.cpp` — nested aggregate PER objective binding
+- `src/planner/binder/query_node/bind_select_node.cpp` — nested aggregate detection for PER objectives
 - `src/execution/operator/decide/physical_decide.cpp` — unified WHEN+PER evaluation
 - `src/packdb/utility/ilp_model_builder.cpp` — group-aware constraint builder

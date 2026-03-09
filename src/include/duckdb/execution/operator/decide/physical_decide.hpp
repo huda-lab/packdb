@@ -37,6 +37,7 @@ struct LinearConstraint {
 struct LinearObjective {
     vector<LinearTerm> terms;           // All objective terms
     unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
+    vector<unique_ptr<Expression>> per_columns; // PackDB: optional PER grouping columns (empty = no grouping)
 
     LinearObjective() = default;
 };
@@ -87,6 +88,10 @@ public:
 
     // If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
     string minmax_objective_type;
+
+    // PER on objective: inner and outer aggregate types (empty if no PER on objective)
+    string per_inner_objective_type;
+    string per_outer_objective_type;
 
 public:
     // Source interface

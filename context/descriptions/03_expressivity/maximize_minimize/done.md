@@ -100,6 +100,56 @@ MINIMIZE SUM(ABS(x - a) + ABS(y - b))  -- multiple ABS terms
 
 The rewrite happens before normalization in `bind_select_node.cpp` via `RewriteAbsLinearization()`. Auxiliary variables are hidden from query output. See [sql_functions/done.md](../sql_functions/done.md) for the full linearization details.
 
+### PER on Objective — Nested Aggregate Syntax
+
+PER on objectives is supported with a **nested aggregate** syntax that combines two levels of aggregation:
+
+```sql
+OUTER(INNER(expr)) PER col
+```
+
+where `OUTER` and `INNER` are each one of `SUM`, `MIN`, or `MAX`. All 9 combinations are supported.
+
+**Examples**:
+
+```sql
+MINIMIZE SUM(MAX(x * cost)) PER department     -- minimize sum of per-dept max costs
+MAXIMIZE MIN(SUM(x * profit)) PER region       -- maximize the worst-performing region
+MINIMIZE MAX(SUM(x * hours)) PER empID          -- minimize the peak workload
+MAXIMIZE SUM(SUM(x * value)) PER category       -- maximize total across categories
+```
+
+#### Flat Aggregate + PER Behavior
+
+- **`SUM(expr) PER col`** or **`AVG(expr) PER col`**: Accepted as a no-op (the global sum of per-group sums equals the global sum).
+- **`MIN(expr) PER col`** or **`MAX(expr) PER col`** (flat, no nested aggregate): **Error** — ambiguous semantics. Users must use the nested form to specify both the inner (per-group) and outer (across-group) aggregation explicitly.
+
+#### Two-Level ILP Formulation
+
+The nested aggregate PER objective is linearized in two levels:
+
+1. **Inner level (per group)**: For each distinct value of the PER column, compute the inner aggregate. If the inner aggregate is `SUM`, this is a direct sum of per-group coefficients. If the inner aggregate is `MIN` or `MAX`, a per-group auxiliary variable is created with linking constraints (using the same easy/hard classification as non-PER MIN/MAX objectives).
+
+2. **Outer level (across groups)**: The outer aggregate combines the per-group results into a single scalar objective. If the outer aggregate is `SUM`, the per-group auxiliaries (or sums) are added directly. If the outer aggregate is `MIN` or `MAX`, a global auxiliary variable is created with linking constraints across groups.
+
+The easy/hard classification applies at each level independently:
+- **Easy inner**: `MINIMIZE MAX(...)`, `MAXIMIZE MIN(...)` inner — no Big-M at the group level.
+- **Hard inner**: `MAXIMIZE MAX(...)`, `MINIMIZE MIN(...)` inner — Big-M indicators per group.
+- **Easy outer**: `MINIMIZE MAX(...)`, `MAXIMIZE MIN(...)` outer — no Big-M across groups.
+- **Hard outer**: `MAXIMIZE MAX(...)`, `MINIMIZE MIN(...)` outer — Big-M indicators across groups.
+
+#### WHEN + PER Composition
+
+WHEN filters rows before PER groups them, then the nested aggregate applies:
+
+```sql
+MINIMIZE MAX(SUM(x * hours)) WHEN active = 1 PER empID
+```
+
+#### Tests
+
+See `test/decide/tests/test_per_objective.py` for comprehensive tests of all 9 combinations.
+
 ---
 
 ## Objective and Solver Behavior
@@ -145,6 +195,10 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
   - Validates that only `SUM`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
   - Handles WHEN condition extraction on objective
+  - Binds nested aggregate PER objectives (inner/outer aggregate detection)
 
-- **Execution** (objective coefficient construction + WHEN masking):
-  `src/execution/operator/decide/physical_decide.cpp:263-282`
+- **Nested aggregate detection**: `src/planner/binder/query_node/bind_select_node.cpp`
+  - Detects `OUTER(INNER(expr)) PER col` pattern and validates flat MIN/MAX + PER is disallowed
+
+- **Execution** (objective coefficient construction + WHEN masking + PER auxiliary building):
+  `src/execution/operator/decide/physical_decide.cpp`

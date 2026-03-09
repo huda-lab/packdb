@@ -450,7 +450,22 @@ public:
             expr = expr->Cast<BoundCastExpression>().child.get();
         }
 
-        // PackDB: Check for WHEN wrapper on objective
+        // PackDB: Check for PER wrapper on objective (outermost layer)
+        vector<unique_ptr<Expression>> per_cols;
+        if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+            auto &conj = expr->Cast<BoundConjunctionExpression>();
+            if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
+                for (idx_t i = 1; i < conj.children.size(); i++) {
+                    per_cols.push_back(conj.children[i]->Copy());
+                }
+                expr = conj.children[0].get();
+                while (expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    expr = expr->Cast<BoundCastExpression>().child.get();
+                }
+            }
+        }
+
+        // PackDB: Check for WHEN wrapper on objective (inside PER, if present)
         unique_ptr<Expression> when_cond;
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conj = expr->Cast<BoundConjunctionExpression>();
@@ -470,6 +485,7 @@ public:
             objective = make_uniq<LinearObjective>();
             op.ExtractLinearTerms(*agg.children[0], objective->terms);
             objective->when_condition = std::move(when_cond);
+            objective->per_columns = std::move(per_cols);
         }
     }
 
@@ -1274,49 +1290,439 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
     solver_input.sense = decide_sense;
 
-    // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints
-    if (!minmax_objective_type.empty() && !solver_input.objective_variable_indices.empty()) {
+    // Evaluate PER column for objective grouping (must happen after solver_input is constructed)
+    if (gstate.objective && !gstate.objective->per_columns.empty()) {
+        bool has_obj_when = (gstate.objective->when_condition != nullptr);
+
+        // Build WHEN mask if needed (recompute — WHEN already zeroed coefficients above,
+        // but we need the mask for group assignment of excluded rows)
+        vector<bool> obj_when_mask;
+        if (has_obj_when) {
+            auto transformed_condition = TransformToChunkExpression(*gstate.objective->when_condition, context);
+            ExpressionExecutor cond_executor_per(context);
+            cond_executor_per.AddExpression(*transformed_condition);
+            obj_when_mask.reserve(num_rows);
+            ColumnDataScanState when_scan;
+            gstate.data.InitializeScan(when_scan);
+            DataChunk when_chunk;
+            when_chunk.Initialize(context, gstate.data.Types());
+            while (gstate.data.Scan(when_scan, when_chunk)) {
+                DataChunk cond_result;
+                cond_result.Initialize(context, {LogicalType::BOOLEAN});
+                cond_executor_per.Execute(when_chunk, cond_result);
+                auto &vec = cond_result.data[0];
+                for (idx_t r = 0; r < when_chunk.size(); r++) {
+                    Value val = vec.GetValue(r);
+                    obj_when_mask.push_back(val.IsNull() ? false : val.GetValue<bool>());
+                }
+            }
+        }
+
+        // Evaluate PER columns
+        vector<vector<Value>> obj_per_values;
+        obj_per_values.resize(gstate.objective->per_columns.size());
+        for (idx_t col_idx = 0; col_idx < gstate.objective->per_columns.size(); col_idx++) {
+            auto transformed_col = TransformToChunkExpression(*gstate.objective->per_columns[col_idx], context);
+            ExpressionExecutor per_executor(context);
+            per_executor.AddExpression(*transformed_col);
+            obj_per_values[col_idx].reserve(num_rows);
+            ColumnDataScanState per_scan;
+            gstate.data.InitializeScan(per_scan);
+            DataChunk per_chunk;
+            per_chunk.Initialize(context, gstate.data.Types());
+            while (gstate.data.Scan(per_scan, per_chunk)) {
+                DataChunk per_result;
+                per_result.Initialize(context, {transformed_col->return_type});
+                per_executor.Execute(per_chunk, per_result);
+                auto &vec = per_result.data[0];
+                for (idx_t r = 0; r < per_chunk.size(); r++) {
+                    obj_per_values[col_idx].push_back(vec.GetValue(r));
+                }
+            }
+        }
+
+        // Build unified row_group_ids for objective
+        solver_input.objective_row_group_ids.resize(num_rows);
+        unordered_map<string, idx_t> obj_value_to_group;
+        idx_t obj_next_group = 0;
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (has_obj_when && !obj_when_mask[row]) {
+                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                continue;
+            }
+            bool has_null = false;
+            for (idx_t col_idx = 0; col_idx < obj_per_values.size(); col_idx++) {
+                if (obj_per_values[col_idx][row].IsNull()) {
+                    has_null = true;
+                    break;
+                }
+            }
+            if (has_null) {
+                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                continue;
+            }
+            string key;
+            for (idx_t col_idx = 0; col_idx < obj_per_values.size(); col_idx++) {
+                if (col_idx > 0) key.push_back('\0');
+                key += obj_per_values[col_idx][row].ToString();
+            }
+            auto it = obj_value_to_group.find(key);
+            if (it == obj_value_to_group.end()) {
+                obj_value_to_group[key] = obj_next_group;
+                solver_input.objective_row_group_ids[row] = obj_next_group;
+                obj_next_group++;
+            } else {
+                solver_input.objective_row_group_ids[row] = it->second;
+            }
+        }
+        solver_input.objective_num_groups = obj_next_group;
+    }
+
+    // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
+    // Two paths: (A) non-PER flat MIN/MAX, (B) PER with nested OUTER(INNER(expr)).
+    //
+    // For PER objectives, two-level auxiliary formulation:
+    //   Phase A (inner): per-group auxiliary z_g for inner MIN/MAX aggregate
+    //   Phase B (outer): global auxiliary w for outer MIN/MAX aggregate
+    //
+    // Easy/hard classification at each level:
+    //   Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN
+    //   Hard (Big-M indicators): MINIMIZE+MIN or MAXIMIZE+MAX
+
+    // Save objective data (needed for constraint generation in both paths)
+    auto saved_obj_coefficients = solver_input.objective_coefficients;
+    auto saved_obj_var_indices = solver_input.objective_variable_indices;
+
+    // Compute Big-M from variable bounds (shared by both paths)
+    auto compute_big_m = [&]() -> double {
+        double M = 1e6;
+        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+            idx_t var = saved_obj_var_indices[t];
+            double ub = solver_input.upper_bounds[var];
+            if (ub < 1e20) {
+                double max_coef = 0.0;
+                for (auto &v : saved_obj_coefficients[t]) {
+                    max_coef = std::max(max_coef, std::abs(v));
+                }
+                M = std::max(M, max_coef * ub);
+            }
+        }
+        return M;
+    };
+
+    if (!per_inner_objective_type.empty() && !saved_obj_var_indices.empty() &&
+        solver_input.objective_num_groups > 0) {
+        // ================================================================
+        // PATH B: PER objective with nested OUTER(INNER(expr)) aggregate
+        // ================================================================
+        idx_t K = solver_input.objective_num_groups;
+        auto &row_groups = solver_input.objective_row_group_ids;
+
+        // Build group→rows index
+        vector<vector<idx_t>> group_rows(K);
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (row_groups[row] != DConstants::INVALID_INDEX) {
+                group_rows[row_groups[row]].push_back(row);
+            }
+        }
+
+        // Clear per-row objective (auxiliaries become the objective)
+        solver_input.objective_coefficients.clear();
+        solver_input.objective_variable_indices.clear();
+
+        // Phase A: Inner aggregate — produces K per-group values
+        // These are either group sums (no aux) or z_g auxiliaries (inner MIN/MAX)
+        bool inner_is_minmax = (per_inner_objective_type == "min" || per_inner_objective_type == "max");
+        bool inner_is_min = (per_inner_objective_type == "min");
+
+        // group_value_indices[g] = solver variable index for group g's value
+        // For inner SUM: not used (group sums go directly to outer as coefficients)
+        // For inner MIN/MAX: index of z_g global variable
+        vector<idx_t> group_value_indices(K);
+
+        if (inner_is_minmax) {
+            // Inner MIN/MAX: create z_g auxiliary per group
+            bool inner_easy = (inner_is_min && decide_sense == DecideSense::MAXIMIZE) ||
+                              (!inner_is_min && decide_sense == DecideSense::MINIMIZE);
+            double M = compute_big_m();
+
+            idx_t z_base = num_rows * num_decide_vars + solver_input.num_global_vars;
+            for (idx_t g = 0; g < K; g++) {
+                group_value_indices[g] = z_base + g;
+                solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
+                solver_input.global_lower_bounds.push_back(-1e30);
+                solver_input.global_upper_bounds.push_back(1e30);
+                solver_input.global_obj_coeffs.push_back(0.0); // set by outer phase
+            }
+            solver_input.num_global_vars += K;
+
+            if (inner_easy) {
+                // Easy: z_g >= expr_r (for MAX) or z_g <= expr_r (for MIN)
+                char sense_char = inner_is_min ? '<' : '>';
+                for (idx_t g = 0; g < K; g++) {
+                    for (idx_t row : group_rows[g]) {
+                        SolverInput::RawConstraint rc;
+                        rc.sense = sense_char;
+                        rc.rhs = 0.0;
+                        rc.indices.push_back((int)group_value_indices[g]);
+                        rc.coefficients.push_back(1.0);
+                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                            double coeff = saved_obj_coefficients[t][row];
+                            if (std::abs(coeff) < 1e-15) continue;
+                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            rc.indices.push_back((int)var_idx);
+                            rc.coefficients.push_back(-coeff);
+                        }
+                        solver_input.global_constraints.push_back(std::move(rc));
+                    }
+                }
+            } else {
+                // Hard: per-row indicators per group
+                idx_t first_y = z_base + K;
+                idx_t total_indicators = num_rows; // one per row (only grouped rows used)
+                solver_input.num_global_vars += total_indicators;
+                for (idx_t r = 0; r < total_indicators; r++) {
+                    solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
+                    solver_input.global_lower_bounds.push_back(0.0);
+                    solver_input.global_upper_bounds.push_back(1.0);
+                    solver_input.global_obj_coeffs.push_back(0.0);
+                }
+
+                for (idx_t g = 0; g < K; g++) {
+                    for (idx_t row : group_rows[g]) {
+                        SolverInput::RawConstraint rc;
+                        rc.indices.push_back((int)group_value_indices[g]);
+                        rc.coefficients.push_back(1.0);
+                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                            double coeff = saved_obj_coefficients[t][row];
+                            if (std::abs(coeff) < 1e-15) continue;
+                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            rc.indices.push_back((int)var_idx);
+                            rc.coefficients.push_back(-coeff);
+                        }
+                        idx_t y_idx = first_y + row;
+                        if (inner_is_min) {
+                            // MINIMIZE MIN inner: z_g - expr_r - M*y_r >= -M
+                            rc.indices.push_back((int)y_idx);
+                            rc.coefficients.push_back(-M);
+                            rc.sense = '>';
+                            rc.rhs = -M;
+                        } else {
+                            // MAXIMIZE MAX inner: z_g - expr_r + M*y_r <= M
+                            rc.indices.push_back((int)y_idx);
+                            rc.coefficients.push_back(M);
+                            rc.sense = '<';
+                            rc.rhs = M;
+                        }
+                        solver_input.global_constraints.push_back(std::move(rc));
+                    }
+                    // SUM(y) >= 1 per group
+                    SolverInput::RawConstraint sum_y;
+                    for (idx_t row : group_rows[g]) {
+                        sum_y.indices.push_back((int)(first_y + row));
+                        sum_y.coefficients.push_back(1.0);
+                    }
+                    sum_y.sense = '>';
+                    sum_y.rhs = 1.0;
+                    solver_input.global_constraints.push_back(std::move(sum_y));
+                }
+            }
+        }
+
+        // Phase B: Outer aggregate — combines K group values into scalar objective
+        bool outer_is_sum = (per_outer_objective_type == "sum");
+        bool outer_is_minmax = (per_outer_objective_type == "min" || per_outer_objective_type == "max");
+        bool outer_is_min = (per_outer_objective_type == "min");
+
+        if (inner_is_minmax && outer_is_sum) {
+            // Outer SUM: objective = sum of z_g's
+            for (idx_t g = 0; g < K; g++) {
+                solver_input.global_obj_coeffs[group_value_indices[g] - (num_rows * num_decide_vars)] = 1.0;
+            }
+        } else if (inner_is_minmax && outer_is_minmax) {
+            // Outer MIN/MAX over z_g's: create global w auxiliary
+            bool outer_easy = (outer_is_min && decide_sense == DecideSense::MAXIMIZE) ||
+                              (!outer_is_min && decide_sense == DecideSense::MINIMIZE);
+
+            idx_t w_idx = num_rows * num_decide_vars + solver_input.num_global_vars;
+            solver_input.num_global_vars += 1;
+            solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
+            solver_input.global_lower_bounds.push_back(-1e30);
+            solver_input.global_upper_bounds.push_back(1e30);
+            solver_input.global_obj_coeffs.push_back(1.0); // objective = w
+
+            if (outer_easy) {
+                // w >= z_g (for outer MAX) or w <= z_g (for outer MIN)
+                char sense_char = outer_is_min ? '<' : '>';
+                for (idx_t g = 0; g < K; g++) {
+                    SolverInput::RawConstraint rc;
+                    rc.sense = sense_char;
+                    rc.rhs = 0.0;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    rc.indices.push_back((int)group_value_indices[g]);
+                    rc.coefficients.push_back(-1.0);
+                    solver_input.global_constraints.push_back(std::move(rc));
+                }
+            } else {
+                // Hard outer: indicators over K groups
+                idx_t first_u = w_idx + 1;
+                solver_input.num_global_vars += K;
+                for (idx_t g = 0; g < K; g++) {
+                    solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
+                    solver_input.global_lower_bounds.push_back(0.0);
+                    solver_input.global_upper_bounds.push_back(1.0);
+                    solver_input.global_obj_coeffs.push_back(0.0);
+                }
+                // Big-M for outer: use a large value (z_g's are bounded by inner M)
+                double M_outer = compute_big_m();
+                for (idx_t g = 0; g < K; g++) {
+                    SolverInput::RawConstraint rc;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    rc.indices.push_back((int)group_value_indices[g]);
+                    rc.coefficients.push_back(-1.0);
+                    idx_t u_idx = first_u + g;
+                    if (outer_is_min) {
+                        // MINIMIZE MIN outer: w - z_g - M*u_g >= -M
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(-M_outer);
+                        rc.sense = '>';
+                        rc.rhs = -M_outer;
+                    } else {
+                        // MAXIMIZE MAX outer: w - z_g + M*u_g <= M
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(M_outer);
+                        rc.sense = '<';
+                        rc.rhs = M_outer;
+                    }
+                    solver_input.global_constraints.push_back(std::move(rc));
+                }
+                SolverInput::RawConstraint sum_u;
+                for (idx_t g = 0; g < K; g++) {
+                    sum_u.indices.push_back((int)(first_u + g));
+                    sum_u.coefficients.push_back(1.0);
+                }
+                sum_u.sense = '>';
+                sum_u.rhs = 1.0;
+                solver_input.global_constraints.push_back(std::move(sum_u));
+            }
+        } else if (!inner_is_minmax && outer_is_sum) {
+            // Inner SUM + Outer SUM: no-op (sum of group sums = global sum)
+            // Restore original objective coefficients
+            solver_input.objective_coefficients = std::move(saved_obj_coefficients);
+            solver_input.objective_variable_indices = std::move(saved_obj_var_indices);
+        } else if (!inner_is_minmax && outer_is_minmax) {
+            // Inner SUM + Outer MIN/MAX: compute per-group sums, then optimize over them
+            // Create w auxiliary for outer MIN/MAX over group sums
+            bool outer_easy = (outer_is_min && decide_sense == DecideSense::MAXIMIZE) ||
+                              (!outer_is_min && decide_sense == DecideSense::MINIMIZE);
+
+            idx_t w_idx = num_rows * num_decide_vars + solver_input.num_global_vars;
+            solver_input.num_global_vars += 1;
+            solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
+            solver_input.global_lower_bounds.push_back(-1e30);
+            solver_input.global_upper_bounds.push_back(1e30);
+            solver_input.global_obj_coeffs.push_back(1.0); // objective = w
+
+            // For each group g: w >= (or <=) sum_g(coeffs * x)
+            // sum_g = Σ_{r ∈ group_g} Σ_t coeff_t_r * x_{r,var_t}
+            if (outer_easy) {
+                char sense_char = outer_is_min ? '<' : '>';
+                for (idx_t g = 0; g < K; g++) {
+                    SolverInput::RawConstraint rc;
+                    rc.sense = sense_char;
+                    rc.rhs = 0.0;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    for (idx_t row : group_rows[g]) {
+                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                            double coeff = saved_obj_coefficients[t][row];
+                            if (std::abs(coeff) < 1e-15) continue;
+                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            rc.indices.push_back((int)var_idx);
+                            rc.coefficients.push_back(-coeff);
+                        }
+                    }
+                    solver_input.global_constraints.push_back(std::move(rc));
+                }
+            } else {
+                // Hard outer: indicators over K groups
+                double M_outer = compute_big_m() * num_rows; // group sums can be large
+                idx_t first_u = w_idx + 1;
+                solver_input.num_global_vars += K;
+                for (idx_t g = 0; g < K; g++) {
+                    solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
+                    solver_input.global_lower_bounds.push_back(0.0);
+                    solver_input.global_upper_bounds.push_back(1.0);
+                    solver_input.global_obj_coeffs.push_back(0.0);
+                }
+                for (idx_t g = 0; g < K; g++) {
+                    SolverInput::RawConstraint rc;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    for (idx_t row : group_rows[g]) {
+                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                            double coeff = saved_obj_coefficients[t][row];
+                            if (std::abs(coeff) < 1e-15) continue;
+                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            rc.indices.push_back((int)var_idx);
+                            rc.coefficients.push_back(-coeff);
+                        }
+                    }
+                    idx_t u_idx = first_u + g;
+                    if (outer_is_min) {
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(-M_outer);
+                        rc.sense = '>';
+                        rc.rhs = -M_outer;
+                    } else {
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(M_outer);
+                        rc.sense = '<';
+                        rc.rhs = M_outer;
+                    }
+                    solver_input.global_constraints.push_back(std::move(rc));
+                }
+                SolverInput::RawConstraint sum_u;
+                for (idx_t g = 0; g < K; g++) {
+                    sum_u.indices.push_back((int)(first_u + g));
+                    sum_u.coefficients.push_back(1.0);
+                }
+                sum_u.sense = '>';
+                sum_u.rhs = 1.0;
+                solver_input.global_constraints.push_back(std::move(sum_u));
+            }
+        }
+    } else if (!minmax_objective_type.empty() && !saved_obj_var_indices.empty()) {
+        // ================================================================
+        // PATH A: Non-PER flat MIN/MAX objective (existing behavior)
+        // ================================================================
         bool is_min_agg = (minmax_objective_type == "min");
-        // Easy cases: MAXIMIZE MIN → z <= expr_i, maximize z
-        //             MINIMIZE MAX → z >= expr_i, minimize z
-        // Hard cases: MAXIMIZE MAX → z <= expr_i + M*(1-y_i), SUM(y)>=1, maximize z
-        //             MINIMIZE MIN → z >= expr_i - M*(1-y_i), SUM(y)>=1, minimize z
         bool is_easy = (is_min_agg && decide_sense == DecideSense::MAXIMIZE) ||
                        (!is_min_agg && decide_sense == DecideSense::MINIMIZE);
 
-        idx_t z_idx = num_rows * num_decide_vars; // global variable index for z
+        idx_t z_idx = num_rows * num_decide_vars + solver_input.num_global_vars;
 
         // Create global variable z (continuous, unbounded)
-        solver_input.num_global_vars = 1;
-        solver_input.global_variable_types = {LogicalType::DOUBLE};
-        solver_input.global_lower_bounds = {-1e30};
-        solver_input.global_upper_bounds = {1e30};
-        solver_input.global_obj_coeffs = {1.0}; // objective = z
-
-        // Save objective data before clearing (we need it for constraint generation)
-        auto saved_obj_coefficients = solver_input.objective_coefficients;
-        auto saved_obj_var_indices = solver_input.objective_variable_indices;
+        solver_input.num_global_vars += 1;
+        solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
+        solver_input.global_lower_bounds.push_back(-1e30);
+        solver_input.global_upper_bounds.push_back(1e30);
+        solver_input.global_obj_coeffs.push_back(1.0); // objective = z
 
         // Clear per-row objective (z is the sole objective term now)
         solver_input.objective_coefficients.clear();
         solver_input.objective_variable_indices.clear();
 
         if (is_easy) {
-            // For each row r, create raw constraint:
-            //   MAXIMIZE MIN: z <= expr_r → z - expr_r <= 0
-            //   MINIMIZE MAX: z >= expr_r → z - expr_r >= 0
             char sense_char = is_min_agg ? '<' : '>';
-
             for (idx_t row = 0; row < num_rows; row++) {
                 SolverInput::RawConstraint rc;
                 rc.sense = sense_char;
                 rc.rhs = 0.0;
-
-                // z with coefficient +1
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
-
-                // -expr_r terms: for each objective term, negate its coefficient for this row
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                     idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t][row];
@@ -1325,27 +1731,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
-
                 solver_input.global_constraints.push_back(std::move(rc));
             }
         } else {
-            // Hard cases: need per-row binary indicators y_r
-            double M = 1e6; // Big-M value
+            double M = compute_big_m();
 
-            // Compute better M from variable bounds
-            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                idx_t var = saved_obj_var_indices[t];
-                double ub = solver_input.upper_bounds[var];
-                if (ub < 1e20) {
-                    double max_coef = 0.0;
-                    for (auto &v : saved_obj_coefficients[t]) {
-                        max_coef = std::max(max_coef, std::abs(v));
-                    }
-                    M = std::max(M, max_coef * ub);
-                }
-            }
-
-            // Add per-row binary indicator variables y_0..y_{N-1}
             idx_t first_y_idx = z_idx + 1;
             solver_input.num_global_vars += num_rows;
             for (idx_t r = 0; r < num_rows; r++) {
@@ -1355,17 +1745,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 solver_input.global_obj_coeffs.push_back(0.0);
             }
 
-            // Per-row linking constraints:
-            //   MAXIMIZE MAX: z <= expr_r + M*(1-y_r) → z - expr_r + M*y_r <= M
-            //   MINIMIZE MIN: z >= expr_r - M*(1-y_r) → z - expr_r - M*y_r >= -M
             for (idx_t row = 0; row < num_rows; row++) {
                 SolverInput::RawConstraint rc;
-
-                // z with coefficient +1
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
-
-                // -expr_r terms
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                     idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t][row];
@@ -1374,27 +1757,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
-
-                // y_r term
                 idx_t y_idx = first_y_idx + row;
                 if (is_min_agg) {
-                    // MINIMIZE MIN: z - expr_r - M*y_r >= -M
                     rc.indices.push_back((int)y_idx);
                     rc.coefficients.push_back(-M);
                     rc.sense = '>';
                     rc.rhs = -M;
                 } else {
-                    // MAXIMIZE MAX: z - expr_r + M*y_r <= M
                     rc.indices.push_back((int)y_idx);
                     rc.coefficients.push_back(M);
                     rc.sense = '<';
                     rc.rhs = M;
                 }
-
                 solver_input.global_constraints.push_back(std::move(rc));
             }
 
-            // SUM(y_r) >= 1: at least one indicator must be active
             SolverInput::RawConstraint sum_y;
             for (idx_t row = 0; row < num_rows; row++) {
                 sum_y.indices.push_back((int)(first_y_idx + row));

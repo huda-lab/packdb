@@ -54,6 +54,10 @@ public:
     // If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
     string minmax_objective_type;
 
+    // PER on objective: inner and outer aggregate types (empty if no PER on objective)
+    string per_inner_objective_type;
+    string per_outer_objective_type;
+
 public:
     // --- Implement virtual functions ---
 

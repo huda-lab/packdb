@@ -26,14 +26,60 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	}
 	case ExpressionClass::FUNCTION: {
 	    auto &func = expr.Cast<FunctionExpression>();
-	    // TODO(PER): PER on objective is currently a no-op (treated as global SUM).
-	    // Revisit when partition-solve is implemented — see context/descriptions/04_optimizer/problem_reduction/
+	    // PackDB: Handle PER on objective — preserve PER columns for per-group objectives
 	    if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
 	        D_ASSERT(func.children.size() >= 2);
-	        // Strip the PER wrapper, bind only the inner objective (child[0])
-	        // children[1..N] (the PER columns) are intentionally discarded
-	        expr_ptr = std::move(func.children[0]);
-	        return BindExpression(expr_ptr, depth, root_expression);
+
+	        // Validate each PER column
+	        for (idx_t i = 1; i < func.children.size(); i++) {
+	            if (ExpressionContainsDecideVariable(*func.children[i], variables)) {
+	                return BindResult(BinderException::Unsupported(*expr_ptr,
+	                    "PER column in MAXIMIZE/MINIMIZE cannot be a DECIDE variable. "
+	                    "PER must group by a table column."));
+	            }
+	            if (func.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+	                return BindResult(BinderException::Unsupported(*expr_ptr,
+	                    "PER columns in MAXIMIZE/MINIMIZE must be simple column references "
+	                    "(e.g., PER empID or PER (empID, dept)). Expressions are not supported."));
+	            }
+	        }
+
+	        // Bind the inner objective (child[0]) through normal objective binding
+	        is_top_expression = true;
+	        ErrorData obj_error;
+	        BindChild(func.children[0], depth, obj_error);
+	        if (obj_error.HasError()) {
+	            return BindResult(std::move(obj_error));
+	        }
+
+	        // Bind each PER column using base ExpressionBinder
+	        is_top_expression = false;
+	        binding_when_condition = true;
+	        for (idx_t i = 1; i < func.children.size(); i++) {
+	            ErrorData col_error;
+	            try {
+	                BindChild(func.children[i], depth, col_error);
+	            } catch (...) {
+	                binding_when_condition = false;
+	                throw;
+	            }
+	            if (col_error.HasError()) {
+	                binding_when_condition = false;
+	                return BindResult(std::move(col_error));
+	            }
+	        }
+	        binding_when_condition = false;
+
+	        // Construct tagged BoundConjunctionExpression:
+	        // child[0] = bound objective (possibly WHEN-wrapped)
+	        // children[1..N] = bound PER columns
+	        auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	        result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[0])));
+	        for (idx_t i = 1; i < func.children.size(); i++) {
+	            result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
+	        }
+	        result->alias = PER_CONSTRAINT_TAG;
+	        return BindResult(std::move(result));
 	    }
 	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition
 	    if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {

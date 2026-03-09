@@ -13,9 +13,9 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 |---|---|---|
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, scope, linearity | *(no planned features)* |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries, WHEN, PER | Correlated subqueries |
-| [maximize_minimize/](maximize_minimize/) | SUM, AVG, MIN/MAX, COUNT, multi-var, column arithmetic, WHEN on objective, ABS | PER on objective |
+| [maximize_minimize/](maximize_minimize/) | SUM, AVG, MIN/MAX, COUNT, multi-var, column arithmetic, WHEN on objective, ABS, PER on objective (nested aggregates) | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
-| [per/](per/) | PER on constraints (single + multi-column), WHEN+PER composition, row_group_ids architecture | PER on objective (partition-solve), row-varying RHS |
+| [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, COUNT (BOOLEAN/INTEGER), AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | COUNT (REAL), division |
 
 ---
@@ -42,7 +42,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `WHEN` on constraints | Yes | — |
 | `WHEN` on objective | Yes | — |
 | `PER` on constraints | Yes | — |
-| `PER` on objective | Accepted (no-op) | [per/todo.md](per/todo.md) (partition-solve) |
+| `PER` on objective | Yes (nested aggregate syntax) | — |
 | `MAXIMIZE SUM(...)` | Yes | — |
 | `MINIMIZE SUM(...)` | Yes | — |
 | `SUM()` over decision variables | Yes | — |
@@ -66,8 +66,9 @@ All previously planned priorities are **done**:
 
 7. ~~**Multi-column PER**~~ — done (`PER (col1, col2, ...)` with composite keys)
 
+8. ~~**PER on objective**~~ — done (nested aggregate syntax with two-level auxiliary formulation)
+
 **Remaining**:
-- **PER on objective** (partition-solve) — see [per/todo.md](per/todo.md)
 - **Row-varying RHS with PER** — see [per/todo.md](per/todo.md)
 - **Correlated subqueries** — see [such_that/todo.md](such_that/todo.md)
 

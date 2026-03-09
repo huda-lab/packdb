@@ -66,6 +66,10 @@ public:
     vector<pair<string, idx_t>> minmax_indicator_links;
     //! If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
     string minmax_objective_type;
+    //! PER on objective: inner aggregate type ("sum", "min", "max"), empty if no PER
+    string per_inner_objective_type;
+    //! PER on objective: outer aggregate type ("sum", "min", "max"), empty if no PER
+    string per_outer_objective_type;
 	//! list of groups
 	BoundGroupByNode groups;
 	//! HAVING clause

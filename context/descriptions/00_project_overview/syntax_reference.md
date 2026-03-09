@@ -115,7 +115,26 @@ SUCH THAT
     SUM(x * hours) <= 30 WHEN title = 'Director' PER (empID, department)
 ```
 
-### 7.2 Restrictions
+### 7.2 PER on Objective — Nested Aggregates
+
+PER on objectives uses nested aggregate syntax to specify both per-group and across-group aggregation:
+
+```sql
+-- Nested aggregate: OUTER(INNER(expr)) PER col
+MINIMIZE SUM(MAX(x * cost)) PER department
+MAXIMIZE MIN(SUM(x * profit)) PER region
+MINIMIZE MAX(SUM(x * hours)) PER empID
+```
+
+All 9 combinations of `SUM`/`MIN`/`MAX` for outer and inner aggregates are supported.
+
+**Flat aggregate + PER**:
+- `SUM(expr) PER col` or `AVG(expr) PER col`: Accepted (no-op — global sum equals sum of group sums).
+- `MIN(expr) PER col` or `MAX(expr) PER col` (flat): **Error** — use nested form instead.
+
+WHEN + PER composition is supported: `MINIMIZE MAX(SUM(x * hours)) WHEN active = 1 PER empID`.
+
+### 7.3 Restrictions
 
 - **Aggregate-only**: PER requires a SUM constraint (per-row constraints are rejected).
 - **Column references only**: Each PER column must be a simple column reference, not an expression or decision variable.

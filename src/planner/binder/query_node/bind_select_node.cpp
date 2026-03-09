@@ -1130,33 +1130,83 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             }
         }
 
-        // Detect MIN/MAX in objective and rewrite to SUM for normalization
-        // The execution layer will intercept and generate the correct formulation
+        // Detect MIN/MAX in objective and rewrite to SUM for normalization.
+        // Also detect nested aggregate patterns for PER objectives:
+        //   SUM(MAX(expr)) PER col → inner=max, outer=sum
+        //   MAX(SUM(expr)) PER col → inner=sum, outer=max
         string minmax_objective_type;
+        string per_inner_objective_type;
+        string per_outer_objective_type;
         if (statement.decide_objective) {
-            // Unwrap optional WHEN wrapper to inspect the inner objective
             auto *obj_expr = statement.decide_objective.get();
             unique_ptr<ParsedExpression> *obj_owner = &statement.decide_objective;
+
+            // Unwrap PER wrapper (outermost layer) to inspect inner
+            bool has_per = false;
+            FunctionExpression *per_func = nullptr;
+            if (obj_expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
+                auto &func = obj_expr->Cast<FunctionExpression>();
+                if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG && !func.children.empty()) {
+                    has_per = true;
+                    per_func = &func;
+                    obj_expr = func.children[0].get();
+                    obj_owner = &func.children[0];
+                }
+            }
+
+            // Unwrap WHEN wrapper (inside PER, if present)
             if (obj_expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
                 auto &func = obj_expr->Cast<FunctionExpression>();
                 if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
                     obj_expr = func.children[0].get();
                     obj_owner = &func.children[0];
                 }
-                // Also unwrap PER (stripped by objective binder, but check inner)
-                if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG && !func.children.empty()) {
-                    obj_expr = func.children[0].get();
-                    obj_owner = &func.children[0];
-                }
             }
+
+            // Now obj_expr points to the actual aggregate(s)
             if (obj_expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-                auto &func = obj_expr->Cast<FunctionExpression>();
-                auto fname = StringUtil::Lower(func.function_name);
-                if ((fname == "min" || fname == "max") && func.children.size() == 1 &&
-                    ReferencesDecideVariable(*func.children[0], decide_variable_names)) {
-                    minmax_objective_type = fname;
-                    // Rewrite MIN/MAX → SUM so it flows through normalization
-                    func.function_name = "sum";
+                auto &outer_func = obj_expr->Cast<FunctionExpression>();
+                auto outer_name = StringUtil::Lower(outer_func.function_name);
+
+                // Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX
+                bool found_nested = false;
+                if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max") &&
+                    outer_func.children.size() == 1 &&
+                    outer_func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
+                    auto &inner_func = outer_func.children[0]->Cast<FunctionExpression>();
+                    auto inner_name = StringUtil::Lower(inner_func.function_name);
+
+                    if ((inner_name == "sum" || inner_name == "min" || inner_name == "max") &&
+                        inner_func.children.size() == 1 &&
+                        ReferencesDecideVariable(*inner_func.children[0], decide_variable_names)) {
+                        found_nested = true;
+                        per_outer_objective_type = outer_name;
+                        per_inner_objective_type = inner_name;
+
+                        // Rewrite inner MIN/MAX → SUM for normalization
+                        if (inner_name == "min" || inner_name == "max") {
+                            inner_func.function_name = "sum";
+                        }
+                        // Strip outer wrapper: replace OUTER(INNER(expr)) with INNER(expr)
+                        *obj_owner = std::move(outer_func.children[0]);
+                    }
+                }
+                if (!found_nested && has_per && (outer_name == "min" || outer_name == "max") &&
+                           outer_func.children.size() == 1 &&
+                           ReferencesDecideVariable(*outer_func.children[0], decide_variable_names)) {
+                    // Flat MIN/MAX + PER → error (ambiguous without outer aggregate)
+                    throw BinderException(
+                        "MINIMIZE/MAXIMIZE %s(...) PER is ambiguous. "
+                        "With PER, use a nested aggregate to specify how per-group values are combined: "
+                        "e.g., SUM(%s(...)) PER col or MAX(%s(...)) PER col.",
+                        StringUtil::Upper(outer_name), StringUtil::Upper(outer_name),
+                        StringUtil::Upper(outer_name));
+                } else if (!found_nested && !has_per && (outer_name == "min" || outer_name == "max") &&
+                           outer_func.children.size() == 1 &&
+                           ReferencesDecideVariable(*outer_func.children[0], decide_variable_names)) {
+                    // Non-PER MIN/MAX objective (existing behavior)
+                    minmax_objective_type = outer_name;
+                    outer_func.function_name = "sum";
                 }
             }
         }
@@ -1212,6 +1262,8 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         result->ne_indicator_indices = std::move(ne_indicator_indices);
         result->minmax_indicator_links = std::move(minmax_indicator_links);
         result->minmax_objective_type = std::move(minmax_objective_type);
+        result->per_inner_objective_type = std::move(per_inner_objective_type);
+        result->per_outer_objective_type = std::move(per_outer_objective_type);
 
         // Hide auxiliary vars from SELECT * by truncating the bind context binding.
         // The decide_variables vector still has ALL vars (user + aux) for the execution layer,

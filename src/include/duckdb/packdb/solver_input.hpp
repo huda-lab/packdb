@@ -52,6 +52,10 @@ struct SolverInput {
     vector<idx_t> objective_variable_indices;      // [term_idx]
     DecideSense sense;
 
+    // Objective PER grouping (mirrors constraint row_group_ids pattern)
+    vector<idx_t> objective_row_group_ids;  // per-row group assignment
+    idx_t objective_num_groups = 0;          // 0 = ungrouped
+
     // Global auxiliary variables (exist once, not replicated per row)
     // Appended after the per-row grid at indices num_rows * num_decide_vars + i
     idx_t num_global_vars = 0;
