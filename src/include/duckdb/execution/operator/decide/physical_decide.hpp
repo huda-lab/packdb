@@ -27,8 +27,8 @@ struct LinearConstraint {
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
     bool was_avg_rewrite = false;        // True if this aggregate was originally AVG (RHS needs scaling)
-    unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
-    unique_ptr<Expression> per_column;     // PackDB: optional PER grouping column (nullptr = no grouping)
+    unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
+    vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
 
     LinearConstraint() = default;
 };

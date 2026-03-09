@@ -15,7 +15,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries, WHEN, PER | Correlated subqueries |
 | [maximize_minimize/](maximize_minimize/) | SUM, AVG, MIN/MAX, COUNT, multi-var, column arithmetic, WHEN on objective, ABS | PER on objective |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
-| [per/](per/) | PER on constraints, WHEN+PER composition, row_group_ids architecture | Multi-column PER, PER on objective (partition-solve), row-varying RHS |
+| [per/](per/) | PER on constraints (single + multi-column), WHEN+PER composition, row_group_ids architecture | PER on objective (partition-solve), row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, COUNT (BOOLEAN/INTEGER), AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | COUNT (REAL), division |
 
 ---
@@ -64,9 +64,11 @@ All previously planned priorities are **done**:
 5. ~~**COUNT() for INTEGER**~~ — done (Big-M indicator rewrite)
 6. ~~**MIN() / MAX()**~~ — done (per-row + Big-M linearization)
 
+7. ~~**Multi-column PER**~~ — done (`PER (col1, col2, ...)` with composite keys)
+
 **Remaining**:
 - **PER on objective** (partition-solve) — see [per/todo.md](per/todo.md)
-- **Multi-column PER** — see [per/todo.md](per/todo.md)
+- **Row-varying RHS with PER** — see [per/todo.md](per/todo.md)
 - **Correlated subqueries** — see [such_that/todo.md](such_that/todo.md)
 
 ---

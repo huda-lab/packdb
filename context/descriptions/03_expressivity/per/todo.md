@@ -2,17 +2,6 @@
 
 ---
 
-## Multi-Column PER
-
-```sql
--- NOT YET SUPPORTED
-SUM(x) <= 40 PER (empID, department)
-```
-
-Requires grammar support for parenthesized column lists (comma conflicts with constraint separator), and multi-column group ID assignment. The `row_group_ids` architecture supports this natively — just compute group IDs from the combination of column values.
-
----
-
 ## PER on Objective (Partition-Solve Semantics)
 
 PER on the objective is accepted by the grammar and binder but currently treated as equivalent to global SUM (no-op). This becomes meaningful when partition-solve is implemented:

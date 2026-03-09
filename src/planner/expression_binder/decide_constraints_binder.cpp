@@ -324,23 +324,27 @@ static bool IsAggregateConstraint(const ParsedExpression &expr) {
 
 BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &func = expr_ptr->Cast<FunctionExpression>();
-    D_ASSERT(func.children.size() == 2);
+    D_ASSERT(func.children.size() >= 2);
 
     auto &constraint_child = func.children[0];  // constraint (possibly WHEN-wrapped)
-    auto &column_child = func.children[1];       // PER column (ColumnRefExpression)
 
-    // Validate: PER column must not reference a DECIDE variable
-    if (ExpressionContainsDecideVariable(*column_child, variables)) {
-        return BindResult(BinderException::Unsupported(*expr_ptr,
-            "PER column cannot be a DECIDE variable. "
-            "PER must group by a table column."));
-    }
+    // Validate each PER column (children[1..N])
+    for (idx_t i = 1; i < func.children.size(); i++) {
+        auto &column_child = func.children[i];
 
-    // Validate: PER column must be a simple column reference
-    if (column_child->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-        return BindResult(BinderException::Unsupported(*expr_ptr,
-            "PER currently supports only a single table column reference "
-            "(e.g., PER empID). Expressions are not supported."));
+        // Validate: PER column must not reference a DECIDE variable
+        if (ExpressionContainsDecideVariable(*column_child, variables)) {
+            return BindResult(BinderException::Unsupported(*expr_ptr,
+                "PER column cannot be a DECIDE variable. "
+                "PER must group by a table column."));
+        }
+
+        // Validate: PER column must be a simple column reference
+        if (column_child->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+            return BindResult(BinderException::Unsupported(*expr_ptr,
+                "PER columns must be simple column references "
+                "(e.g., PER empID or PER (empID, dept)). Expressions are not supported."));
+        }
     }
 
     // Validate: constraint must be aggregate (SUM-based)
@@ -359,31 +363,33 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
         return BindResult(std::move(constraint_error));
     }
 
-    // Bind the PER column using the base ExpressionBinder
+    // Bind each PER column using the base ExpressionBinder
     // (reuse binding_when_condition flag to bypass DECIDE-specific dispatch)
     is_top_expression = false;
     binding_when_condition = true;
-    ErrorData column_error;
-    try {
-        BindChild(func.children[1], depth, column_error);
-    } catch (...) {
-        binding_when_condition = false;
-        throw;
+    for (idx_t i = 1; i < func.children.size(); i++) {
+        ErrorData column_error;
+        try {
+            BindChild(func.children[i], depth, column_error);
+        } catch (...) {
+            binding_when_condition = false;
+            throw;
+        }
+        if (column_error.HasError()) {
+            binding_when_condition = false;
+            return BindResult(std::move(column_error));
+        }
     }
     binding_when_condition = false;
-    if (column_error.HasError()) {
-        return BindResult(std::move(column_error));
-    }
 
     // Construct tagged bound result:
     // child[0] = bound constraint (possibly WHEN-wrapped)
-    // child[1] = bound PER column (BoundColumnRefExpression)
-    auto &bound_constraint = BoundExpression::GetExpression(*func.children[0]);
-    auto &bound_column = BoundExpression::GetExpression(*func.children[1]);
-
+    // children[1..N] = bound PER columns (BoundColumnRefExpression)
     auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-    result->children.push_back(std::move(bound_constraint));
-    result->children.push_back(std::move(bound_column));
+    result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[0])));
+    for (idx_t i = 1; i < func.children.size(); i++) {
+        result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
+    }
     result->alias = PER_CONSTRAINT_TAG;
     return BindResult(std::move(result));
 }

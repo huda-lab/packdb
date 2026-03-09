@@ -30,25 +30,32 @@ PER groups aggregate constraints by distinct column values. One ILP constraint i
 ### Syntax
 
 ```sql
--- Constraint (single-column PER only, multi-column deferred)
+-- Constraint: single-column PER
 constraint_expression [WHEN condition] PER column
+
+-- Constraint: multi-column PER
+constraint_expression [WHEN condition] PER (column1, column2, ...)
 
 -- Objective (accepted, treated as global SUM — see Deferred Features in todo.md)
 MAXIMIZE SUM(...) PER column
+MAXIMIZE SUM(...) PER (column1, column2, ...)
 ```
 
-**Example**:
+**Examples**:
 
 ```sql
 -- One constraint per distinct empID
 SUCH THAT SUM(x * hours) <= 40 PER empID
+
+-- One constraint per distinct (empID, department) combination
+SUCH THAT SUM(x * hours) <= 40 PER (empID, department)
 ```
 
 ### Semantics
 
-`PER column` causes the system to:
-1. Find all distinct values of `column` in the input relation (after any `WHEN` filter).
-2. Generate one copy of the constraint for each distinct value, applying that value as an implicit filter.
+`PER column` (or `PER (col1, col2, ...)`) causes the system to:
+1. Find all distinct values (or composite key combinations) of the PER column(s) in the input relation (after any `WHEN` filter).
+2. Generate one copy of the constraint for each distinct value/combination, applying it as an implicit filter.
 
 The constraint `SUM(new_hours) <= 40 PER empID` is semantically equivalent to:
 
@@ -84,10 +91,13 @@ MINIMIZE SUM(x * cost) PER department
 ## Restrictions
 
 - **Aggregate-only**: PER requires a SUM constraint. Per-row constraints produce a binder error.
-- **Single-column**: Only `PER column` (not `PER (col1, col2)`).
+- **Column references only**: Each PER column must be a simple column reference, not an expression. DECIDE variables are not allowed.
 - **Constant RHS**: No row-varying RHS with PER.
-- **Table columns only**: PER column must be a table column, not a DECIDE variable or expression.
-- **NULL handling**: NULL PER values exclude the row (`INVALID_INDEX`), matching SQL GROUP BY behavior.
+- **NULL handling**: NULL in any PER column excludes the row (`INVALID_INDEX`), matching SQL GROUP BY behavior.
+
+### Multi-column PER
+
+Multi-column PER uses parenthesized column lists: `PER (col1, col2, ...)`. Groups are formed by distinct combinations of all PER column values. A composite key is built from the per-row values of all columns, using null-byte separation for collision-free hashing. `PER (col)` with a single column in parens is equivalent to `PER col`.
 
 ---
 
@@ -154,7 +164,7 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 ## Files Modified
 
 - `src/include/duckdb/common/enums/decide.hpp` — `PER_CONSTRAINT_TAG`
-- `src/include/duckdb/execution/operator/decide/physical_decide.hpp` — `LinearConstraint::per_column`
+- `src/include/duckdb/execution/operator/decide/physical_decide.hpp` — `LinearConstraint::per_columns`
 - `src/include/duckdb/packdb/solver_input.hpp` — `row_group_ids` replaces `row_mask`
 - `third_party/libpg_query/` — grammar rules, keyword, enum
 - `src/parser/transform/expression/transform_operator.cpp` — transformer

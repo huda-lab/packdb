@@ -331,24 +331,28 @@ public:
 
     void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr,
                            unique_ptr<Expression> when_condition = nullptr,
-                           unique_ptr<Expression> per_column = nullptr) {
+                           vector<unique_ptr<Expression>> per_columns = {}) {
         auto &expr = *expr_ptr;
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
                 // PackDB: PER wrapper — outermost layer
-                if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() == 2) {
+                if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
                     // child[0] = the constraint (possibly WHEN-wrapped)
-                    // child[1] = the PER column expression
+                    // children[1..N] = the PER column expressions
+                    vector<unique_ptr<Expression>> per_cols;
+                    for (idx_t i = 1; i < conj.children.size(); i++) {
+                        per_cols.push_back(conj.children[i]->Copy());
+                    }
                     AnalyzeConstraint(conj.children[0], std::move(when_condition),
-                                      conj.children[1]->Copy());
+                                      std::move(per_cols));
                     break;
                 }
                 // PackDB: Check if this is a WHEN constraint wrapper
                 if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
                     // child[0] = the actual constraint, child[1] = the WHEN condition
                     AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(),
-                                      std::move(per_column));
+                                      std::move(per_columns));
                     break;
                 }
                 // Regular conjunction: recursively analyze each child
@@ -365,12 +369,12 @@ public:
                 constraint->comparison_type = comp.type;
                 constraint->rhs_expr = comp.right->Copy();
 
-                // PackDB: Store WHEN condition and PER column if present
+                // PackDB: Store WHEN condition and PER columns if present
                 if (when_condition) {
                     constraint->when_condition = std::move(when_condition);
                 }
-                if (per_column) {
-                    constraint->per_column = std::move(per_column);
+                if (!per_columns.empty()) {
+                    constraint->per_columns = std::move(per_columns);
                 }
 
                 // Extract terms from LHS
@@ -484,8 +488,8 @@ public:
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // PackDB PER: only recurse into the constraint (child[0]), skip the column
-                if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() == 2) {
+                // PackDB PER: only recurse into the constraint (child[0]), skip the columns
+                if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
                     TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
                     break;
                 }
@@ -798,7 +802,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // - PER only: row_group_ids[row] = 0..K-1 (group id), INVALID_INDEX for NULL PER values, num_groups = K
         // - WHEN+PER: WHEN filters first, then PER groups the remaining rows
         bool has_when = (constraint->when_condition != nullptr);
-        bool has_per = (constraint->per_column != nullptr);
+        bool has_per = (!constraint->per_columns.empty());
 
         if (has_when || has_per) {
             // Step 1: Evaluate WHEN condition (if present) to get per-row booleans
@@ -831,28 +835,32 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
             }
 
-            // Step 2: Evaluate PER column (if present) to get per-row values
-            vector<Value> per_values;
+            // Step 2: Evaluate PER columns (if present) to get per-row values
+            // For multi-column PER, we evaluate each column separately and build composite keys
+            vector<vector<Value>> all_per_values;  // [col_idx][row_idx]
             if (has_per) {
-                auto transformed_col = TransformToChunkExpression(*constraint->per_column, context);
-                ExpressionExecutor per_executor(context);
-                per_executor.AddExpression(*transformed_col);
+                all_per_values.resize(constraint->per_columns.size());
+                for (idx_t col_idx = 0; col_idx < constraint->per_columns.size(); col_idx++) {
+                    auto transformed_col = TransformToChunkExpression(*constraint->per_columns[col_idx], context);
+                    ExpressionExecutor per_executor(context);
+                    per_executor.AddExpression(*transformed_col);
 
-                per_values.reserve(num_rows);
+                    all_per_values[col_idx].reserve(num_rows);
 
-                ColumnDataScanState per_scan_state;
-                gstate.data.InitializeScan(per_scan_state);
-                DataChunk per_chunk;
-                per_chunk.Initialize(context, gstate.data.Types());
+                    ColumnDataScanState per_scan_state;
+                    gstate.data.InitializeScan(per_scan_state);
+                    DataChunk per_chunk;
+                    per_chunk.Initialize(context, gstate.data.Types());
 
-                while (gstate.data.Scan(per_scan_state, per_chunk)) {
-                    DataChunk per_result;
-                    per_result.Initialize(context, {transformed_col->return_type});
-                    per_executor.Execute(per_chunk, per_result);
+                    while (gstate.data.Scan(per_scan_state, per_chunk)) {
+                        DataChunk per_result;
+                        per_result.Initialize(context, {transformed_col->return_type});
+                        per_executor.Execute(per_chunk, per_result);
 
-                    auto &vec = per_result.data[0];
-                    for (idx_t row_in_chunk = 0; row_in_chunk < per_chunk.size(); row_in_chunk++) {
-                        per_values.push_back(vec.GetValue(row_in_chunk));
+                        auto &vec = per_result.data[0];
+                        for (idx_t row_in_chunk = 0; row_in_chunk < per_chunk.size(); row_in_chunk++) {
+                            all_per_values[col_idx].push_back(vec.GetValue(row_in_chunk));
+                        }
                     }
                 }
             }
@@ -862,7 +870,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
             if (has_per) {
                 // PER (with or without WHEN)
-                // Map distinct PER values to group IDs (first-seen order)
+                // Map distinct composite PER keys to group IDs (first-seen order)
                 unordered_map<string, idx_t> value_to_group;
                 idx_t next_group = 0;
 
@@ -872,13 +880,28 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
                         continue;
                     }
-                    // NULL PER values: excluded (matches SQL GROUP BY NULL semantics)
-                    if (per_values[row].IsNull()) {
+                    // NULL in any PER column: excluded (matches SQL GROUP BY NULL semantics)
+                    bool has_null = false;
+                    for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
+                        if (all_per_values[col_idx][row].IsNull()) {
+                            has_null = true;
+                            break;
+                        }
+                    }
+                    if (has_null) {
                         eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
                         continue;
                     }
-                    // Assign group ID by PER value
-                    string key = per_values[row].ToString();
+                    // Build composite key from all PER column values
+                    // Use null-byte separator (cannot appear in ToString output)
+                    string key;
+                    for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
+                        if (col_idx > 0) {
+                            key.push_back('\0');
+                        }
+                        key += all_per_values[col_idx][row].ToString();
+                    }
+                    // Assign group ID by composite key
                     auto it = value_to_group.find(key);
                     if (it == value_to_group.end()) {
                         value_to_group[key] = next_group;

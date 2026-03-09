@@ -95,13 +95,14 @@ MINIMIZE SUM(x * cost) WHEN region = 'US'
 
 ## 7. Group-Scoped Constraints — `PER`
 
-The `PER` keyword generates one constraint per distinct value of a column.
+The `PER` keyword generates one constraint per distinct value (or combination of values) of column(s).
 
-**Syntax**: `SUM(expr) comparison rhs PER column`
+**Syntax**: `SUM(expr) comparison rhs PER column` or `PER (col1, col2, ...)`
 
 ```sql
 SUCH THAT
     SUM(x * hours) <= 40 PER empID
+    SUM(x * hours) <= 40 PER (empID, department)
 ```
 
 ### 7.1 PER + WHEN Composition
@@ -111,12 +112,12 @@ WHEN filters rows first, then PER groups the remaining rows:
 ```sql
 SUCH THAT
     SUM(x * hours) <= 30 WHEN title = 'Director' PER empID
+    SUM(x * hours) <= 30 WHEN title = 'Director' PER (empID, department)
 ```
 
 ### 7.2 Restrictions
 
 - **Aggregate-only**: PER requires a SUM constraint (per-row constraints are rejected).
-- **Single-column**: Only `PER column` (not `PER (col1, col2)`).
+- **Column references only**: Each PER column must be a simple column reference, not an expression or decision variable.
 - **Constant RHS**: The right-hand side must be constant across groups.
-- **Table columns only**: PER column must be a table column, not a decision variable.
-- **NULL handling**: Rows where the PER column is NULL are excluded.
+- **NULL handling**: Rows where any PER column is NULL are excluded.
