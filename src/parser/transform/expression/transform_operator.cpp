@@ -219,12 +219,21 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return std::move(result);
 	}
 	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT: {
-		// PackDB: constraint PER column
+		// PackDB: constraint PER column(s)
 		auto constraint_expr = TransformExpression(root.lexpr);
-		auto per_column_expr = TransformExpression(root.rexpr);
 		vector<unique_ptr<ParsedExpression>> children;
 		children.push_back(std::move(constraint_expr));
-		children.push_back(std::move(per_column_expr));
+		// Multi-column PER: rexpr is a PGList of column refs
+		if (root.rexpr->type == duckdb_libpgquery::T_PGList) {
+			auto *list = reinterpret_cast<duckdb_libpgquery::PGList *>(root.rexpr);
+			for (auto cell = list->head; cell != nullptr; cell = cell->next) {
+				auto *col_node = reinterpret_cast<duckdb_libpgquery::PGNode *>(cell->data.ptr_value);
+				children.push_back(TransformExpression(col_node));
+			}
+		} else {
+			// Single column PER
+			children.push_back(TransformExpression(root.rexpr));
+		}
 		auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(children));
 		result->is_operator = true;
 		return std::move(result);

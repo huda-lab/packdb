@@ -198,10 +198,6 @@ def test_sum_strict_greater_than(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-@pytest.mark.xfail(
-    reason="Not-equal (<>) on SUM is a disjunctive constraint — may not be supported",
-    strict=False,
-)
 def test_sum_not_equal(packdb_cli):
     """SUM(x) <> 5 — not-equal on aggregate (disjunctive, hard for ILP)."""
     result, _ = packdb_cli.execute("""
@@ -215,3 +211,64 @@ def test_sum_not_equal(packdb_cli):
     assert len(result) > 0
     total = sum(row[4] for row in result)
     assert total != 5, f"SUM(x) = {total}, expected <> 5"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_integer
+@pytest.mark.obj_maximize
+def test_perrow_not_equal(packdb_cli):
+    """x <> 3 — per-row not-equal constraint."""
+    result, _ = packdb_cli.execute("""
+        SELECT l_orderkey, l_linenumber, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x
+        SUCH THAT x <> 3
+            AND x <= 5
+            AND SUM(x * l_quantity) <= 500
+        MAXIMIZE SUM(x * l_extendedprice)
+    """)
+    assert len(result) > 0
+    x_idx = 2
+    for row in result:
+        assert row[x_idx] != 3, f"x={row[x_idx]}, expected <> 3"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+def test_sum_not_equal_zero(packdb_cli):
+    """SUM(x) <> 0 — forces at least one selected."""
+    result, _ = packdb_cli.execute("""
+        SELECT l_orderkey, l_linenumber, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <> 0
+            AND SUM(x) <= 3
+        MAXIMIZE SUM(x * l_extendedprice)
+    """)
+    assert len(result) > 0
+    total = sum(row[2] for row in result)
+    assert total != 0, f"SUM(x) = {total}, expected <> 0"
+    assert total >= 1, f"SUM(x) must be at least 1"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.when
+@pytest.mark.obj_maximize
+def test_sum_not_equal_with_when(packdb_cli):
+    """SUM(x) <> 5 WHEN condition — NE with conditional application."""
+    result, _ = packdb_cli.execute("""
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <> 5 WHEN l_quantity > 20
+            AND SUM(x * l_quantity) <= 200
+        MAXIMIZE SUM(x * l_extendedprice)
+    """)
+    assert len(result) > 0
+    conditional_total = sum(row[3] for row in result if row[2] > 20)
+    assert conditional_total != 5, \
+        f"SUM(x) WHEN l_quantity > 20 = {conditional_total}, expected <> 5"

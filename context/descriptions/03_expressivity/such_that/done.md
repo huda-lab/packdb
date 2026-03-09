@@ -22,15 +22,16 @@ Multiple constraints are separated by `AND`. Each constraint evaluates to a bool
 
 Any comparison involving at least one decision variable (or aggregate over one).
 
-**Supported operators**: `=`, `<`, `<=`, `>`, `>=`
+**Supported operators**: `=`, `<`, `<=`, `>`, `>=`, `<>`
 
-> **Note**: `<>` (not-equal) is accepted by the parser but **rejected by the binder on aggregates** (e.g., `SUM(x) <> 5`). Not-equal is a disjunctive constraint that requires Big-M reformulation — see [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md).
+`<>` (not-equal) is supported on both per-row and aggregate constraints using Big-M disjunction with an auxiliary binary indicator variable. See [../sql_functions/done.md](../sql_functions/done.md) for linearization details.
 
 ```sql
 SUCH THAT
     x <= 1                      -- per-row: each x is at most 1
     SUM(x * weight) <= 50       -- aggregate: total weight under budget
     SUM(x) >= 10                -- at least 10 items selected
+    SUM(x) <> 5                 -- not-equal via Big-M disjunction
 ```
 
 ### BETWEEN
@@ -44,14 +45,15 @@ SUCH THAT
 
 ### IN
 
-`column IN (val1, val2, ...)` constrains a **table column** value to be in the provided set.
+`column IN (val1, val2, ...)` constrains a **table column** value to be in the provided set. Also supported on **decision variables**.
 
 ```sql
 SUCH THAT
     category IN ('A', 'B', 'C')    -- row-level filter on a table column
+    x IN (0, 1, 3)                 -- decision variable domain restriction
 ```
 
-> **Limitation**: `IN` on **decision variables** (e.g., `x IN (0, 1, 3)`) is parsed and bound but **does not enforce the domain restriction** at the solver level. The constraint silently has no effect. Proper support requires auxiliary binary variables — see [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md).
+**Decision variable IN**: `x IN (v1, ..., vK)` is rewritten at bind time into K auxiliary binary indicator variables. See [../sql_functions/done.md](../sql_functions/done.md) for the full rewrite details, optimizations, and complexity analysis.
 
 ---
 
@@ -139,10 +141,10 @@ SUCH THAT
 ## Code Pointers
 
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
-  - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=` (`<>` is rejected on aggregates)
+  - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=`, `<>` (all operators on both per-row and aggregate)
   - `BindBetween()` (lines 216-232) — desugars to two comparison constraints
   - `BindOperator()` (lines 198-210) — handles IN clause
   - `BindWhenConstraint()` (lines 258-302) — handles WHEN modifier
-  - Lines 358-367: Validates that only SUM is used as aggregate function
+  - Validates that only SUM, AVG, MIN, and MAX are used as aggregate functions
 
 - **Execution** (constraint matrix construction): `src/execution/operator/decide/physical_decide.cpp`

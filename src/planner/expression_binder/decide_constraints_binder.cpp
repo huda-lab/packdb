@@ -51,7 +51,7 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                 return true;
             }
             auto fn = StringUtil::Lower(func.function_name);
-            if (fn == "sum" || fn == "avg") {
+            if (fn == "sum" || fn == "avg" || fn == "min" || fn == "max") {
                 if (func.children.empty()) {
                     return false;
                 }
@@ -158,7 +158,8 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     case ExpressionType::COMPARE_LESSTHAN:
     case ExpressionType::COMPARE_GREATERTHAN:
     case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-    case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
+    case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+    case ExpressionType::COMPARE_NOTEQUAL: {
         switch (left_type) {
             case DecideExpression::VARIABLE: {
                 // Multi-variable per-row constraints allowed (e.g., ABS linearization: d >= x - c)
@@ -170,8 +171,8 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                 }
                 auto &lhs_func = comp.left->Cast<FunctionExpression>();
                 auto lhs_fname = StringUtil::Lower(lhs_func.function_name);
-                if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg") {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...) or AVG(...)"));
+                if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg" && lhs_fname != "min" && lhs_fname != "max") {
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...), AVG(...), MIN(...), or MAX(...)"));
                 }
                 if (!IsAllowedConstraintRHS(right, variables) || HasVariableExpression(right, variables)) {
                     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
@@ -196,14 +197,8 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
     auto &op = expr.Cast<OperatorExpression>();
     switch (op.type) {
     case ExpressionType::COMPARE_IN:{
-        if (IsVariableExpression(*op.children.front(), variables)) {
-            // x IN (1,2,3) — decision variable with domain restriction
-            return BindResult(BinderException::Unsupported(expr,
-                "IN domain constraints on DECIDE variables are not yet supported. "
-                "For binary domains, use IS BOOLEAN. "
-                "For bounded integers, use comparison constraints (e.g., x >= 0 AND x <= 5)"));
-        }
-        // SUM(x) IN (...), table_col IN (...), etc.
+        // Variable-level IN (x IN (1,2,3)) is rewritten before binding.
+        // If we reach here, it's an aggregate IN or unrewritten edge case.
         return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
             "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
             op.children.front()->ToString())));
@@ -319,7 +314,7 @@ static bool IsAggregateConstraint(const ParsedExpression &expr) {
         if (comp.left->GetExpressionClass() == ExpressionClass::FUNCTION) {
             auto &lhs = comp.left->Cast<FunctionExpression>();
             auto lhs_fn = StringUtil::Lower(lhs.function_name);
-            if (lhs_fn == "sum" || lhs_fn == "avg") {
+            if (lhs_fn == "sum" || lhs_fn == "avg" || lhs_fn == "min" || lhs_fn == "max") {
                 return true;
             }
         }
@@ -451,14 +446,19 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "sum" || fname == "avg") {
+		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
             if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
             return DecideExpression::SUM;
-		} else {
-            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM or AVG is allowed.", func.function_name);
+		} else if (ExpressionContainsDecideVariable(expr, variables)) {
+            // Operator/function expressions containing DECIDE variables
+            // are treated as per-row multi-variable constraints
+            // (e.g., z_1 + z_2 + z_3 from IN rewrite, or d - x from ABS linearization)
+            return DecideExpression::VARIABLE;
+        } else {
+            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
     }

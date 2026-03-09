@@ -60,6 +60,12 @@ public:
     idx_t num_auxiliary_vars = 0;
     //! Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
     vector<pair<idx_t, idx_t>> count_indicator_links;
+    //! Indices of auxiliary indicator variables for not-equal (<>) constraints
+    vector<idx_t> ne_indicator_indices;
+    //! Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
+    vector<pair<string, idx_t>> minmax_indicator_links;
+    //! If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
+    string minmax_objective_type;
 	//! list of groups
 	BoundGroupByNode groups;
 	//! HAVING clause

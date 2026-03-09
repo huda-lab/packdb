@@ -8,14 +8,14 @@ This file documents which SQL functions and expressions work inside DECIQL claus
 
 ### SUM()
 
-The only supported aggregate over expressions involving decision variables. Valid in both constraints and objectives.
+The primary aggregate over expressions involving decision variables. Valid in both constraints and objectives.
 
 ```sql
 MAXIMIZE SUM(x * value)
 SUCH THAT SUM(x * weight) <= 50
 ```
 
-**Code**: Validated in `decide_objective_binder.cpp:91-100` and `decide_constraints_binder.cpp:358-367` — any aggregate other than SUM is rejected with an error.
+**Code**: Validated in `decide_objective_binder.cpp` and `decide_constraints_binder.cpp` — aggregates other than SUM, AVG, MIN, and MAX are rejected with an error.
 
 ### COUNT() — BOOLEAN and INTEGER variables
 
@@ -41,9 +41,9 @@ The rewrite happens early, before normalization and binding, in `bind_select_nod
 
 ---
 
-### AVG() — Rewritten to SUM with RHS Scaling
+### AVG() — RHS Scaling at Execution Time
 
-`AVG(expr)` over decision variables is rewritten to `SUM(expr)` early in the bind phase, with an alias tag (`__avg_rewrite__`) that signals the model builder to scale the constraint RHS by the row count N.
+`AVG(expr)` over decision variables is treated as an aggregate constraint like SUM, but with the RHS scaled by the row count N at model-build time.
 
 **Semantics**: Standard SQL AVG — divide by count of all rows (decision variables are never NULL). This is always linear since N is a data-determined constant.
 
@@ -66,6 +66,61 @@ MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 **Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. At execution time (`physical_decide.cpp`), `BoundAggregateExpression::function.name == "avg"` sets `LinearConstraint::was_avg_rewrite`, propagated to `EvaluatedConstraint::was_avg_rewrite`. RHS scaling applied in `ilp_model_builder.cpp` at model build time.
 
 **Tests**: `test/decide/tests/test_avg.py` — 9 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, and no-decide-var passthrough.
+
+---
+
+### MIN() / MAX() — Per-Row and Big-M Indicator Rewrites
+
+`MIN(expr)` and `MAX(expr)` over decision variables are supported in both SUCH THAT constraints and MAXIMIZE/MINIMIZE objectives. The implementation strategy depends on whether the case is "easy" (naturally per-row) or "hard" (requires Big-M indicator variables and a global auxiliary variable).
+
+#### Easy Constraint Cases (No Big-M)
+
+When the comparison direction already bounds each row individually, no auxiliary variables are needed:
+
+- `MAX(expr) <= K` → per-row constraint: `expr <= K` for every row
+- `MIN(expr) >= K` → per-row constraint: `expr >= K` for every row
+
+These are trivially correct: bounding every row satisfies the aggregate bound. PER on easy cases is stripped (redundant, since constraints are already per-row).
+
+#### Hard Constraint Cases (Big-M Indicators)
+
+When the aggregate must be tight (equality or the "wrong" direction), a global auxiliary variable `z` and per-row binary indicators are introduced:
+
+- `MAX(expr) >= K` → global variable `z >= K`, per-row: `z >= expr`, plus Big-M indicators ensuring `z` equals some row's value
+- `MIN(expr) <= K` → global variable `z <= K`, per-row: `z <= expr`, plus Big-M indicators
+- Equality cases (`MAX(expr) = K`, `MIN(expr) = K`) → both directions constrained
+
+#### Objective Cases
+
+- **Easy objectives**: `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` — a single global auxiliary variable `z` with per-row linking constraints (`z >= expr_i` for MAX, `z <= expr_i` for MIN). The objective optimizes `z` directly.
+- **Hard objectives**: `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` — requires `z` plus per-row binary indicator variables to ensure `z` equals some row's actual value (Big-M formulation).
+
+#### Composition
+
+- **WHEN**: Composes naturally. WHEN masks filter which rows participate in the MIN/MAX aggregate, and constraint/indicator generation skips non-matching rows.
+- **PER (easy cases)**: Stripped as redundant — easy cases already produce per-row constraints.
+
+```sql
+-- Easy constraint cases (no Big-M)
+SUCH THAT MAX(x * cost) <= 100         -- per-row: x*cost <= 100
+SUCH THAT MIN(x * hours) >= 2          -- per-row: x*hours >= 2
+
+-- Hard constraint cases (Big-M indicators)
+SUCH THAT MAX(x * cost) >= 50          -- global z, binary indicators
+SUCH THAT MIN(x * hours) = 4           -- equality: both directions
+
+-- Objectives
+MINIMIZE MAX(x * cost)                 -- easy: global z, minimize
+MAXIMIZE MIN(x * profit)               -- easy: global z, maximize
+MAXIMIZE MAX(x * profit)               -- hard: z + binary indicators
+MINIMIZE MIN(x * cost)                 -- hard: z + binary indicators
+
+-- With WHEN
+SUCH THAT MAX(x * cost) <= 50 WHEN category = 'electronics'
+MINIMIZE MAX(x * deviation) WHEN active = 1
+```
+
+**Code**: The rewrite begins in `bind_select_node.cpp` where `RewriteMinMaxConstraints()` and `RewriteMinMaxInExpression()` detect MIN/MAX aggregates and insert `__MIN__`/`__MAX__` marker tags into the symbolic representation. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX alongside SUM and AVG. The symbolic layer (`decide_symbolic.cpp`) recognizes the `__MIN__`/`__MAX__` markers. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by `solver_input.hpp` and `ilp_model_builder.cpp`.
 
 ---
 
@@ -131,7 +186,14 @@ SUCH THAT SUM(x * w) >= 10
 SUCH THAT SUM(x) = 5
 ```
 
-> **Note**: `<>` (not-equal) is parsed but **rejected by the binder on aggregates** (e.g., `SUM(x) <> 5`). It creates a disjunctive constraint that requires Big-M reformulation. See [../../04_optimizer/query_rewriting/todo.md](../../04_optimizer/query_rewriting/todo.md).
+`<>` (not-equal) is supported on both per-row and aggregate constraints. It uses Big-M disjunction with an auxiliary binary indicator variable:
+
+- `SUM(x) <> K` → two constraints: `SUM(x) <= K-1 + M*z` and `SUM(x) >= K+1 - M*(1-z)`
+- `x <> K` → same pattern applied per-row
+
+**Complexity**: Adds 1 binary variable and 2 constraints per `<>`. The Big-M value M is computed from variable bounds at execution time. Loose bounds produce weaker LP relaxations.
+
+**Code**: Auxiliary variable declared in `bind_select_node.cpp` (`RewriteNotEqual()`); Big-M constraints generated at execution time in `physical_decide.cpp` (`Finalize()`), where data bounds are available.
 
 ### BETWEEN ... AND ...
 
@@ -144,13 +206,24 @@ SUCH THAT SUM(x) BETWEEN 10 AND 50
 
 ### IN (...)
 
-Constrains a **table column** value to be in a literal set.
+Constrains a value to be in a literal set. Works on both table columns and decision variables.
 
 ```sql
-SUCH THAT category IN ('A', 'B', 'C')
+SUCH THAT category IN ('A', 'B', 'C')   -- table column (SQL filter)
+SUCH THAT x IN (0, 1, 3)                -- decision variable domain restriction
 ```
 
-> **Limitation**: `IN` on **decision variables** (e.g., `x IN (0, 1, 3)`) is parsed and bound but does not enforce the domain restriction at the solver level. Proper support requires auxiliary binary variables.
+**Decision variable IN**: `x IN (v1, ..., vK)` is rewritten at bind time into K auxiliary binary indicator variables with two constraints:
+- Cardinality: `z_1 + ... + z_K = 1` (exactly one value selected)
+- Linking: `x = v1*z_1 + ... + vK*z_K` (x takes the selected value)
+
+**Complexity**: Adds K binary variables and 2 constraints per IN. For small K (2–5 values) this is cheap. Large K (e.g., 100 values) adds significant model size — consider whether the domain can be expressed as a range constraint instead.
+
+**Optimizations**:
+- `x IN (0, 1)` on BOOLEAN → trivially satisfied, no rewrite
+- `x IN (v)` single value → rewritten to `x = v`
+
+**Code**: `bind_select_node.cpp` (`RewriteInDomain()`), called before constraint binding. IN on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
 
 ---
 
@@ -187,13 +260,14 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | `SUM()` over dec. vars | Yes | Yes | N/A |
 | `AVG()` over dec. vars | Yes (RHS scaled) | Yes (→SUM) | N/A |
 | `COUNT()` (BOOLEAN, INTEGER) | Yes | Yes | N/A |
+| `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | Yes (global aux / Big-M) | N/A |
 | `ABS()` over dec. vars | Yes (linearized) | Yes (linearized) | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `+`, `-` | Yes | Yes | Yes |
 | `=`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |
-| `<>` (not-equal) | Rejected on aggregates | N/A | Yes |
+| `<>` (not-equal) | Yes (Big-M) | N/A | Yes |
 | `BETWEEN` | Yes | N/A | Yes |
-| `IN (...)` | Table columns only | N/A | Yes |
+| `IN (...)` | Yes (dec. vars + columns) | N/A | Yes |
 | `IS NULL` / `IS NOT NULL` | N/A | N/A | Yes |
 | `AND` (constraint sep.) | Yes | N/A | N/A |
 | `AND` / `OR` (logical) | N/A | N/A | Yes |

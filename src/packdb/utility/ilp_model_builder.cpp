@@ -10,7 +10,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
-    idx_t total_vars = num_rows * num_decide_vars;
+    idx_t total_vars = num_rows * num_decide_vars + input.num_global_vars;
 
     model.num_vars = total_vars;
 
@@ -68,11 +68,29 @@ ILPModel ILPModel::Build(const SolverInput &input) {
         }
     }
 
+    // Append global auxiliary variables after per-row grid
+    for (idx_t g = 0; g < input.num_global_vars; g++) {
+        idx_t var_idx = num_rows * num_decide_vars + g;
+        auto gtype = input.global_variable_types[g];
+        model.col_lower[var_idx] = input.global_lower_bounds[g];
+        model.col_upper[var_idx] = input.global_upper_bounds[g];
+        model.is_integer[var_idx] = !(gtype == LogicalType::DOUBLE || gtype == LogicalType::FLOAT);
+        model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
+    }
+
     //===--------------------------------------------------------------------===//
     // 2. Set up objective function
     //===--------------------------------------------------------------------===//
 
     model.obj_coeffs.resize(total_vars, 0.0);
+
+    // Set objective coefficients for global variables
+    for (idx_t g = 0; g < input.num_global_vars; g++) {
+        idx_t var_idx = num_rows * num_decide_vars + g;
+        if (g < input.global_obj_coeffs.size()) {
+            model.obj_coeffs[var_idx] = input.global_obj_coeffs[g];
+        }
+    }
     model.maximize = (input.sense == DecideSense::MAXIMIZE);
 
     if (!input.objective_variable_indices.empty()) {
@@ -203,6 +221,16 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                 model.constraints.push_back(std::move(constr));
             }
         }
+    }
+
+    // Append raw global constraints (for MIN/MAX objective linking, etc.)
+    for (auto &raw : input.global_constraints) {
+        ILPConstraint constr;
+        constr.indices = raw.indices;
+        constr.coefficients = raw.coefficients;
+        constr.sense = raw.sense;
+        constr.rhs = raw.rhs;
+        model.constraints.push_back(std::move(constr));
     }
 
     //===--------------------------------------------------------------------===//

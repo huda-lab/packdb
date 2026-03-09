@@ -11,13 +11,13 @@ MAXIMIZE objective_expression
 MINIMIZE objective_expression
 ```
 
-The objective expression must be a single aggregate expression using `SUM()`.
+The objective expression must be a single aggregate expression using one of the supported aggregate functions.
 
 ---
 
 ## Requirements
 
-1. Must use `SUM()` — COUNT is also supported (see [sql_functions/done.md](../sql_functions/done.md)); other aggregates like AVG/MIN/MAX are not yet supported (see [sql_functions/todo.md](../sql_functions/todo.md) for planned support).
+1. Must use a supported aggregate: `SUM()`, `COUNT()`, `AVG()`, `MIN()`, or `MAX()`. See [sql_functions/done.md](../sql_functions/done.md) for details on each.
 2. Must be **linear** in the decision variables.
 3. Must involve at least one decision variable.
 
@@ -58,6 +58,36 @@ MINIMIZE SUM(x * cost) WHEN region = 'US'
 ```
 
 See [when/done.md](../when/done.md) for full details.
+
+### COUNT() in Objective
+
+`COUNT(x)` counts non-zero assignments. Supported for BOOLEAN (rewritten to SUM) and INTEGER (Big-M indicator rewrite) variables.
+
+```sql
+MAXIMIZE COUNT(x)                    -- maximize number of non-zero rows
+MINIMIZE COUNT(x)                    -- minimize number of non-zero rows
+```
+
+### AVG() in Objective
+
+`AVG(expr)` in the objective simply becomes `SUM(expr)` — same argmax/argmin since the row count N > 0 is constant.
+
+```sql
+MAXIMIZE AVG(x * profit)             -- same as MAXIMIZE SUM(x * profit)
+```
+
+### MIN() / MAX() in Objective
+
+Supported via linearization with a global auxiliary variable. "Easy" cases (`MINIMIZE MAX`, `MAXIMIZE MIN`) need only per-row linking constraints. "Hard" cases (`MAXIMIZE MAX`, `MINIMIZE MIN`) additionally require Big-M binary indicators.
+
+```sql
+MINIMIZE MAX(x * cost)               -- easy: global z with z >= expr_i
+MAXIMIZE MIN(x * profit)             -- easy: global z with z <= expr_i
+MAXIMIZE MAX(x * profit)             -- hard: z + binary indicators
+MINIMIZE MIN(x * cost)               -- hard: z + binary indicators
+```
+
+See [sql_functions/done.md](../sql_functions/done.md) for the full linearization details.
 
 ### ABS() in Objective
 
@@ -113,8 +143,8 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
 ## Code Pointers
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
-  - Lines 91-100: Validates that only `SUM` is used (rejects other aggregates with error message)
-  - Lines 29-66: Handles WHEN condition extraction on objective
+  - Validates that only `SUM`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
+  - Handles WHEN condition extraction on objective
 
 - **Execution** (objective coefficient construction + WHEN masking):
   `src/execution/operator/decide/physical_decide.cpp:263-282`

@@ -98,14 +98,14 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "sum" || fname == "avg") {
+		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
             if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
             return DecideExpression::SUM;
 		} else {
-            error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM or AVG is allowed.", func.function_name);
+            error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
     }

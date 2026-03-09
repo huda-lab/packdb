@@ -415,15 +415,19 @@ public:
 
                         // RHS becomes data-only: DECIDE vars replaced with constant 0
                         constraint->rhs_expr = StripDecideVars(*comp.right, op);
-                    } else {
+                    } else if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                         // Simple single-variable constraint (e.g., x <= 5)
-                        idx_t var_idx = op.FindDecideVariable(*comp.left);
+                        idx_t var_idx = op.FindDecideVariable(*lhs);
                         if (var_idx != DConstants::INVALID_INDEX) {
                             constraint->lhs_terms.push_back(LinearTerm{
                                 var_idx,
                                 make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))
                             });
                         }
+                    } else {
+                        // Multi-variable per-row constraint with complex LHS
+                        // (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0)
+                        op.ExtractLinearTerms(*lhs, constraint->lhs_terms);
                     }
                 }
 
@@ -1057,14 +1061,328 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         gstate.evaluated_constraints.push_back(std::move(ec2));
     }
 
+    // Generate Big-M constraints for MIN/MAX indicator variables
+    // For hard cases where MIN/MAX was rewritten to SUM at bind time:
+    //   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1
+    //   MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M, and SUM(y) >= 1
+    // The rewrite replaced MIN/MAX with SUM, so we find them by matching indicator indices
+    // against the evaluated constraints.
+    if (!minmax_indicator_links.empty()) {
+        idx_t mm_idx = 0;
+        vector<EvaluatedConstraint> new_constraints;
+        for (auto &ec : gstate.evaluated_constraints) {
+            if (!ec.lhs_is_aggregate || mm_idx >= minmax_indicator_links.size()) {
+                new_constraints.push_back(std::move(ec));
+                continue;
+            }
+            // Check if this constraint uses a minmax indicator variable
+            auto &link = minmax_indicator_links[mm_idx];
+            idx_t indicator_idx = link.second;
+            bool is_max_agg = (link.first == "max");
+
+            // Detect: hard MAX(expr) >= K was rewritten as SUM(expr) >= K
+            // Hard MIN(expr) <= K was rewritten as SUM(expr) <= K
+            bool is_hard_max = is_max_agg && (ec.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
+                                               ec.comparison_type == ExpressionType::COMPARE_GREATERTHAN);
+            bool is_hard_min = !is_max_agg && (ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+                                                ec.comparison_type == ExpressionType::COMPARE_LESSTHAN);
+
+            if (!is_hard_max && !is_hard_min) {
+                new_constraints.push_back(std::move(ec));
+                continue;
+            }
+
+            mm_idx++;
+
+            // Compute Big-M from variable bounds
+            double M = 1e6;
+            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+                idx_t var_idx = ec.variable_indices[t];
+                double ub = solver_input.upper_bounds[var_idx];
+                if (ub < 1e20) {
+                    double max_coef = 0.0;
+                    for (auto &v : ec.row_coefficients[t]) {
+                        max_coef = std::max(max_coef, std::abs(v));
+                    }
+                    M = std::max(M, max_coef * ub);
+                }
+            }
+
+            if (is_hard_max) {
+                // MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M
+                // This is a per-row constraint (not aggregate)
+                EvaluatedConstraint ec_row;
+                ec_row.variable_indices = ec.variable_indices;
+                ec_row.row_coefficients = ec.row_coefficients;
+                // Add indicator variable: -M * y_i
+                ec_row.variable_indices.push_back(indicator_idx);
+                ec_row.row_coefficients.push_back(vector<double>(num_rows, -M));
+                ec_row.rhs_values.resize(num_rows);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    ec_row.rhs_values[r] = ec.rhs_values[r] - M;
+                }
+                ec_row.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+                ec_row.lhs_is_aggregate = false; // per-row!
+                ec_row.row_group_ids = ec.row_group_ids;
+                ec_row.num_groups = ec.num_groups;
+                new_constraints.push_back(std::move(ec_row));
+
+                // SUM(y) >= 1 (at least one row must satisfy)
+                EvaluatedConstraint ec_sum;
+                ec_sum.variable_indices = {indicator_idx};
+                ec_sum.row_coefficients = {vector<double>(num_rows, 1.0)};
+                ec_sum.rhs_values.assign(num_rows, 1.0);
+                ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+                ec_sum.lhs_is_aggregate = true;
+                ec_sum.row_group_ids = ec.row_group_ids;
+                ec_sum.num_groups = ec.num_groups;
+                new_constraints.push_back(std::move(ec_sum));
+            } else {
+                // MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M
+                EvaluatedConstraint ec_row;
+                ec_row.variable_indices = ec.variable_indices;
+                ec_row.row_coefficients = ec.row_coefficients;
+                // Add indicator variable: +M * y_i
+                ec_row.variable_indices.push_back(indicator_idx);
+                ec_row.row_coefficients.push_back(vector<double>(num_rows, M));
+                ec_row.rhs_values.resize(num_rows);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    ec_row.rhs_values[r] = ec.rhs_values[r] + M;
+                }
+                ec_row.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+                ec_row.lhs_is_aggregate = false;
+                ec_row.row_group_ids = ec.row_group_ids;
+                ec_row.num_groups = ec.num_groups;
+                new_constraints.push_back(std::move(ec_row));
+
+                // SUM(y) >= 1
+                EvaluatedConstraint ec_sum;
+                ec_sum.variable_indices = {indicator_idx};
+                ec_sum.row_coefficients = {vector<double>(num_rows, 1.0)};
+                ec_sum.rhs_values.assign(num_rows, 1.0);
+                ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+                ec_sum.lhs_is_aggregate = true;
+                ec_sum.row_group_ids = ec.row_group_ids;
+                ec_sum.num_groups = ec.num_groups;
+                new_constraints.push_back(std::move(ec_sum));
+            }
+        }
+        gstate.evaluated_constraints = std::move(new_constraints);
+    }
+
+    // Generate Big-M constraints for not-equal (<>) indicators
+    // For each COMPARE_NOTEQUAL constraint, replace it with two disjunctive constraints:
+    //   LHS + M*z <= RHS - 1 + M   (when z=0: LHS <= RHS - 1, i.e., LHS < RHS)
+    //   LHS - M*z >= RHS + 1 - M   (when z=1: LHS >= RHS + 1, i.e., LHS > RHS)
+    if (!ne_indicator_indices.empty()) {
+        idx_t ne_idx = 0;
+        vector<EvaluatedConstraint> new_constraints;
+        for (auto &ec : gstate.evaluated_constraints) {
+            if (ec.comparison_type == ExpressionType::COMPARE_NOTEQUAL && ne_idx < ne_indicator_indices.size()) {
+                idx_t indicator_var_idx = ne_indicator_indices[ne_idx++];
+
+                // Compute M from variable bounds
+                double M = 1e6; // default
+                for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+                    idx_t var_idx = ec.variable_indices[t];
+                    double ub = solver_input.upper_bounds[var_idx];
+                    if (ub < 1e20) {
+                        // Sum of max absolute coefficient * bound
+                        double max_coef = 0.0;
+                        for (auto &v : ec.row_coefficients[t]) {
+                            max_coef = std::max(max_coef, std::abs(v));
+                        }
+                        M = std::max(M, max_coef * ub);
+                    }
+                }
+
+                // Big-M disjunction: x ≠ K  ↔  (x ≤ K-1) ∨ (x ≥ K+1)
+                // Linearized as:
+                //   x - M*z ≤ K-1        (z=0 → x ≤ K-1; z=1 → trivially true)
+                //   x - M*z ≥ K+1-M      (z=0 → trivially true; z=1 → x ≥ K+1)
+                // Both aggregate and per-row cases use the same structure.
+                bool is_agg = ec.lhs_is_aggregate;
+
+                // Constraint 1: x - M*z ≤ K - 1
+                EvaluatedConstraint ec1;
+                ec1.variable_indices = ec.variable_indices;
+                ec1.row_coefficients = ec.row_coefficients;
+                ec1.variable_indices.push_back(indicator_var_idx);
+                ec1.row_coefficients.push_back(vector<double>(num_rows, -M));
+                ec1.rhs_values.resize(num_rows);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    ec1.rhs_values[r] = ec.rhs_values[r] - 1.0;
+                }
+                ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+                ec1.lhs_is_aggregate = is_agg;
+                ec1.was_avg_rewrite = ec.was_avg_rewrite;
+                ec1.row_group_ids = ec.row_group_ids;
+                ec1.num_groups = ec.num_groups;
+                new_constraints.push_back(std::move(ec1));
+
+                // Constraint 2: x - M*z ≥ K + 1 - M
+                EvaluatedConstraint ec2;
+                ec2.variable_indices = ec.variable_indices;
+                ec2.row_coefficients = ec.row_coefficients;
+                ec2.variable_indices.push_back(indicator_var_idx);
+                ec2.row_coefficients.push_back(vector<double>(num_rows, -M));
+                ec2.rhs_values.resize(num_rows);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    ec2.rhs_values[r] = ec.rhs_values[r] + 1.0 - M;
+                }
+                ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+                ec2.lhs_is_aggregate = is_agg;
+                ec2.was_avg_rewrite = ec.was_avg_rewrite;
+                ec2.row_group_ids = ec.row_group_ids;
+                ec2.num_groups = ec.num_groups;
+                new_constraints.push_back(std::move(ec2));
+            } else {
+                new_constraints.push_back(std::move(ec));
+            }
+        }
+        gstate.evaluated_constraints = std::move(new_constraints);
+    }
+
     // Constraints
     solver_input.constraints = std::move(gstate.evaluated_constraints);
-    
+
     // Objective
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
     solver_input.sense = decide_sense;
-    
+
+    // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints
+    if (!minmax_objective_type.empty() && !solver_input.objective_variable_indices.empty()) {
+        bool is_min_agg = (minmax_objective_type == "min");
+        // Easy cases: MAXIMIZE MIN → z <= expr_i, maximize z
+        //             MINIMIZE MAX → z >= expr_i, minimize z
+        // Hard cases: MAXIMIZE MAX → z <= expr_i + M*(1-y_i), SUM(y)>=1, maximize z
+        //             MINIMIZE MIN → z >= expr_i - M*(1-y_i), SUM(y)>=1, minimize z
+        bool is_easy = (is_min_agg && decide_sense == DecideSense::MAXIMIZE) ||
+                       (!is_min_agg && decide_sense == DecideSense::MINIMIZE);
+
+        idx_t z_idx = num_rows * num_decide_vars; // global variable index for z
+
+        // Create global variable z (continuous, unbounded)
+        solver_input.num_global_vars = 1;
+        solver_input.global_variable_types = {LogicalType::DOUBLE};
+        solver_input.global_lower_bounds = {-1e30};
+        solver_input.global_upper_bounds = {1e30};
+        solver_input.global_obj_coeffs = {1.0}; // objective = z
+
+        // Save objective data before clearing (we need it for constraint generation)
+        auto saved_obj_coefficients = solver_input.objective_coefficients;
+        auto saved_obj_var_indices = solver_input.objective_variable_indices;
+
+        // Clear per-row objective (z is the sole objective term now)
+        solver_input.objective_coefficients.clear();
+        solver_input.objective_variable_indices.clear();
+
+        if (is_easy) {
+            // For each row r, create raw constraint:
+            //   MAXIMIZE MIN: z <= expr_r → z - expr_r <= 0
+            //   MINIMIZE MAX: z >= expr_r → z - expr_r >= 0
+            char sense_char = is_min_agg ? '<' : '>';
+
+            for (idx_t row = 0; row < num_rows; row++) {
+                SolverInput::RawConstraint rc;
+                rc.sense = sense_char;
+                rc.rhs = 0.0;
+
+                // z with coefficient +1
+                rc.indices.push_back((int)z_idx);
+                rc.coefficients.push_back(1.0);
+
+                // -expr_r terms: for each objective term, negate its coefficient for this row
+                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                    idx_t var = saved_obj_var_indices[t];
+                    double coeff = saved_obj_coefficients[t][row];
+                    if (std::abs(coeff) < 1e-15) continue;
+                    idx_t var_idx = row * num_decide_vars + var;
+                    rc.indices.push_back((int)var_idx);
+                    rc.coefficients.push_back(-coeff);
+                }
+
+                solver_input.global_constraints.push_back(std::move(rc));
+            }
+        } else {
+            // Hard cases: need per-row binary indicators y_r
+            double M = 1e6; // Big-M value
+
+            // Compute better M from variable bounds
+            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                idx_t var = saved_obj_var_indices[t];
+                double ub = solver_input.upper_bounds[var];
+                if (ub < 1e20) {
+                    double max_coef = 0.0;
+                    for (auto &v : saved_obj_coefficients[t]) {
+                        max_coef = std::max(max_coef, std::abs(v));
+                    }
+                    M = std::max(M, max_coef * ub);
+                }
+            }
+
+            // Add per-row binary indicator variables y_0..y_{N-1}
+            idx_t first_y_idx = z_idx + 1;
+            solver_input.num_global_vars += num_rows;
+            for (idx_t r = 0; r < num_rows; r++) {
+                solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
+                solver_input.global_lower_bounds.push_back(0.0);
+                solver_input.global_upper_bounds.push_back(1.0);
+                solver_input.global_obj_coeffs.push_back(0.0);
+            }
+
+            // Per-row linking constraints:
+            //   MAXIMIZE MAX: z <= expr_r + M*(1-y_r) → z - expr_r + M*y_r <= M
+            //   MINIMIZE MIN: z >= expr_r - M*(1-y_r) → z - expr_r - M*y_r >= -M
+            for (idx_t row = 0; row < num_rows; row++) {
+                SolverInput::RawConstraint rc;
+
+                // z with coefficient +1
+                rc.indices.push_back((int)z_idx);
+                rc.coefficients.push_back(1.0);
+
+                // -expr_r terms
+                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                    idx_t var = saved_obj_var_indices[t];
+                    double coeff = saved_obj_coefficients[t][row];
+                    if (std::abs(coeff) < 1e-15) continue;
+                    idx_t var_idx = row * num_decide_vars + var;
+                    rc.indices.push_back((int)var_idx);
+                    rc.coefficients.push_back(-coeff);
+                }
+
+                // y_r term
+                idx_t y_idx = first_y_idx + row;
+                if (is_min_agg) {
+                    // MINIMIZE MIN: z - expr_r - M*y_r >= -M
+                    rc.indices.push_back((int)y_idx);
+                    rc.coefficients.push_back(-M);
+                    rc.sense = '>';
+                    rc.rhs = -M;
+                } else {
+                    // MAXIMIZE MAX: z - expr_r + M*y_r <= M
+                    rc.indices.push_back((int)y_idx);
+                    rc.coefficients.push_back(M);
+                    rc.sense = '<';
+                    rc.rhs = M;
+                }
+
+                solver_input.global_constraints.push_back(std::move(rc));
+            }
+
+            // SUM(y_r) >= 1: at least one indicator must be active
+            SolverInput::RawConstraint sum_y;
+            for (idx_t row = 0; row < num_rows; row++) {
+                sum_y.indices.push_back((int)(first_y_idx + row));
+                sum_y.coefficients.push_back(1.0);
+            }
+            sum_y.sense = '>';
+            sum_y.rhs = 1.0;
+            solver_input.global_constraints.push_back(std::move(sum_y));
+        }
+    }
+
     gstate.ilp_solution = SolveILP(solver_input);
 
     return SinkFinalizeType::READY;

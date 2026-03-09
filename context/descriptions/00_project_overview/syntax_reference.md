@@ -33,10 +33,10 @@ DECIDE x IS BOOLEAN, y IS INTEGER  -- multiple typed variables
 
 Constraints must evaluate to a boolean. Multiple constraints are separated by `AND`.
 
-- **Supported Operators**: `=`, `<`, `<=`, `>`, `>=`.
-  - `<>` (not-equal): Parsed but **rejected on aggregates** (requires Big-M reformulation).
+- **Supported Operators**: `=`, `<`, `<=`, `>`, `>=`, `<>`.
+  - `<>` (not-equal): Supported on both per-row and aggregate constraints via Big-M disjunction (1 auxiliary binary variable + 2 constraints per `<>`).
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
-- **In**: `column IN (1, 2, 3)` — works on table columns. On decision variables, parsed but **not enforced** (requires auxiliary variables).
+- **In**: `x IN (v1, ..., vK)` — works on both table columns and decision variables. On decision variables, rewritten to K binary indicator variables with cardinality + linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) is not supported.
 - **Linearity**: Any sub-expression involving a decision variable must be linear.
   - `x * 5`: OK.
   - `x + y`: OK.
@@ -45,7 +45,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 
 ## 4. Objective
 
-- Must be a single aggregate expression: `SUM(...)`.
+- Must be a single aggregate expression: `SUM(...)`, `AVG(...)`, `MIN(...)`, or `MAX(...)`.
 - Must involve at least one decision variable.
 - Must be linear.
 
@@ -54,6 +54,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 - `SUM()` is the primary aggregate over decision variables.
 - `COUNT(x)` is supported for **BOOLEAN and INTEGER variables**. BOOLEAN is rewritten to `SUM(x)`; INTEGER uses a Big-M indicator variable rewrite.
 - `AVG(expr)` is supported. Rewritten to `SUM(expr)` with RHS scaled by row count N at execution time. For objectives, `AVG` and `SUM` share the same argmax/argmin. For constraints, `AVG(expr) op K` becomes `SUM(expr) op K*N` where N is the row count (adjusted for WHEN/PER context).
+- `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`, `MIN(expr) >= K`) become per-row constraints with no auxiliary variables. Hard cases (opposite direction, equality) use a global auxiliary variable and Big-M binary indicators. In objectives, `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use a global auxiliary; `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` additionally require Big-M indicators. Composes with WHEN.
 
 ## 6. Conditional Expressions — `WHEN`
 

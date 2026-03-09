@@ -364,6 +364,18 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 }
                 auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
                 return Symbolic("__SUM__") * inner_symbolic;
+            } else if (func_name_lower == "min") {
+                if (func_expr.children.empty()) {
+                    throw InternalException("ToSymbolic: MIN function with no arguments");
+                }
+                auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
+                return Symbolic("__MIN__") * inner_symbolic;
+            } else if (func_name_lower == "max") {
+                if (func_expr.children.empty()) {
+                    throw InternalException("ToSymbolic: MAX function with no arguments");
+                }
+                auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
+                return Symbolic("__MAX__") * inner_symbolic;
             } else if (func_name_lower == "pow" || func_name_lower == "power") {
                 if (func_expr.children.size() != 2) {
                     throw InternalException("ToSymbolic: POW/POWER expects two arguments");
@@ -665,25 +677,42 @@ static bool IsSumMarker(const Symbolic &s) {
     return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__SUM__";
 }
 
+static bool IsMinMarker(const Symbolic &s) {
+    return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__MIN__";
+}
+
+static bool IsMaxMarker(const Symbolic &s) {
+    return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__MAX__";
+}
+
+static bool IsAggregateMarker(const Symbolic &s) {
+    return IsSumMarker(s) || IsMinMarker(s) || IsMaxMarker(s);
+}
+
 static unique_ptr<ParsedExpression> FromSymbolicAggregateProduct(const Product &prod, SymbolicTranslationContext &ctx) {
-    // Expect one factor == __SUM__ and the other factor the inner expression (possibly another product)
+    // Expect one aggregate marker (__SUM__, __MIN__, __MAX__) and remaining factors as inner expression
     list<Symbolic> non_markers;
     bool has_sum_marker = false;
+    bool has_min_marker = false;
+    bool has_max_marker = false;
     for (auto &f : prod.factors) {
         if (IsSumMarker(f)) has_sum_marker = true;
+        else if (IsMinMarker(f)) has_min_marker = true;
+        else if (IsMaxMarker(f)) has_max_marker = true;
         else non_markers.push_back(f);
     }
-    if (!has_sum_marker || non_markers.empty()) {
+    if (!(has_sum_marker || has_min_marker || has_max_marker) || non_markers.empty()) {
         // Fallback to regular product
         return FromSymbolicProduct(prod, ctx);
     }
-    // Rebuild SUM(inner)
+    // Rebuild aggregate(inner)
     auto it = non_markers.begin();
     Symbolic inner = *it++;
     for (; it != non_markers.end(); ++it) inner = inner * (*it);
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(FromSymbolic(inner, ctx));
-    return make_uniq_base<ParsedExpression, FunctionExpression>("sum", std::move(args));
+    string func_name = has_sum_marker ? "sum" : (has_min_marker ? "min" : "max");
+    return make_uniq_base<ParsedExpression, FunctionExpression>(func_name, std::move(args));
 }
 
 unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslationContext &ctx) {
@@ -702,9 +731,9 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
     if (s.type() == typeid(Product)) {
         // Special-case aggregate marker
         CastPtr<const Product> prod(s);
-        bool has_sum_marker = false;
-        for (auto &f : prod->factors) if (IsSumMarker(f)) { has_sum_marker = true; break; }
-        if (has_sum_marker) return FromSymbolicAggregateProduct(*prod, ctx);
+        bool has_agg_marker = false;
+        for (auto &f : prod->factors) if (IsAggregateMarker(f)) { has_agg_marker = true; break; }
+        if (has_agg_marker) return FromSymbolicAggregateProduct(*prod, ctx);
         return FromSymbolicProduct(*prod, ctx);
     }
     if (s.type() == typeid(Sum)) {
@@ -952,12 +981,13 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
                 return std::move(result);
             }
             if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
-                // Normalize the inner constraint (child[0]), pass through PER column (child[1])
+                // Normalize the inner constraint (child[0]), pass through PER columns (children[1..N])
                 auto normalized_constraint = NormalizeConstraintsRecursive(*func.children[0], decide_variables);
-                auto col_copy = func.children[1]->Copy();
                 vector<unique_ptr<ParsedExpression>> args;
                 args.push_back(std::move(normalized_constraint));
-                args.push_back(std::move(col_copy));
+                for (idx_t i = 1; i < func.children.size(); i++) {
+                    args.push_back(func.children[i]->Copy());
+                }
                 auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(args));
                 result->is_operator = true;
                 return std::move(result);
@@ -992,13 +1022,14 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
         result->is_operator = true;
         return std::move(result);
     }
-    // PackDB: Handle PER wrapper — normalize inner objective, pass through PER column
+    // PackDB: Handle PER wrapper — normalize inner objective, pass through PER columns
     if (f.is_operator && f.function_name == PER_CONSTRAINT_TAG) {
         auto normalized = NormalizeDecideObjective(*f.children[0], decide_variables);
-        auto col = f.children[1]->Copy();
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(normalized));
-        args.push_back(std::move(col));
+        for (idx_t i = 1; i < f.children.size(); i++) {
+            args.push_back(f.children[i]->Copy());
+        }
         auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(args));
         result->is_operator = true;
         return std::move(result);

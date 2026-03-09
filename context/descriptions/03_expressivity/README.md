@@ -11,12 +11,12 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
-| [decide/](decide/) | IS BOOLEAN, IS INTEGER, multiple vars, scope, linearity | IS REAL variables |
-| [such_that/](such_that/) | Comparisons, BETWEEN, IN, AND, subqueries, WHEN, PER | Correlated subqueries |
-| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic, WHEN on objective, ABS | PER on objective, COUNT/AVG |
+| [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, scope, linearity | *(no planned features)* |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries, WHEN, PER | Correlated subqueries |
+| [maximize_minimize/](maximize_minimize/) | SUM, AVG, MIN/MAX, COUNT, multi-var, column arithmetic, WHEN on objective, ABS | PER on objective |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
 | [per/](per/) | PER on constraints, WHEN+PER composition, row_group_ids architecture | Multi-column PER, PER on objective (partition-solve), row-varying RHS |
-| [sql_functions/](sql_functions/) | SUM, ABS, arithmetic, comparisons, BETWEEN, IN, NULL | COUNT, AVG, MIN/MAX linearization |
+| [sql_functions/](sql_functions/) | SUM, COUNT (BOOLEAN/INTEGER), AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | COUNT (REAL), division |
 
 ---
 
@@ -30,11 +30,11 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `DECIDE x` (default INTEGER) | Yes | — |
 | Multiple variables: `DECIDE x, y` | Yes | — |
 | `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=` | Yes | — |
-| `<>` (not-equal) on aggregates | **No** (rejected by binder) | Needs Big-M |
+| `<>` (not-equal) | Yes (Big-M disjunction) | — |
 | `AND` constraint separator | Yes | — |
 | `BETWEEN ... AND ...` | Yes | — |
 | `IN (...)` on table columns | Yes | — |
-| `IN (...)` on decision variables | **No** (silently ignored) | Needs auxiliary variables |
+| `IN (...)` on decision variables | Yes (auxiliary binary indicators) | — |
 | Uncorrelated scalar subqueries | Yes | — |
 | Correlated subqueries | **No** | [such_that/todo.md](such_that/todo.md) |
 | Linear constraints | Yes | — |
@@ -47,19 +47,27 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `MINIMIZE SUM(...)` | Yes | — |
 | `SUM()` over decision variables | Yes | — |
 | `COUNT()` over BOOLEAN variables | Yes (rewritten to SUM) | — |
-| `COUNT()` over INTEGER/REAL variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
-| `AVG()` over decision variables | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
+| `COUNT()` over INTEGER variables | Yes (Big-M indicator rewrite) | — |
+| `AVG()` over decision variables | Yes (RHS scaling) | — |
 | `ABS()` | Yes (linearized) | — |
-| `MIN()` / `MAX()` over dec. vars | **No** | [sql_functions/todo.md](sql_functions/todo.md) |
+| `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
 
 ---
 
 ## Development Priorities
 
-1. ~~**IS REAL variables**~~ — **done**
-2. **AVG() aggregate** — syntactic convenience, linearizable for common cases
-3. ~~**ABS()**~~ — **done** (linearized via auxiliary variables)
-4. **`<>` and `IN` on decision variables** — requires Big-M / auxiliary variable infrastructure
+All previously planned priorities are **done**:
+1. ~~**IS REAL variables**~~ — done
+2. ~~**AVG() aggregate**~~ — done (RHS scaling)
+3. ~~**ABS()**~~ — done (linearized via auxiliary variables)
+4. ~~**`<>` and `IN` on decision variables**~~ — done (Big-M / auxiliary binary indicators)
+5. ~~**COUNT() for INTEGER**~~ — done (Big-M indicator rewrite)
+6. ~~**MIN() / MAX()**~~ — done (per-row + Big-M linearization)
+
+**Remaining**:
+- **PER on objective** (partition-solve) — see [per/todo.md](per/todo.md)
+- **Multi-column PER** — see [per/todo.md](per/todo.md)
+- **Correlated subqueries** — see [such_that/todo.md](such_that/todo.md)
 
 ---
 

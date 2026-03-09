@@ -51,6 +51,24 @@ struct SolverInput {
     vector<vector<double>> objective_coefficients; // [term_idx][row_idx]
     vector<idx_t> objective_variable_indices;      // [term_idx]
     DecideSense sense;
+
+    // Global auxiliary variables (exist once, not replicated per row)
+    // Appended after the per-row grid at indices num_rows * num_decide_vars + i
+    idx_t num_global_vars = 0;
+    vector<LogicalType> global_variable_types;
+    vector<double> global_lower_bounds;
+    vector<double> global_upper_bounds;
+    vector<double> global_obj_coeffs;  // Objective coefficients for global vars
+
+    // Raw ILP constraints involving global variables (indices are absolute into the
+    // flattened variable array including global vars)
+    struct RawConstraint {
+        vector<int> indices;
+        vector<double> coefficients;
+        char sense;     // '<' (<=), '>' (>=), '=' (==)
+        double rhs;
+    };
+    vector<RawConstraint> global_constraints;
 };
 
 } // namespace duckdb

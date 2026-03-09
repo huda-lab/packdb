@@ -216,6 +216,14 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
+			| a_expr WHEN b_expr PER '(' columnrefList ')'
+				{
+					/* PackDB: objective WHEN condition PER (col1, col2, ...) */
+					PGNode *when_node = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
+				}
 			| a_expr WHEN b_expr
 				{
 					/* PackDB: objective WHEN condition (b_expr excludes AND/OR) */
@@ -226,6 +234,12 @@ decide_objective_item:
 					/* PackDB: objective PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
+				}
+			| a_expr PER '(' columnrefList ')'
+				{
+					/* PackDB: objective PER (col1, col2, ...) */
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
 			| a_expr
 				{ $$ = $1; }
@@ -271,6 +285,14 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
+			| a_expr WHEN b_expr PER '(' columnrefList ')'
+				{
+					/* PackDB: constraint WHEN condition PER (col1, col2, ...) */
+					PGNode *when_node = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
+				}
 			| a_expr WHEN b_expr
 				{
 					/* PackDB: constraint WHEN condition (b_expr excludes AND/OR) */
@@ -281,6 +303,12 @@ decide_constraint_item:
 					/* PackDB: constraint PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
+				}
+			| a_expr PER '(' columnrefList ')'
+				{
+					/* PackDB: constraint PER (col1, col2, ...) */
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
 			| a_expr
 				{ $$ = $1; }
