@@ -14,29 +14,236 @@ INSERT INTO limits VALUES (50);
 query I
 SELECT sum(x)
 FROM items
-DECIDE x SUCH THAT x IS BOOLEAN AND sum(x * weight) <= (SELECT max_weight FROM limits)
+DECIDE x IS BOOLEAN
+SUCH THAT sum(x * weight) <= (SELECT max_weight FROM limits)
 MAXIMIZE sum(x * value);
 ----
 2
 
 # Case 2: Subquery in Objective (coefficient)
-# This might be tricky if the subquery is correlated or not properly bound
 query I
 SELECT sum(x)
 FROM items
-DECIDE x SUCH THAT x IS BOOLEAN AND sum(x * weight) <= 50
+DECIDE x IS BOOLEAN
+SUCH THAT sum(x * weight) <= 50
 MAXIMIZE sum(x * (SELECT max(value) FROM items));
 ----
 2
 
 # Case 3: Non-scalar subquery (should fail)
 statement error
-SELECT sum(x) FROM items DECIDE x SUCH THAT sum(x * weight) <= (SELECT weight FROM items) MAXIMIZE sum(x * value);
+SELECT sum(x) FROM items DECIDE x IS BOOLEAN SUCH THAT sum(x * weight) <= (SELECT weight FROM items) MAXIMIZE sum(x * value);
 ----
 More than one row returned by a subquery used as an expression
 
 # Case 4: Subquery with DECIDE variable (should fail)
 statement error
-SELECT sum(x) FROM items DECIDE x SUCH THAT sum(x * (SELECT weight FROM items WHERE id = x)) <= 50 MAXIMIZE sum(x * value);
+SELECT sum(x) FROM items DECIDE x IS BOOLEAN SUCH THAT sum(x * (SELECT weight FROM items WHERE id = x)) <= 50 MAXIMIZE sum(x * value);
 ----
-Referenced column "x" not found in FROM clause!
+Subqueries in DECIDE clauses cannot reference DECIDE variables.
+
+# ------------------------------------------------------------------
+# Correlated subquery tests
+# ------------------------------------------------------------------
+
+statement ok
+CREATE TABLE bounds (item_id INTEGER, max_qty INTEGER);
+
+statement ok
+INSERT INTO bounds VALUES (1, 3), (2, 2), (3, 1);
+
+# Case 5: Per-row correlated subquery as upper bound (should work)
+# x_1 <= 3, x_2 <= 2, x_3 <= 1, budget SUM(x*weight) <= 50
+# Optimal: x_1=3 (w=30,v=180), x_2=1 (w=20,v=100), x_3=0 => sum(x)=4, obj=280
+query I
+SELECT sum(x)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x <= (SELECT max_qty FROM bounds WHERE bounds.item_id = items.id)
+  AND SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
+----
+4
+
+# Case 6: Verify the objective value of the correlated subquery solution
+query I
+SELECT sum(x * value)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x <= (SELECT max_qty FROM bounds WHERE bounds.item_id = items.id)
+  AND SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
+----
+280
+
+# Case 7: Correlated subquery in aggregate constraint RHS (should error)
+# SUM(...) <= (correlated subquery) is invalid because the RHS varies per row
+statement error
+SELECT sum(x)
+FROM items
+DECIDE x IS BOOLEAN
+SUCH THAT SUM(x * weight) <= (SELECT max_qty FROM bounds WHERE bounds.item_id = items.id)
+MAXIMIZE SUM(x * value);
+----
+Aggregate constraint (SUM/AVG) requires a scalar right-hand side
+
+# ------------------------------------------------------------------
+# Additional correlated subquery robustness tests
+# ------------------------------------------------------------------
+
+# Case 8: Correlated subquery as LOWER bound (x >= ...)
+# min_qty table: item 1 must take >= 1, item 2 >= 0, item 3 >= 0
+# Combined with upper bound from 'bounds' and budget
+# x_1 in [1,3], x_2 in [0,2], x_3 in [0,1], SUM(x*w) <= 50
+# Optimal: x_1=3 (w=30,v=180), x_2=1 (w=20,v=100), x_3=0 => obj=280
+statement ok
+CREATE TABLE min_bounds (item_id INTEGER, min_qty INTEGER);
+
+statement ok
+INSERT INTO min_bounds VALUES (1, 1), (2, 0), (3, 0);
+
+query I
+SELECT sum(x * value)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x >= (SELECT min_qty FROM min_bounds WHERE min_bounds.item_id = items.id)
+  AND x <= (SELECT max_qty FROM bounds WHERE bounds.item_id = items.id)
+  AND SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
+----
+280
+
+# Case 9: Two correlated subqueries with a tight lower bound that changes the solution
+# Force item 3: min_qty=1 for all items
+# x_1 in [1,3], x_2 in [1,2], x_3 in [1,1], SUM(x*w) <= 50
+# Must take x_3=1 (w=30), x_2=1 (w=20). Remaining budget=0. x_1=1 forced by lb but w=10>0: total=60
+# Actually: x_1 in [1,3], x_2 in [1,2], x_3=1. Budget=50.
+# x_3=1 costs w=30. Remaining=20. x_2=1 costs w=20. Remaining=0. x_1=1 costs w=10 > 0. No budget.
+# So forced lb: x_1>=1 means at minimum w=10+20+30=60>50. That's infeasible!
+# Let's use a looser budget.
+# Budget=70: x_3=1(w=30), x_1=3(w=30), x_2=0.5? No, integer. x_1=3 w=30, x_2=1 w=20, x_3=1 w=30 = 80>70
+# x_1=2(w=20)+x_2=1(w=20)+x_3=1(w=30)=70. obj=120+100+120=340
+# x_1=3(w=30)+x_2=1(w=20)+x_3=1(w=30)=80>70. No.
+# x_1=2(w=20)+x_2=2(w=40)+x_3=1(w=30)=90>70. No.
+# x_1=1(w=10)+x_2=2(w=40)+x_3=1(w=30)=80>70. No.
+# x_1=2(w=20)+x_2=1(w=20)+x_3=1(w=30)=70<=70. obj=2*60+1*100+1*120=340. Best.
+# x_1=3(w=30)+x_2=1(w=20)+x_3=1(w=30)=80>70. No.
+# x_1=1(w=10)+x_2=1(w=20)+x_3=1(w=30)=60<=70. obj=60+100+120=280. Worse.
+
+statement ok
+DELETE FROM min_bounds;
+
+statement ok
+INSERT INTO min_bounds VALUES (1, 1), (2, 1), (3, 1);
+
+query I
+SELECT sum(x * value)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x >= (SELECT min_qty FROM min_bounds WHERE min_bounds.item_id = items.id)
+  AND x <= (SELECT max_qty FROM bounds WHERE bounds.item_id = items.id)
+  AND SUM(x * weight) <= 70
+MAXIMIZE SUM(x * value);
+----
+340
+
+# Case 10: Correlated subquery in OBJECTIVE coefficient
+# Multiply each x by a per-row "priority" from another table
+statement ok
+CREATE TABLE priorities (item_id INTEGER, priority INTEGER);
+
+statement ok
+INSERT INTO priorities VALUES (1, 1), (2, 5), (3, 2);
+
+# BOOLEAN knapsack, budget <= 50
+# x_1: w=10, obj_coeff=1*60=60 (but priority replaces value? No, priority IS the objective coeff)
+# Actually: MAXIMIZE SUM(x * (SELECT priority ...)) means each x_i is multiplied by priority_i
+# x_1: w=10, coeff=1; x_2: w=20, coeff=5; x_3: w=30, coeff=2
+# Budget 50: pick x_1+x_2 (w=30, obj=6), or x_1+x_3 (w=40, obj=3), or x_2+x_3 (w=50, obj=7)
+# or x_1+x_2+x_3 (w=60>50). Best: x_2+x_3, obj=7. Or x_1+x_2+? w=30<=50 obj=6, add x_3: w=60>50.
+# x_2+x_3: w=50, obj=5+2=7. x_1+x_2: w=30, obj=1+5=6. Best is x_2+x_3 with obj=7.
+query I
+SELECT sum(x * (SELECT priority FROM priorities WHERE priorities.item_id = items.id))
+FROM items
+DECIDE x IS BOOLEAN
+SUCH THAT sum(x * weight) <= 50
+MAXIMIZE sum(x * (SELECT priority FROM priorities WHERE priorities.item_id = items.id));
+----
+7
+
+# Case 11: Correlated subquery with aggregation inside (SELECT MAX(...) FROM ...)
+# For each item, bound by the max weight of items lighter than it
+# item 1 (w=10): max of weights < 10 => NULL => need COALESCE
+# item 2 (w=20): max of weights < 20 => 10
+# item 3 (w=30): max of weights < 30 => 20
+# With COALESCE to 0: bounds are [0, 10, 20], budget SUM(x*w)<=50
+# x_1 in [0,0], x_2 in [0,10], x_3 in [0,20]
+# Maximize SUM(x*value) = x_2*100 + x_3*120
+# x_2=1(w=20), x_3=1(w=30) => w=50<=50, obj=220
+# x_2=0, x_3=1(w=30) => obj=120. x_2=1, x_3=0 => w=20 obj=100. Both worse.
+# What about larger x? x_3=1(w=30), x_2=1(w=20)=50. obj=220
+# Can't do better. sum(x)=2.
+query I
+SELECT sum(x * value)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x <= COALESCE((SELECT MAX(weight) FROM items AS i2 WHERE i2.weight < items.weight), 0)
+  AND SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
+----
+220
+
+# Case 12: MINIMIZE with correlated subquery bounds
+# Minimize total weight subject to: must take at least min_qty of each item
+# min_bounds currently: (1,1),(2,1),(3,1). Upper bound: (1,3),(2,2),(3,1).
+# x_i >= min_qty_i. MINIMIZE SUM(x*weight).
+# Optimal: take exactly the lower bounds: x_1=1(w=10), x_2=1(w=20), x_3=1(w=30) => total=60
+query I
+SELECT sum(x * weight)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x >= (SELECT min_qty FROM min_bounds WHERE min_bounds.item_id = items.id)
+  AND x <= (SELECT max_qty FROM bounds WHERE bounds.item_id = items.id)
+MINIMIZE SUM(x * weight);
+----
+60
+
+# Case 13: BOOLEAN variable with correlated subquery (per-row enable/disable)
+# Only allow selection of items that appear in the bounds table with max_qty > 1
+# bounds: (1,3),(2,2),(3,1). So items 1 and 2 are enabled (max_qty>1), item 3 disabled.
+# BOOLEAN knapsack on items 1,2 only, budget<=50
+# x_1: w=10, v=60; x_2: w=20, v=100; both fit (w=30<=50), obj=160
+query I
+SELECT sum(x * value)
+FROM items
+DECIDE x IS BOOLEAN
+SUCH THAT x <= COALESCE((SELECT 1 FROM bounds WHERE bounds.item_id = items.id AND max_qty > 1), 0)
+  AND sum(x * weight) <= 50
+MAXIMIZE sum(x * value);
+----
+160
+
+# Case 14: Correlated subquery that returns NULL for some rows (no match)
+# Only items 1 and 2 have bounds; item 3 has no match => subquery returns NULL
+# x <= NULL is never true, so item 3 should be forced to 0
+statement ok
+CREATE TABLE partial_bounds (item_id INTEGER, max_qty INTEGER);
+
+statement ok
+INSERT INTO partial_bounds VALUES (1, 5), (2, 3);
+
+# x_1 <= 5, x_2 <= 3, x_3 <= NULL. With COALESCE: x_3 <= 0.
+# Budget SUM(x*w) <= 50. Maximize SUM(x*v).
+# x_1=3(w=30,v=180), x_2=1(w=20,v=100) => w=50, obj=280
+# x_1=2(w=20), x_2=1(w=20), total w=40, obj=220. Worse.
+# x_1=5(w=50), x_2=0 => obj=300. Or x_1=4(w=40), x_2=0 => obj=240.
+# x_1=5(w=50<=50), obj=300 vs x_1=3+x_2=1(w=50, obj=280). 300>280. Best: x_1=5.
+query I
+SELECT sum(x * value)
+FROM items
+DECIDE x IS INTEGER
+SUCH THAT x <= COALESCE((SELECT max_qty FROM partial_bounds WHERE partial_bounds.item_id = items.id), 0)
+  AND SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
+----
+300

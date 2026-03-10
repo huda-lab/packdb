@@ -6,17 +6,12 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
-#include "duckdb/parser/tableref/subqueryref.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/main/connection.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
-#include "duckdb/parser/parser.hpp"
-#include "duckdb/planner/planner.hpp"
 
 namespace duckdb {
 
@@ -269,6 +264,9 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 }
 
 BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+    if (depth > 0) {
+        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+    }
     auto &expr = *expr_ptr;
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::FUNCTION:
@@ -278,51 +276,15 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
         if (subquery.subquery_type != SubqueryType::SCALAR) {
              return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
         }
-        
-        string subquery_sql = expr.ToString();
-        string sql = "SELECT " + subquery_sql;
-        
-        // First, do a quick plan to check for correlated subqueries (not supported)
-        Parser parser;
-        parser.ParseQuery(sql);
-        if (parser.statements.empty()) {
-             return BindResult(BinderException::Unsupported(expr, "Failed to parse subquery SQL"));
-        }
-        
-        Planner planner(context);
-        planner.CreatePlan(parser.statements[0]->Copy());
-
-        // Check for correlated subquery - not supported in DECIDE clauses
-        if (!planner.binder->correlated_columns.empty()) {
+        if (HasVariableExpression(expr, variables)) {
             return BindResult(BinderException::Unsupported(expr,
-                "Correlated subqueries are not supported in DECIDE clauses. "
-                "The subquery references columns from outer queries, which cannot be "
-                "evaluated at optimization time. Please use a constant value, "
-                "non-correlated subquery, or table column instead."));
+                "Subqueries in DECIDE clauses cannot reference DECIDE variables."));
         }
-
-        // Execute the subquery using a fresh Connection
-        // This is safe because:
-        // 1. A new Connection has its own ClientContext with its own lock (no deadlock)
-        // 2. It goes through the complete query execution path (handles complex queries like HashJoin)
-        // 3. Read-only subqueries don't conflict with the outer transaction (MVCC)
-        Connection temp_conn(*context.db);
-        auto query_result = temp_conn.Query(sql);
-        
-        if (query_result->HasError()) {
-            return BindResult(BinderException::Unsupported(expr, 
-                "Failed to execute subquery: " + query_result->GetError()));
-        }
-        
-        auto &mat_res = query_result->Cast<MaterializedQueryResult>();
-        Value val;
-        if (mat_res.RowCount() == 0) {
-             val = Value(LogicalType::SQLNULL);
-        } else {
-             val = mat_res.GetValue(0, 0);
-        }
-        
-        return BindResult(make_uniq<BoundConstantExpression>(val));
+        // Standard binding handles both correlated and uncorrelated scalar subqueries.
+        // Uncorrelated: PlanSubqueries evaluates them as cross-joined scalars.
+        // Correlated: PlanSubqueries decorrelates them into joins, producing
+        //             per-row values that the DECIDE operator evaluates normally.
+        return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
     }
     default:
         return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);

@@ -13,6 +13,9 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	if (binding_when_condition) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
+	if (depth > 0) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
+	}
 	auto &expr = *expr_ptr;
     // DebugPrintParsed("BindObjective.input", expr);
     string error_msg;

@@ -147,6 +147,10 @@ void ColumnLifetimeAnalyzer::VisitOperator(LogicalOperator &op) {
 		everything_referenced = true;
 		break;
 	}
+	case LogicalOperatorType::LOGICAL_DECIDE: {
+		everything_referenced = true;
+		break;
+	}
 	case LogicalOperatorType::LOGICAL_FILTER: {
 		auto &filter = op.Cast<LogicalFilter>();
 		if (everything_referenced) {

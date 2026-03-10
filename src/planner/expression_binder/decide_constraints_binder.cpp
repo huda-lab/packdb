@@ -99,8 +99,6 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &comp = expr.Cast<ComparisonExpression>();
-    // DebugPrintParsed("BindComparison.left", *comp.left);
-    // DebugPrintParsed("BindComparison.right", *comp.right);
     string error_msg;
     auto left_type = GetExpressionType(*comp.left, error_msg);
     auto SimplifyZeroAddition = [&](auto &&self, unique_ptr<ParsedExpression> &node) -> void {
@@ -398,6 +396,9 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
 	if (binding_when_condition) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
+	if (depth > 0) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
+	}
 	auto &expr = *expr_ptr;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
@@ -425,6 +426,9 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
     case ExpressionClass::COMPARISON:
         return BindComparison(expr_ptr, depth);
     case ExpressionClass::OPERATOR: {
+        if (!is_top_expression) {
+            return ExpressionBinder::BindExpression(expr_ptr, depth);
+        }
         return BindOperator(expr_ptr, depth);
     }
 	case ExpressionClass::BETWEEN:

@@ -1,0 +1,2 @@
+Status: INFEASIBLE
+Objective: inf
