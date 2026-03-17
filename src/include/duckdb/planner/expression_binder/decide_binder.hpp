@@ -19,8 +19,6 @@ bool IsScalarValue(ParsedExpression &expr);
 
 bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
-
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);

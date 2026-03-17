@@ -172,7 +172,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                 if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg" && lhs_fname != "min" && lhs_fname != "max") {
                     return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...), AVG(...), MIN(...), or MAX(...)"));
                 }
-                if (!IsAllowedConstraintRHS(right, variables) || HasVariableExpression(right, variables)) {
+                if (!IsAllowedConstraintRHS(right, variables) || ExpressionContainsDecideVariable(right, variables)) {
                     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
                 }
                 break;

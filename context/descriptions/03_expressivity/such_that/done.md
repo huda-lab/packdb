@@ -107,6 +107,31 @@ SUCH THAT
     x <= (SELECT avg(budget) FROM Depts)
 ```
 
+### Correlated Scalar Subqueries
+
+Correlated subqueries that reference outer table columns are supported. They are delegated to DuckDB's standard `ExpressionBinder`, which decorrelates them into joins via `PlanSubqueries`, producing per-row values.
+
+**Per-row constraints**: The correlated subquery naturally becomes a per-row bound — each row gets its own RHS value from the join.
+
+```sql
+SUCH THAT
+    x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)
+```
+
+**Aggregate constraints**: The subquery RHS must evaluate to the **same scalar for all rows**. If the RHS varies per row, an error is thrown at execution time. This is because an aggregate constraint (`SUM(...)`) compiles to a single linear inequality, which requires a single RHS value.
+
+```sql
+-- Works: all items in the same region get the same budget
+SUCH THAT
+    SUM(x * price) <= (SELECT max(budget) FROM Depts WHERE Depts.region = items.region)
+
+-- Error: if items span multiple regions, the RHS varies per row
+-- "Aggregate constraint (SUM/AVG) requires a scalar right-hand side,
+--  but the RHS evaluates to different values per row"
+```
+
+**Restriction**: Subqueries cannot reference DECIDE variables (checked at bind time via `ExpressionContainsDecideVariable`).
+
 ---
 
 ## WHEN (Conditional Constraints)
@@ -146,5 +171,9 @@ SUCH THAT
   - `BindOperator()` (lines 198-210) — handles IN clause
   - `BindWhenConstraint()` (lines 258-302) — handles WHEN modifier
   - Validates that only SUM, AVG, MIN, and MAX are used as aggregate functions
+
+- **Subquery handling**: `src/planner/expression_binder/decide_binder.cpp`
+  - `DecideBinder::BindExpression()` (lines 233-259) — validates scalar-only, no DECIDE variable references, then delegates to `ExpressionBinder::BindExpression` for both uncorrelated and correlated subqueries
+  - Correlated subquery RHS validation at execution: `src/packdb/utility/ilp_model_builder.cpp` (lines 153-163) — checks that aggregate constraint RHS is scalar
 
 - **Execution** (constraint matrix construction): `src/execution/operator/decide/physical_decide.cpp`

@@ -43,6 +43,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
   - `x + y`: OK.
   - `x * column`: OK (column is constant per row).
   - `x * y`: **ERROR** (Non-linear).
+- **Subqueries**: Scalar subqueries (both uncorrelated and correlated) are allowed on the RHS of constraints. Correlated subqueries are decorrelated into joins, producing per-row values. For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows. Subqueries cannot reference DECIDE variables.
 
 ## 4. Objective
 

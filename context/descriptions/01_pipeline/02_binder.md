@@ -31,15 +31,22 @@ The binder walks the expression tree and flags an error if it encounters a multi
 
 ### 3.2 Subquery Handling
 
-PackDB supports **uncorrelated scalar subqueries** in the bounds of constraints.
+PackDB supports both **uncorrelated and correlated scalar subqueries** in constraints.
 
-- Example: `SUM(x) <= (SELECT COUNT(*) FROM Drivers)`
-- **Mechanism**: These subqueries are executed immediately during the Binding phase. The result is replaced by a constant value in the bound, ensuring the Solver receives a static problem definition.
+- Example (uncorrelated): `SUM(x) <= (SELECT COUNT(*) FROM Drivers)`
+- Example (correlated): `x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)`
+- **Mechanism**: Subqueries are delegated to DuckDB's standard `ExpressionBinder::BindExpression`, which handles both cases via `PlanSubqueries`:
+  - **Uncorrelated**: Evaluated once as cross-joined scalars (constant RHS).
+  - **Correlated**: Decorrelated into joins, producing per-row values.
+- **Validation**:
+  - Only scalar subqueries are supported (non-scalar returns an error).
+  - Subqueries cannot reference DECIDE variables (checked via `ExpressionContainsDecideVariable` at `decide_binder.cpp:246`).
+  - For aggregate constraints (`SUM`, `AVG`), the RHS must be a scalar (same value for all rows). This is validated at execution time in `ilp_model_builder.cpp` — if the correlated subquery produces different values per row, an error is thrown.
 
 ### 3.3 Operator Restrictions
 
-- **IN operator**: The binder explicitly rejects `IN` on decision variables with a clear error message. This is because `x IN (1, 2, 3)` is a disjunctive constraint that cannot be expressed as a single linear constraint.
-- **Standard comparisons** (`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`): Supported on both per-row and aggregate constraints.
+- **IN operator**: `IN` on decision variables is supported via rewrite to K auxiliary binary indicator variables (one per value in the set), with cardinality and linking constraints. See Section 6.1.
+- **Standard comparisons** (`=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`): Supported on both per-row and aggregate constraints.
 
 ## 4. Type Inference & Syntactic Sugar
 

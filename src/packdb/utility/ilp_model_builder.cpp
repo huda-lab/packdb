@@ -178,6 +178,17 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                     group_rows[gid].push_back(row);
                 }
 
+                double rhs = eval_const.rhs_values[0];
+                for (idx_t r = 1; r < eval_const.rhs_values.size(); r++) {
+                    if (eval_const.rhs_values[r] != rhs) {
+                        throw InvalidInputException(
+                            "Aggregate PER constraint requires a scalar right-hand side, "
+                            "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
+                            "This can happen with correlated subqueries.",
+                            rhs, r, eval_const.rhs_values[r]);
+                    }
+                }
+
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) {
                         continue;
@@ -197,16 +208,6 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                         }
                     }
 
-                    double rhs = eval_const.rhs_values[0];
-                    for (idx_t r = 1; r < eval_const.rhs_values.size(); r++) {
-                        if (eval_const.rhs_values[r] != rhs) {
-                            throw InvalidInputException(
-                                "Aggregate PER constraint requires a scalar right-hand side, "
-                                "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
-                                "This can happen with correlated subqueries.",
-                                rhs, r, eval_const.rhs_values[r]);
-                        }
-                    }
                     if (eval_const.was_avg_rewrite) {
                         rhs *= static_cast<double>(group_rows[g].size());
                     }

@@ -12,7 +12,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, scope, linearity | *(no planned features)* |
-| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries, WHEN, PER | Correlated subqueries |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER | *(no planned features)* |
 | [maximize_minimize/](maximize_minimize/) | SUM, AVG, MIN/MAX, COUNT, multi-var, column arithmetic, WHEN on objective, ABS, PER on objective (nested aggregates) | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
@@ -36,7 +36,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `IN (...)` on table columns | Yes | — |
 | `IN (...)` on decision variables | Yes (auxiliary binary indicators) | — |
 | Uncorrelated scalar subqueries | Yes | — |
-| Correlated subqueries | **No** | [such_that/todo.md](such_that/todo.md) |
+| Correlated scalar subqueries | Yes (per-row constraints; aggregate requires scalar RHS) | — |
 | Linear constraints | Yes | — |
 | Non-linear constraints (`x * y`) | Not supported (by design) | — |
 | `WHEN` on constraints | Yes | — |
@@ -67,10 +67,10 @@ All previously planned priorities are **done**:
 7. ~~**Multi-column PER**~~ — done (`PER (col1, col2, ...)` with composite keys)
 
 8. ~~**PER on objective**~~ — done (nested aggregate syntax with two-level auxiliary formulation)
+9. ~~**Correlated subqueries**~~ — done (delegated to DuckDB's standard decorrelation; per-row constraints + scalar-RHS aggregate constraints)
 
 **Remaining**:
 - **Row-varying RHS with PER** — see [per/todo.md](per/todo.md)
-- **Correlated subqueries** — see [such_that/todo.md](such_that/todo.md)
 
 ---
 

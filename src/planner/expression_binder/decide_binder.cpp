@@ -48,53 +48,6 @@ bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<i
     return false;
 }
 
-bool HasVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-    // Base case: Check if the current expression itself is a variable.
-    if (IsVariableExpression(expr, variables)) {
-        return true;
-    }
-
-    // Special case for subqueries.
-    if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
-        auto &subquery_expr = expr.Cast<SubqueryExpression>();
-
-        // 1. Check the comparison child of the subquery (e.g., the 'x' in 'x > ANY(...)').
-        if (subquery_expr.child && HasVariableExpression(*subquery_expr.child, variables)) {
-            return true;
-        }
-
-        // 2. Recursively check the QueryNode of the subquery itself.
-        if (subquery_expr.subquery && subquery_expr.subquery->node) {
-            bool found_in_subquery = false;
-            // Use EnumerateQueryNodeChildren to traverse SELECT, WHERE, HAVING, etc.
-            ParsedExpressionIterator::EnumerateQueryNodeChildren(
-                *subquery_expr.subquery->node,
-                [&](unique_ptr<ParsedExpression> &child) {
-                    if (HasVariableExpression(*child, variables)) {
-                        found_in_subquery = true;
-                    }
-                },
-                [&](TableRef &ref) {}
-            );
-            if (found_in_subquery) {
-                return true;
-            }
-        }
-    }
-
-    // General recursive step for all other expression types.
-    bool has_variable = false;
-    ParsedExpressionIterator::EnumerateChildren(
-        expr,
-        [&](ParsedExpression &child) {
-            if (HasVariableExpression(child, variables)) {
-                has_variable = true;
-            }
-        }
-    );
-
-    return has_variable;
-}
 
 static bool IsVariableExpressionConst(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
@@ -112,6 +65,20 @@ static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr
 	idx_t count = 0;
 	if (IsVariableExpressionConst(expr, variables)) {
 		count++;
+	}
+	// Descend into subquery QueryNode bodies (SELECT, WHERE, HAVING, etc.)
+	// EnumerateChildren only visits SubqueryExpression.child, not the query body.
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		auto &subquery_expr = expr.Cast<const SubqueryExpression>();
+		if (subquery_expr.subquery && subquery_expr.subquery->node) {
+			// const_cast: EnumerateQueryNodeChildren requires non-const but we only read
+			ParsedExpressionIterator::EnumerateQueryNodeChildren(
+			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
+			    [&](unique_ptr<ParsedExpression> &child) {
+				    count += CountDecideVariableOccurrencesInternal(*child, variables);
+			    },
+			    [&](TableRef &ref) {});
+		}
 	}
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		count += CountDecideVariableOccurrencesInternal(child, variables);
@@ -276,7 +243,7 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
         if (subquery.subquery_type != SubqueryType::SCALAR) {
              return BindResult(BinderException::Unsupported(expr, "Only scalar subqueries are supported in DECIDE"));
         }
-        if (HasVariableExpression(expr, variables)) {
+        if (ExpressionContainsDecideVariable(expr, variables)) {
             return BindResult(BinderException::Unsupported(expr,
                 "Subqueries in DECIDE clauses cannot reference DECIDE variables."));
         }

@@ -240,3 +240,44 @@ class TestBinderErrors:
                 SUCH THAT x <= 1 WHEN (x = 1 AND l_returnflag = 'R')
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
+
+    # --- Correlated subquery on aggregate RHS error cases ---
+
+    @pytest.mark.cons_subquery
+    @pytest.mark.cons_aggregate
+    def test_correlated_subquery_aggregate_rhs_non_scalar(self, packdb_cli):
+        """Correlated subquery on aggregate constraint RHS produces per-row values — must error.
+
+        SUM(x * supplycost) <= (SELECT p_size ...) decorrelates into a per-row
+        column, but an aggregate constraint needs a single scalar RHS.
+        """
+        packdb_cli.assert_error("""
+                SELECT ps_partkey, ps_suppkey, x
+                FROM partsupp
+                WHERE ps_partkey < 10
+                DECIDE x IS INTEGER
+                SUCH THAT SUM(x * ps_supplycost)
+                          <= (SELECT CAST(p_size AS INTEGER) FROM part
+                              WHERE p_partkey = ps_partkey)
+                MAXIMIZE SUM(x)
+            """, match=r"scalar right-hand side")
+
+    @pytest.mark.cons_subquery
+    @pytest.mark.cons_aggregate
+    @pytest.mark.per_clause
+    def test_correlated_subquery_aggregate_per_rhs_non_scalar(self, packdb_cli):
+        """Correlated subquery on aggregate PER constraint RHS — must error.
+
+        Same rejection as the non-PER case, but exercises the PER-path
+        validation in ilp_model_builder.
+        """
+        packdb_cli.assert_error("""
+                SELECT ps_partkey, ps_suppkey, x
+                FROM partsupp
+                WHERE ps_partkey < 20
+                DECIDE x IS INTEGER
+                SUCH THAT SUM(x) <= (SELECT CAST(p_size AS INTEGER) FROM part
+                                     WHERE p_partkey = ps_partkey)
+                          PER ps_suppkey
+                MAXIMIZE SUM(x)
+            """, match=r"scalar right-hand side")
