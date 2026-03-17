@@ -1,49 +1,55 @@
 # PackDB COP Optimizer
 
-This folder documents the optimization strategies for Constrained Optimization Problem (COP) queries — the DECIDE clause portion of PackDB. Each strategy area is a **subfolder** with:
+This folder documents the optimization strategies for Constrained Optimization Problem (COP) queries — the DECIDE clause portion of PackDB. Each area is a **subfolder** with:
 
 - `done.md` — What is implemented today, with code pointers
 - `todo.md` — What remains to be built, with design rationale and implementation suggestions
 
 ---
 
-## Development Priorities
+## Capstone Priorities
 
-1. **Query rewriting** (Big-M reformulation, constraint push-down/pull-out) — **primary near-term focus**
-2. **Problem reduction** (skyband indexing, progressive shading) — for scaling to large datasets
-3. **Physical planning** (cost-based solver selection) — for production deployment
-4. **Adaptive processing** (softening, incremental) — for interactive use cases
+| Priority | Area | Folder | Goal |
+|----------|------|--------|------|
+| 1 | Matrix efficiency | [matrix_efficiency/](matrix_efficiency/) | Make ILPs smaller and safer (bound conversion, solver timeout) |
+| 2 | Partition-solve | [partition_solve/](partition_solve/) | Decompose PER queries into independent sub-ILPs |
+| 3 | Rewrite passes | [rewrite_passes/](rewrite_passes/) | Push-down, pull-out, migrate binder rewrites to optimizer |
 
 ---
 
-## Folders
+## All Folders
 
 | Folder | done.md | todo.md |
-|---|---|---|
-| [query_rewriting/](query_rewriting/) | WHERE filtering, WHEN coefficient zeroing | Big-M, push-down, pull-out, bound conversion |
-| [reformulation/](reformulation/) | *(nothing)* | LP relaxation, constraint tightening, symmetry breaking |
-| [problem_reduction/](problem_reduction/) | *(nothing)* | **Partition-solve (PER decomposition)**, Skyband indexing, Progressive Shading, LGS |
-| [adaptive_processing/](adaptive_processing/) | *(nothing)* | Solver timeout, constraint softening, incremental reasoning |
-| [physical_planning/](physical_planning/) | Solver selection (Gurobi/HiGHS) | Cost-based strategy selection |
+|--------|---------|---------|
+| [existing_optimizations/](existing_optimizations/) | WHERE filtering, WHEN zeroing, solver selection, binder algebraic rewrites (COUNT/AVG/ABS/MIN/MAX/`<>`/IN), DecideOptimizer pass | *(none — reference only)* |
+| [matrix_efficiency/](matrix_efficiency/) | No matrix-level optimizations yet | Constraint-to-bound conversion, solver time limit |
+| [partition_solve/](partition_solve/) | `row_group_ids` foundation from PER | PER decomposition into K independent ILPs |
+| [rewrite_passes/](rewrite_passes/) | Current binder + optimizer rewrite locations | Push-down, pull-out, binder-to-optimizer migration |
+| [future_work/](future_work/) | *(none)* | Skyband, Progressive Shading, LGS, LP relaxation, cuts, symmetry breaking, softening, hardening, incremental reasoning, cost-based selection, bound tightening |
 
 ---
 
-## Summary: What's Implemented vs. What's Planned
+## Implementation Status
 
-| Strategy | Status |
-|---|---|
-| WHERE-clause filtering | Implemented (inherited from DuckDB) |
-| WHEN-condition coefficient zeroing | Implemented |
-| Solver selection (Gurobi/HiGHS fallback) | Implemented |
-| Big-M reformulation | **Not implemented** |
-| Constraint push-down | **Not implemented** |
-| Constraint pull-out | **Not implemented** |
-| Constraint-to-bound conversion | **Not implemented** |
-| LP relaxation + rounding | **Not implemented** |
-| Partition-solve (PER decomposition) | **Not implemented** (enabled by PER `row_group_ids` design) |
-| Skyband indexing | **Not implemented** |
-| Progressive Shading | **Not implemented** |
-| Solver time limit | **Not implemented** |
-| Everything else | **Not implemented** |
-
-The current system performs **no COP-specific optimization** beyond basic filtering and solver dispatch. The full optimizer vision involves query rewriting, reformulation, problem reduction, adaptive processing, and cost-based physical planning.
+| Optimization | Status | Location |
+|---|---|---|
+| WHERE-clause filtering | **Implemented** | Inherited from DuckDB (no DECIDE-specific code) |
+| WHEN-condition coefficient zeroing | **Implemented** | `existing_optimizations/done.md` §2 |
+| Solver selection (Gurobi/HiGHS fallback) | **Implemented** | `existing_optimizations/done.md` §3 |
+| COUNT → SUM rewrite | **Implemented** | `existing_optimizations/done.md` §4 |
+| AVG → SUM rewrite | **Implemented** | `existing_optimizations/done.md` §4 |
+| ABS linearization | **Implemented** | `existing_optimizations/done.md` §4 |
+| MIN/MAX linearization (easy + hard) | **Implemented** | `existing_optimizations/done.md` §4 |
+| `<>` disjunction rewrite | **Implemented** | `existing_optimizations/done.md` §4 |
+| IN on decision variables | **Implemented** | `existing_optimizations/done.md` §4 |
+| DecideOptimizer pass | **Implemented** | `existing_optimizations/done.md` §5 |
+| Constraint-to-bound conversion | **Planned** | `matrix_efficiency/todo.md` |
+| Solver time limit | **Planned** | `matrix_efficiency/todo.md` |
+| Partition-solve (PER decomposition) | **Planned** (foundation ready) | `partition_solve/todo.md` |
+| Constraint push-down | **Planned** | `rewrite_passes/todo.md` |
+| Constraint pull-out | **Planned** | `rewrite_passes/todo.md` |
+| Binder-to-optimizer migration | **Planned** | `rewrite_passes/todo.md` |
+| Skyband indexing | **Future** | `future_work/todo.md` |
+| Progressive Shading | **Future** | `future_work/todo.md` |
+| LP relaxation + rounding | **Future** | `future_work/todo.md` |
+| All other items | **Future** | `future_work/todo.md` |

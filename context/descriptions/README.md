@@ -56,7 +56,7 @@ are about to modify source code and need to know where things live on disk.
 | — Solver Backends      | Gurobi (preferred) / HiGHS (fallback) dispatch                           | `01_pipeline/03d_solver_backends.md` | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp`            |
 | — Result Projection    | Projects solution values onto rows with type-specific casting             | `01_pipeline/03e_result_projection.md` | `physical_decide.cpp` (GetData)                                           |
 
-> **Note**: The binder now contains proto-optimizer rewrite passes (COUNT→SUM, AVG→SUM, ABS linearization) documented in Section 6 of `02_binder.md`. These are algebraic rewrites that should eventually migrate to a dedicated optimizer layer — see `04_optimizer/query_rewriting/todo.md`.
+> **Note**: The binder now contains proto-optimizer rewrite passes (COUNT→SUM, AVG→SUM, ABS linearization) documented in Section 6 of `02_binder.md`. These are algebraic rewrites that should eventually migrate to a dedicated optimizer layer — see `04_optimizer/rewrite_passes/todo.md`.
 
 ---
 
