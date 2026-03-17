@@ -359,9 +359,7 @@ extension_external
 test/sql/pragma/output.json
 tools/pythonpkg/duckdb_build/
 
-# Claude
-CLAUDE.md
-.claude.local.md
+
 
 # HiGHS solver logs
 HiGHS.log

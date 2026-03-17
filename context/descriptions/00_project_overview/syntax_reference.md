@@ -18,7 +18,7 @@ SUCH THAT
 - **Type Declarations** (in DECIDE clause):
   - `x IS INTEGER`: Default if no type specified. $x \in \{0, 1, 2, ...\}$
   - `x IS BOOLEAN`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
-  - `x IS REAL`: **Not Supported** (Error).
+  - `x IS REAL`: $x \in [0, \infty)$ (continuous, non-negative)
 
 **Examples:**
 
@@ -26,7 +26,8 @@ SUCH THAT
 DECIDE x IS BOOLEAN           -- x is binary (0 or 1)
 DECIDE x IS INTEGER           -- x is non-negative integer
 DECIDE x                      -- same as x IS INTEGER (default)
-DECIDE x IS BOOLEAN, y IS INTEGER  -- multiple typed variables
+DECIDE x IS REAL              -- x is continuous, non-negative
+DECIDE x IS BOOLEAN, y IS INTEGER, z IS REAL  -- multiple typed variables
 ```
 
 ## 3. Constraints
