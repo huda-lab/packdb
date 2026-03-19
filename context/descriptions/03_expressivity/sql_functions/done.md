@@ -35,7 +35,7 @@ MAXIMIZE COUNT(x)           -- maximize number of non-zero rows
 SUCH THAT COUNT(x) <= 2     -- at most 2 non-zero assignments
 ```
 
-The rewrite happens early, before normalization and binding, in `bind_select_node.cpp` via the `RewriteCountToSum()` function. This means COUNT inherits all SUM capabilities (WHEN, PER, all comparison operators) for free. Multiple `COUNT(x)` references to the same variable reuse a single indicator.
+The binder recognizes COUNT as a valid DECIDE aggregate and binds it into a `BoundAggregateExpression`. The rewrite to SUM (with indicator variable creation for INTEGER variables) is performed by `DecideOptimizer::RewriteCountToSum` in `decide_optimizer.cpp`. This means COUNT inherits all SUM capabilities (WHEN, PER, all comparison operators) for free. Multiple `COUNT(x)` references to the same variable reuse a single indicator.
 
 `COUNT(x)` is **rejected** for REAL variables with a clear error message.
 
@@ -147,7 +147,7 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 
 `ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
 
-**Code**: The rewrite happens early in `bind_select_node.cpp` via `RewriteAbsLinearization()`, before normalization and binding. Auxiliary variables are included in the DECIDE variable pipeline but hidden from `SELECT *` by truncating the bind context after binding.
+**Code**: The rewrite is performed by `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. The binder binds ABS as a normal function; the optimizer detects it, creates auxiliary variables, and generates linearization constraints. Auxiliary variables are hidden from `SELECT *` by truncating the bind context.
 
 **Tests**: `test/decide/tests/test_abs_linearization.py` — 8 test cases covering objectives, constraints, WHEN, PER, multiple ABS terms, no-decide-var, and mixed variable types.
 
@@ -193,7 +193,7 @@ SUCH THAT SUM(x) = 5
 
 **Complexity**: Adds 1 binary variable and 2 constraints per `<>`. The Big-M value M is computed from variable bounds at execution time. Loose bounds produce weaker LP relaxations.
 
-**Code**: Auxiliary variable declared in `bind_select_node.cpp` (`RewriteNotEqual()`); Big-M constraints generated at execution time in `physical_decide.cpp` (`Finalize()`), where data bounds are available.
+**Code**: Auxiliary indicator variable created by `DecideOptimizer::RewriteNotEqual` in `decide_optimizer.cpp`; Big-M constraints generated at execution time in `physical_decide.cpp` (`Finalize()`), where data bounds are available.
 
 ### BETWEEN ... AND ...
 

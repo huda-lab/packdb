@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/decide_constraints_binder.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -169,8 +170,8 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                 }
                 auto &lhs_func = comp.left->Cast<FunctionExpression>();
                 auto lhs_fname = StringUtil::Lower(lhs_func.function_name);
-                if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg" && lhs_fname != "min" && lhs_fname != "max") {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...), AVG(...), MIN(...), or MAX(...)"));
+                if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg" && lhs_fname != "min" && lhs_fname != "max" && lhs_fname != "count") {
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...), AVG(...), MIN(...), MAX(...), or COUNT(...)"));
                 }
                 if (!IsAllowedConstraintRHS(right, variables) || ExpressionContainsDecideVariable(right, variables)) {
                     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
@@ -312,7 +313,7 @@ static bool IsAggregateConstraint(const ParsedExpression &expr) {
         if (comp.left->GetExpressionClass() == ExpressionClass::FUNCTION) {
             auto &lhs = comp.left->Cast<FunctionExpression>();
             auto lhs_fn = StringUtil::Lower(lhs.function_name);
-            if (lhs_fn == "sum" || lhs_fn == "avg" || lhs_fn == "min" || lhs_fn == "max") {
+            if (lhs_fn == "sum" || lhs_fn == "avg" || lhs_fn == "min" || lhs_fn == "max" || lhs_fn == "count") {
                 return true;
             }
         }
@@ -456,8 +457,25 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
-            if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
+		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max" || fname == "count") {
+            if (fname == "count") {
+                // COUNT requires a single bare DECIDE variable reference, not an expression.
+                // Also reject COUNT on REAL variables.
+                if (func.children.size() != 1 || !IsVariableExpression(*func.children.front(), variables)) {
+                    error_msg = "COUNT requires a single DECIDE variable as argument";
+                    return DecideExpression::INVALID;
+                }
+                auto &colref = func.children.front()->Cast<ColumnRefExpression>();
+                auto it = variables.find(colref.GetColumnName());
+                if (it != variables.end() && it->second < var_types.size() &&
+                    var_types[it->second] == LogicalType::DOUBLE) {
+                    error_msg = StringUtil::Format(
+                        "COUNT(%s) requires a BOOLEAN or INTEGER decision variable. "
+                        "For REAL variables, COUNT is not yet supported.",
+                        colref.GetColumnName());
+                    return DecideExpression::INVALID;
+                }
+            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
@@ -468,7 +486,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
             // (e.g., z_1 + z_2 + z_3 from IN rewrite, or d - x from ABS linearization)
             return DecideExpression::VARIABLE;
         } else {
-            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
+            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
     }

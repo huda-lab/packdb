@@ -56,20 +56,10 @@ public:
     unique_ptr<Expression> decide_constraints;
     DecideSense decide_sense;
     unique_ptr<Expression> decide_objective;
-    //! Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
+    //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
-    //! Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
-    vector<pair<idx_t, idx_t>> count_indicator_links;
-    //! Indices of auxiliary indicator variables for not-equal (<>) constraints
-    vector<idx_t> ne_indicator_indices;
-    //! Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
-    vector<pair<string, idx_t>> minmax_indicator_links;
-    //! If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
-    string minmax_objective_type;
-    //! PER on objective: inner aggregate type ("sum", "min", "max"), empty if no PER
-    string per_inner_objective_type;
-    //! PER on objective: outer aggregate type ("sum", "min", "max"), empty if no PER
-    string per_outer_objective_type;
+    //! MIN/MAX indicator links, objective type, and PER types are now populated by
+    //! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
 	//! list of groups
 	BoundGroupByNode groups;
 	//! HAVING clause

@@ -68,13 +68,13 @@ class TestBinderErrors:
             """, match=r"must be one of the DECIDE variables")
 
     def test_non_sum_avg_min_max_function_in_objective(self, packdb_cli):
-        """STDDEV(x) is not supported in objective — only SUM, AVG, MIN, or MAX is allowed."""
+        """STDDEV(x) is not supported in objective — only SUM, AVG, MIN, MAX, or COUNT is allowed."""
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT SUM(x) <= 5
                 MAXIMIZE STDDEV(x*l_quantity) LIMIT 1
-            """, match=r"only SUM, AVG, MIN, or MAX is allowed")
+            """, match=r"only SUM, AVG, MIN, MAX, or COUNT is allowed")
 
     def test_no_decide_variable_in_sum(self, packdb_cli):
         """SUM over a regular column without DECIDE variable."""

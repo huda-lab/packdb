@@ -27,6 +27,9 @@ struct LinearConstraint {
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
     bool was_avg_rewrite = false;        // True if this aggregate was originally AVG (RHS needs scaling)
+    idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
+    string minmax_agg_type;              // "min" or "max" (empty if not minmax)
+    idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
     unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
 
@@ -86,12 +89,19 @@ public:
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<pair<string, idx_t>> minmax_indicator_links;
 
-    // If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
-    string minmax_objective_type;
+    // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // PER on objective: inner and outer aggregate types (empty if no PER on objective)
-    string per_inner_objective_type;
-    string per_outer_objective_type;
+    // Flat (non-PER) objective: original aggregate type before rewrite to SUM
+    ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
+    // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
+    bool flat_objective_is_easy = false;
+
+    // PER nested objective: OUTER(INNER(expr)) PER col
+    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
+    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
+    // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
+    bool per_inner_is_easy = false;
+    bool per_outer_is_easy = false;
 
 public:
     // Source interface

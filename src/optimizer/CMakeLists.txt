@@ -1,4 +1,5 @@
 add_subdirectory(compressed_materialization)
+add_subdirectory(decide)
 add_subdirectory(join_order)
 add_subdirectory(matcher)
 add_subdirectory(pullup)

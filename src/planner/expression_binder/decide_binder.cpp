@@ -105,11 +105,30 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		auto &func = expr.Cast<FunctionExpression>();
 		string func_name_lower = StringUtil::Lower(func.function_name);
 		if (!func.is_operator) {
-			if (func_name_lower == "sum") {
-				error_msg = "Nested SUM() inside DECIDE SUM expression is not supported";
-			} else {
-				error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
+			if (func_name_lower == "abs") {
+				// ABS is allowed inside SUM — will be linearized by the optimizer.
+				// Treat ABS as opaque: just verify it references a decide variable.
+				if (func.children.size() != 1) {
+					error_msg = "ABS requires exactly one argument";
+					return false;
+				}
+				if (ExpressionContainsDecideVariable(*func.children[0], variables)) {
+					has_decide_variable = true;
+				}
+				return true;
 			}
+			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum") {
+				// Nested aggregates (e.g., SUM(MAX(expr)) for PER objectives) are allowed.
+				// The optimizer will detect and rewrite them.
+				if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
+					has_decide_variable = true;
+					return true;
+				}
+				error_msg = StringUtil::Format("Nested %s() inside DECIDE expression must reference a DECIDE variable",
+				                               StringUtil::Upper(func_name_lower));
+				return false;
+			}
+			error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
 			return false;
 		}
 		if (func_name_lower == "*" || func_name_lower == "+") {

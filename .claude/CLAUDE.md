@@ -24,8 +24,9 @@ Tests are in `test/decide/`.
 - Parser/Symbolic: `src/packdb/symbolic/decide_symbolic.cpp`
 - Binder: `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp`
 - Logical operator: `src/planner/operator/logical_decide.cpp`
+- Optimizer: `src/optimizer/decide/decide_optimizer.cpp` (algebraic rewrites: COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators)
 - Physical execution + solver integration (Gurobi/HiGHS): `src/execution/operator/decide/physical_decide.cpp`
-- Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, etc.)
+- Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, etc.)
 
 ## DECIDE Syntax (Quick Reference)
 

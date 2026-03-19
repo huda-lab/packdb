@@ -1,20 +1,24 @@
 # Rewrite Passes — Done
 
-Current algebraic rewrites are split between the **binder** (expression-level transforms during `bind_select_node.cpp`) and the **DecideOptimizer** pass (logical-level transforms after binding).
+All DECIDE algebraic rewrites are now in the **DecideOptimizer** pass (logical-level transforms after binding). The binder validates and binds expressions; the optimizer rewrites them.
 
 ## Current Rewrite Locations
 
 | Rewrite | Stage | Function | File |
 |---------|-------|----------|------|
-| COUNT → SUM (BOOLEAN) | Binder | `RewriteCountToSum` | `bind_select_node.cpp:414-467` |
-| COUNT → SUM (INTEGER, Big-M) | Binder | `RewriteCountToSum` | `bind_select_node.cpp:414-467` |
-| AVG → SUM (RHS scaling) | Binder + Execution | flag at `physical_decide.cpp:391` | scaling at `ilp_model_builder.cpp:164-166, 211-213` |
-| ABS → auxiliary var | Binder | `RewriteAbsLinearization` | `bind_select_node.cpp:527-546` |
-| ABS linearization constraints | Optimizer | `DecideOptimizer::RewriteAbs` | `decide_optimizer.cpp:105-136` |
-| MIN/MAX linearization | Binder | `RewriteMinMaxInExpression` | `bind_select_node.cpp:559+` |
-| `<>` disjunction | Optimizer | `DecideOptimizer::RewriteNotEqual` | `decide_optimizer.cpp:38-47` |
-| COUNT indicator linking | Optimizer | `DecideOptimizer::RewriteCount` | `decide_optimizer.cpp:84-103` |
+| ABS linearization (full) | Optimizer | `DecideOptimizer::RewriteAbs` | `decide_optimizer.cpp` |
+| MIN/MAX linearization | Optimizer | `DecideOptimizer::RewriteMinMax` | `decide_optimizer.cpp` |
+| `<>` disjunction | Optimizer | `DecideOptimizer::RewriteNotEqual` | `decide_optimizer.cpp` |
+| COUNT → SUM (BOOLEAN/INTEGER) | Optimizer | `DecideOptimizer::RewriteCountToSum` | `decide_optimizer.cpp` |
+| AVG → SUM (RHS scaling) | Optimizer | `DecideOptimizer::RewriteAvgToSum` | `decide_optimizer.cpp` |
 
-The binder rewrites were the first transforms implemented and operate on `ParsedExpression` trees. The optimizer rewrites were added later and operate on `LogicalDecide` nodes within DuckDB's optimizer framework.
+The binder recognizes COUNT, AVG, ABS, MIN, and MAX as valid DECIDE aggregates/functions and binds them into their respective `BoundExpression` nodes. The optimizer then rewrites them:
+- **ABS linearization**: Detects `BoundFunctionExpression` for ABS over decide variables. Creates auxiliary REAL variables, replaces ABS nodes with aux var references, and generates linearization constraints (`aux >= inner`, `aux >= -inner`).
+- **MIN/MAX linearization**: Classifies MIN/MAX constraints as easy (strip aggregate → per-row) or hard (create BOOLEAN indicator, rewrite to SUM). Handles equality splitting, WHEN/PER wrappers, and objectives (flat and nested PER). Populates `minmax_indicator_links` on `LogicalDecide`. For objectives, sets typed metadata: `flat_objective_agg`/`flat_objective_is_easy` (flat) and `per_inner_agg`/`per_outer_agg`/`per_inner_is_easy`/`per_outer_is_easy` (PER). The easy/hard classification is pre-computed at optimization time so the physical layer reads the decision directly.
+- **COUNT → SUM**: Creates indicator variables for INTEGER variables, populates `count_indicator_links`, and generates the `z <= x` linking constraint (forces z=0 when x=0). The companion constraint `x <= M*z` (forces z=1 when x>0) remains in physical execution because M depends on runtime variable bounds.
+- **AVG → SUM**: Replaces AVG with SUM and tags with `AVG_REWRITE_TAG` for RHS scaling at execution time. Objectives get no tag (same argmax/argmin).
+- **`<>` disjunction**: Creates BOOLEAN indicator variables for not-equal comparisons.
+
+This separation keeps semantic validation in the binder and algebraic transformation in the optimizer.
 
 **Cross-reference**: See `existing_optimizations/done.md` for detailed descriptions of each rewrite, including easy/hard case classification for MIN/MAX.

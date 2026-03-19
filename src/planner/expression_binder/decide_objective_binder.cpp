@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -147,14 +148,31 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
-            if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
+		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max" || fname == "count") {
+            if (fname == "count") {
+                // COUNT requires a single bare DECIDE variable reference.
+                // Reject COUNT on REAL variables.
+                if (func.children.size() != 1 || !IsVariableExpression(*func.children.front(), variables)) {
+                    error_msg = "COUNT requires a single DECIDE variable as argument";
+                    return DecideExpression::INVALID;
+                }
+                auto &colref = func.children.front()->Cast<ColumnRefExpression>();
+                auto it = variables.find(colref.GetColumnName());
+                if (it != variables.end() && it->second < var_types.size() &&
+                    var_types[it->second] == LogicalType::DOUBLE) {
+                    error_msg = StringUtil::Format(
+                        "COUNT(%s) requires a BOOLEAN or INTEGER decision variable. "
+                        "For REAL variables, COUNT is not yet supported.",
+                        colref.GetColumnName());
+                    return DecideExpression::INVALID;
+                }
+            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
             return DecideExpression::SUM;
 		} else {
-            error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
+            error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
     }

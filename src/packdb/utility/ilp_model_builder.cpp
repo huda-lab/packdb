@@ -208,10 +208,11 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                         }
                     }
 
+                    double group_rhs = rhs;
                     if (eval_const.was_avg_rewrite) {
-                        rhs *= static_cast<double>(group_rows[g].size());
+                        group_rhs *= static_cast<double>(group_rows[g].size());
                     }
-                    ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
+                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs);
                     model.constraints.push_back(std::move(constr));
                 }
             }

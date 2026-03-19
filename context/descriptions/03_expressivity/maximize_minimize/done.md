@@ -98,7 +98,7 @@ MINIMIZE SUM(ABS(new_hours - hours))    -- minimize total absolute deviation
 MINIMIZE SUM(ABS(x - a) + ABS(y - b))  -- multiple ABS terms
 ```
 
-The rewrite happens before normalization in `bind_select_node.cpp` via `RewriteAbsLinearization()`. Auxiliary variables are hidden from query output. See [sql_functions/done.md](../sql_functions/done.md) for the full linearization details.
+The rewrite is performed by `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. Auxiliary variables are hidden from query output. See [sql_functions/done.md](../sql_functions/done.md) for the full linearization details.
 
 ### PER on Objective — Nested Aggregate Syntax
 

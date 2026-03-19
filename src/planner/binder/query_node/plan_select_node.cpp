@@ -44,12 +44,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         );
 
         decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
-        decide_op->count_indicator_links = std::move(statement.count_indicator_links);
-        decide_op->ne_indicator_indices = std::move(statement.ne_indicator_indices);
-        decide_op->minmax_indicator_links = std::move(statement.minmax_indicator_links);
-        decide_op->minmax_objective_type = std::move(statement.minmax_objective_type);
-        decide_op->per_inner_objective_type = std::move(statement.per_inner_objective_type);
-        decide_op->per_outer_objective_type = std::move(statement.per_outer_objective_type);
+        // count_indicator_links, ne_indicator_indices, ABS aux vars, and MIN/MAX
+        // indicator links + objective types are created by DecideOptimizer (runs after plan creation)
         decide_op->AddChild(std::move(root));
         root = std::move(decide_op);
     }

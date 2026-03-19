@@ -34,9 +34,12 @@ struct SymbolicTranslationContext {
     
     //! Map of placeholder names to original subquery expressions
     unordered_map<string, unique_ptr<ParsedExpression>> subquery_map;
-    
+
+    //! Map of placeholder names to original ABS(...) expressions (opaque through normalization)
+    unordered_map<string, unique_ptr<ParsedExpression>> abs_map;
+
     //! Constructor
-    explicit SymbolicTranslationContext(const case_insensitive_map_t<idx_t> &vars) 
+    explicit SymbolicTranslationContext(const case_insensitive_map_t<idx_t> &vars)
         : decide_variables(vars) {}
 };
 

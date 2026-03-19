@@ -33,6 +33,10 @@
 #include "duckdb/optimizer/topn_optimizer.hpp"
 #include "duckdb/optimizer/unnest_rewriter.hpp"
 #include "duckdb/optimizer/late_materialization.hpp"
+#include "duckdb/optimizer/decide_optimizer.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/planner.hpp"
 
@@ -136,6 +140,12 @@ void Optimizer::RunBuiltInOptimizers() {
 		unordered_set<idx_t> top_bindings;
 		filter_pushdown.CheckMarkToSemi(*plan, top_bindings);
 		plan = filter_pushdown.Rewrite(std::move(plan));
+	});
+
+	// DECIDE-specific optimizations (indicator variable creation, linearization rewrites)
+	RunOptimizer(OptimizerType::DECIDE_OPTIMIZER, [&]() {
+		DecideOptimizer decide_optimizer(*this);
+		plan = decide_optimizer.Optimize(std::move(plan));
 	});
 
 	// derive and push filters into materialized CTEs
@@ -319,6 +329,29 @@ unique_ptr<Expression> Optimizer::BindScalarFunction(const string &name, vector<
 		throw InternalException("Optimizer exception - failed to bind function %s: %s", name, error.Message());
 	}
 	return expr;
+}
+
+unique_ptr<Expression> Optimizer::BindAggregateFunction(const string &name, vector<unique_ptr<Expression>> children) {
+	// Look up aggregate using the same pattern as FunctionBinder::BindScalarFunction
+	// (CatalogType::SCALAR_FUNCTION_ENTRY returns any function type; we then cast to aggregate)
+	auto &func_entry = Catalog::GetSystemCatalog(context)
+	                       .GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, DEFAULT_SCHEMA, name)
+	                       .Cast<AggregateFunctionCatalogEntry>();
+
+	vector<LogicalType> arg_types;
+	for (auto &child : children) {
+		arg_types.push_back(child->return_type);
+	}
+
+	FunctionBinder binder(context);
+	ErrorData error;
+	auto best_idx = binder.BindFunction(func_entry.name, func_entry.functions, arg_types, error);
+	if (!best_idx.IsValid()) {
+		throw InternalException("Optimizer exception - failed to bind aggregate function %s: %s", name,
+		                        error.Message());
+	}
+	auto bound_function = func_entry.functions.GetFunctionByOffset(best_idx.GetIndex());
+	return binder.BindAggregateFunction(bound_function, std::move(children));
 }
 
 } // namespace duckdb

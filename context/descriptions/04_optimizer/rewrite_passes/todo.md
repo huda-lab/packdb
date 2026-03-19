@@ -44,21 +44,18 @@ Extract common sub-expressions from PER-generated constraints. When PER creates 
 
 ## 3. Binder-to-Optimizer Migration
 
-**Priority**: Medium
+**Status**: Complete (all major rewrites migrated)
 
-Move remaining binder-level rewrites into the `DecideOptimizer` pass for consistency, composability, and reduced core DuckDB footprint.
+All DECIDE algebraic rewrites have been migrated from the binder to the `DecideOptimizer` pass:
+- `RewriteAbs` — ABS linearization (detect, replace, generate constraints)
+- `RewriteMinMax` — MIN/MAX easy/hard classification, indicator creation, objective handling (flat + nested PER)
+- `RewriteNotEqual` — `<>` indicator variable creation
+- `RewriteCountToSum` — COUNT→SUM with indicator variables for INTEGER
+- `RewriteAvgToSum` — AVG→SUM with alias tagging for RHS scaling
 
-**Rewrites to migrate**:
-- `RewriteCountToSum` (currently in `bind_select_node.cpp:414-467`)
-- `RewriteAbsLinearization` (currently in `bind_select_node.cpp:527-546`, partially in optimizer already)
-- `RewriteMinMaxInExpression` (currently in `bind_select_node.cpp:559+`)
-- AVG rewrite (currently flag-based across binder + execution)
+The only remaining binder-level rewrite is `RewriteInDomain` (IN domain constraints → indicator variables). This operates on `ParsedExpression` and creates auxiliary variables at bind time.
 
-**Why migrate**:
-- **Reduced DuckDB core modifications**: The binder is core DuckDB code; moving rewrites to the optimizer (PackDB-specific code) reduces upstream coupling
+**Benefits achieved**:
+- **Reduced DuckDB core modifications**: Rewrites now live in PackDB-specific optimizer code
 - **Better composability**: Optimizer passes can be reordered, enabled/disabled, and tested independently
-- **Unified framework**: All DECIDE rewrites in one place (`DecideOptimizer`) rather than split across binder and optimizer
-
-**Approach**: The `DecideOptimizer` already handles `RewriteNotEqual`, `RewriteCount`, and `RewriteAbs`. Extend it with additional passes for the remaining rewrites. Each rewrite becomes a method on `DecideOptimizer` operating on `LogicalDecide`.
-
-**Note**: Some rewrites (like COUNT → SUM) create new variables, which currently happens during binding when the variable list is being built. Migration may require the optimizer to be able to add variables to `LogicalDecide` after binding, which needs careful design.
+- **Unified framework**: All DECIDE rewrites in one place (`DecideOptimizer`)

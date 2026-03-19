@@ -25,6 +25,9 @@ struct EvaluatedConstraint {
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
     bool was_avg_rewrite = false;              // True if originally AVG (RHS scaled by row count)
+    idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
+    string minmax_agg_type;                    // "min" or "max" (empty if not minmax)
+    idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
 
     //! Unified WHEN+PER row→group mapping
     //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)

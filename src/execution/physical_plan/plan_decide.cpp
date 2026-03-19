@@ -16,9 +16,12 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->count_indicator_links = std::move(op.count_indicator_links);
     decide_op->ne_indicator_indices = std::move(op.ne_indicator_indices);
     decide_op->minmax_indicator_links = std::move(op.minmax_indicator_links);
-    decide_op->minmax_objective_type = std::move(op.minmax_objective_type);
-    decide_op->per_inner_objective_type = std::move(op.per_inner_objective_type);
-    decide_op->per_outer_objective_type = std::move(op.per_outer_objective_type);
+    decide_op->flat_objective_agg = op.flat_objective_agg;
+    decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
+    decide_op->per_inner_agg = op.per_inner_agg;
+    decide_op->per_outer_agg = op.per_outer_agg;
+    decide_op->per_inner_is_easy = op.per_inner_is_easy;
+    decide_op->per_outer_is_easy = op.per_outer_is_easy;
     return std::move(decide_op);
 }
 

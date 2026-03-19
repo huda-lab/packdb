@@ -48,7 +48,7 @@ are about to modify source code and need to know where things live on disk.
 | Stage                  | What it does                                                              | Doc                           | Key source file(s)                                                                 |
 | ---------------------- | ------------------------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------- |
 | Parser / Symbolic      | Normalizes algebraic expressions into canonical linear form               | `01_pipeline/01_parser.md`    | `src/packdb/symbolic/decide_symbolic.cpp`                                          |
-| Binder                 | Validates linearity, binds decision variables, applies rewrite passes     | `01_pipeline/02_binder.md`    | `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `bind_select_node.cpp` |
+| Binder                 | Validates linearity, binds decision variables, recognizes DECIDE aggregates | `01_pipeline/02_binder.md`    | `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `bind_select_node.cpp` |
 | Execution (overview)   | Pipeline overview with pointers to sub-phases                             | `01_pipeline/03_execution.md` | `src/execution/operator/decide/physical_decide.cpp`                                |
 | — Expression Analysis  | Extracts `LinearConstraint`/`LinearObjective` from bound expressions      | `01_pipeline/03a_expression_analysis.md` | `physical_decide.cpp` (DecideGlobalSinkState constructor)                 |
 | — Coefficient Eval     | Evaluates coefficient expressions row-by-row, builds WHEN+PER groupings  | `01_pipeline/03b_coefficient_evaluation.md` | `physical_decide.cpp` (Finalize)                                       |
@@ -56,7 +56,7 @@ are about to modify source code and need to know where things live on disk.
 | — Solver Backends      | Gurobi (preferred) / HiGHS (fallback) dispatch                           | `01_pipeline/03d_solver_backends.md` | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp`            |
 | — Result Projection    | Projects solution values onto rows with type-specific casting             | `01_pipeline/03e_result_projection.md` | `physical_decide.cpp` (GetData)                                           |
 
-> **Note**: The binder now contains proto-optimizer rewrite passes (COUNT→SUM, AVG→SUM, ABS linearization) documented in Section 6 of `02_binder.md`. These are algebraic rewrites that should eventually migrate to a dedicated optimizer layer — see `04_optimizer/rewrite_passes/todo.md`.
+> **Note**: Algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
 
 ---
 

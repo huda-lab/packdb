@@ -29,6 +29,7 @@
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/planner/expression_binder/select_binder.hpp"
 #include "duckdb/planner/expression_binder/where_binder.hpp"
+#include "duckdb/planner/expression_binder/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide_constraints_binder.hpp"
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
@@ -409,62 +410,10 @@ void Binder::BindWhereStarExpression(unique_ptr<ParsedExpression> &expr) {
 	}
 }
 
-// Rewrite COUNT(x) → SUM(x) for BOOLEAN decision variables (pre-normalization),
-// or COUNT(x) → SUM(indicator) for INTEGER decision variables using Big-M indicators.
-static void RewriteCountToSum(unique_ptr<ParsedExpression> &expr,
-                               case_insensitive_map_t<idx_t> &variables,
-                               vector<bool> &is_boolean_var,
-                               vector<string> &var_names,
-                               vector<LogicalType> &var_types,
-                               case_insensitive_map_t<idx_t> &count_indicator_map) {
-	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr->Cast<FunctionExpression>();
-		if (StringUtil::CIEquals(func.function_name, "count") && func.children.size() == 1) {
-			auto &child = *func.children[0];
-			if (child.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-				auto &colref = child.Cast<ColumnRefExpression>();
-				auto it = variables.find(colref.GetColumnName());
-				if (it != variables.end()) {
-					if (is_boolean_var[it->second]) {
-						// BOOLEAN: COUNT(x) = SUM(x) directly
-						func.function_name = "sum";
-						return;
-					}
-					if (var_types[it->second] == LogicalType::DOUBLE) {
-						throw BinderException(*expr,
-						    "COUNT(%s) requires a BOOLEAN or INTEGER decision variable. "
-						    "For REAL variables, COUNT is not yet supported.",
-						    colref.GetColumnName());
-					}
-					// INTEGER: introduce indicator variable and rewrite COUNT(x) → SUM(indicator)
-					string var_name = colref.GetColumnName();
-					auto ind_it = count_indicator_map.find(var_name);
-					string indicator_name;
-					if (ind_it != count_indicator_map.end()) {
-						// Reuse existing indicator for same variable
-						indicator_name = var_names[ind_it->second];
-					} else {
-						// Create new indicator variable
-						indicator_name = "__count_ind_" + var_name + "__";
-						idx_t indicator_idx = var_names.size();
-						var_names.push_back(indicator_name);
-						var_types.push_back(LogicalType::INTEGER);
-						is_boolean_var.push_back(true);
-						variables.emplace(indicator_name, indicator_idx);
-						count_indicator_map.emplace(var_name, indicator_idx);
-					}
-					// Rewrite: COUNT(x) → SUM(__count_ind_x__)
-					func.function_name = "sum";
-					func.children[0] = make_uniq<ColumnRefExpression>(indicator_name);
-					return;
-				}
-			}
-		}
-	}
-	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-		RewriteCountToSum(child, variables, is_boolean_var, var_names, var_types, count_indicator_map);
-	});
-}
+// COUNT(x) rewrite is now handled by DecideOptimizer::RewriteCountToSum (post-binding).
+// The binder recognizes COUNT as a valid aggregate (via GetExpressionType) and binds it
+// into a BoundAggregateExpression. The optimizer then rewrites COUNT → SUM with indicator
+// variable creation for INTEGER variables.
 
 // Check if a parsed expression references any DECIDE variable.
 static bool ReferencesDecideVariable(ParsedExpression &expr,
@@ -482,280 +431,14 @@ static bool ReferencesDecideVariable(ParsedExpression &expr,
 	return found;
 }
 
-// Walk an expression tree and replace ABS(expr) with an auxiliary variable when expr
-// references a DECIDE variable.  For each replacement, two linearization constraints
-// (aux >= expr, aux >= -expr) are accumulated in new_constraints.
-static void RewriteAbsInExpression(unique_ptr<ParsedExpression> &expr,
-                                   vector<unique_ptr<ParsedExpression>> &new_constraints,
-                                   case_insensitive_map_t<idx_t> &variables,
-                                   vector<string> &var_names,
-                                   vector<LogicalType> &var_types,
-                                   vector<bool> &is_boolean_var,
-                                   idx_t &abs_counter) {
-	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr->Cast<FunctionExpression>();
-		if (StringUtil::CIEquals(func.function_name, "abs") && func.children.size() == 1) {
-			if (ReferencesDecideVariable(*func.children[0], variables)) {
-				// Create auxiliary REAL variable
-				string aux_name = "__abs_aux_" + to_string(abs_counter++) + "__";
-				idx_t aux_idx = var_names.size();
-				var_names.push_back(aux_name);
-				var_types.push_back(LogicalType::DOUBLE);
-				is_boolean_var.push_back(false);
-				variables.emplace(aux_name, aux_idx);
+// ABS linearization is now fully handled by DecideOptimizer::RewriteAbs (post-binding).
+// The binder binds ABS as a normal BoundFunctionExpression; the optimizer detects it,
+// creates auxiliary REAL variables, and generates linearization constraints.
 
-				auto &inner = func.children[0];
-
-				// Constraint 1: aux >= inner_expr
-				auto c1 = make_uniq<ComparisonExpression>(
-				    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-				    make_uniq<ColumnRefExpression>(aux_name), inner->Copy());
-
-				// Constraint 2: aux >= -(inner_expr)   i.e.  aux >= 0 - inner_expr
-				vector<unique_ptr<ParsedExpression>> neg_children;
-				neg_children.push_back(make_uniq<ConstantExpression>(Value::INTEGER(0)));
-				neg_children.push_back(inner->Copy());
-				auto neg_inner = make_uniq<FunctionExpression>("-", std::move(neg_children));
-				auto c2 = make_uniq<ComparisonExpression>(
-				    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-				    make_uniq<ColumnRefExpression>(aux_name), std::move(neg_inner));
-
-				new_constraints.push_back(std::move(c1));
-				new_constraints.push_back(std::move(c2));
-
-				// Replace ABS(inner) in-place with a column reference to the aux variable
-				expr = make_uniq<ColumnRefExpression>(aux_name);
-				return;
-			}
-		}
-	}
-	// Recurse into children
-	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-		RewriteAbsInExpression(child, new_constraints, variables, var_names,
-		                       var_types, is_boolean_var, abs_counter);
-	});
-}
-
-// Rewrite ABS(expr) → auxiliary variable + linearization constraints for both
-// the constraint tree and the objective tree.
-static void RewriteAbsLinearization(unique_ptr<ParsedExpression> &constraints,
-                                    unique_ptr<ParsedExpression> &objective,
-                                    case_insensitive_map_t<idx_t> &variables,
-                                    vector<string> &var_names,
-                                    vector<LogicalType> &var_types,
-                                    vector<bool> &is_boolean_var) {
-	idx_t abs_counter = 0;
-	vector<unique_ptr<ParsedExpression>> new_constraints;
-
-	if (constraints) {
-		RewriteAbsInExpression(constraints, new_constraints, variables,
-		                       var_names, var_types, is_boolean_var, abs_counter);
-	}
-	if (objective) {
-		RewriteAbsInExpression(objective, new_constraints, variables,
-		                       var_names, var_types, is_boolean_var, abs_counter);
-	}
-
-	// Append linearization constraints to the constraint tree
-	for (auto &nc : new_constraints) {
-		if (constraints) {
-			constraints = make_uniq<ConjunctionExpression>(
-			    ExpressionType::CONJUNCTION_AND,
-			    std::move(constraints), std::move(nc));
-		} else {
-			constraints = std::move(nc);
-		}
-	}
-}
-
-// Rewrite MIN/MAX aggregate constraints into linearized forms.
-// Easy cases (no Big-M needed):
-//   MAX(expr) <= K  or  MAX(expr) < K  →  per-row: expr <= K  (or expr < K)
-//   MIN(expr) >= K  or  MIN(expr) > K  →  per-row: expr >= K  (or expr > K)
-// Hard cases (Big-M indicator variables):
-//   MAX(expr) >= K  →  indicator y per row, SUM(y) >= 1, expr - M*y >= K - M
-//   MIN(expr) <= K  →  indicator y per row, SUM(y) >= 1, expr + M*y <= K + M
-//   MAX(expr) = K   →  easy (expr <= K) + hard (MAX(expr) >= K)
-//   MIN(expr) = K   →  easy (expr >= K) + hard (MIN(expr) <= K)
-//
-// Returns additional constraints to AND into the constraint tree.
-static void RewriteMinMaxInExpression(unique_ptr<ParsedExpression> &expr,
-                                       vector<unique_ptr<ParsedExpression>> &new_constraints,
-                                       case_insensitive_map_t<idx_t> &variables,
-                                       vector<string> &var_names,
-                                       vector<LogicalType> &var_types,
-                                       vector<bool> &is_boolean_var,
-                                       vector<pair<string, idx_t>> &minmax_indicator_links,
-                                       idx_t &minmax_counter,
-                                       bool &out_was_easy) {
-	// Unwrap WHEN/PER wrappers to inspect inner constraint
-	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr->Cast<FunctionExpression>();
-		if (func.is_operator && (func.function_name == WHEN_CONSTRAINT_TAG ||
-		                          func.function_name == PER_CONSTRAINT_TAG) &&
-		    !func.children.empty()) {
-			bool is_per = (func.function_name == PER_CONSTRAINT_TAG);
-			RewriteMinMaxInExpression(func.children[0], new_constraints, variables,
-			                          var_names, var_types, is_boolean_var,
-			                          minmax_indicator_links, minmax_counter, out_was_easy);
-			// If PER wrapped an easy case, the inner is now per-row → strip PER
-			if (is_per && out_was_easy) {
-				// Easy case produced per-row constraint; PER is redundant.
-				// Unwrap: replace PER(inner) with inner (preserving WHEN if present)
-				expr = std::move(func.children[0]);
-			}
-			return;
-		}
-	}
-
-	if (expr->GetExpressionClass() == ExpressionClass::COMPARISON) {
-		auto &comp = expr->Cast<ComparisonExpression>();
-		if (comp.left->GetExpressionClass() == ExpressionClass::FUNCTION) {
-			auto &func = comp.left->Cast<FunctionExpression>();
-			auto fname = StringUtil::Lower(func.function_name);
-			if ((fname == "min" || fname == "max") && func.children.size() == 1) {
-				if (!ReferencesDecideVariable(*func.children[0], variables)) {
-					return; // Not a DECIDE aggregate — leave for normal SQL
-				}
-
-				bool is_max = (fname == "max");
-				auto cmp_type = comp.type;
-
-				// Classify: easy vs hard
-				bool is_easy = false;
-				if (is_max && (cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-				               cmp_type == ExpressionType::COMPARE_LESSTHAN)) {
-					is_easy = true; // MAX(expr) <= K → every row: expr <= K
-				}
-				if (!is_max && (cmp_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-				                cmp_type == ExpressionType::COMPARE_GREATERTHAN)) {
-					is_easy = true; // MIN(expr) >= K → every row: expr >= K
-				}
-
-				bool is_hard = false;
-				if (is_max && (cmp_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-				               cmp_type == ExpressionType::COMPARE_GREATERTHAN)) {
-					is_hard = true; // MAX(expr) >= K → need indicator
-				}
-				if (!is_max && (cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-				                cmp_type == ExpressionType::COMPARE_LESSTHAN)) {
-					is_hard = true; // MIN(expr) <= K → need indicator
-				}
-
-				if (cmp_type == ExpressionType::COMPARE_NOTEQUAL) {
-					throw BinderException(comp, "DECIDE does not support <> comparison with MIN/MAX aggregates.");
-				}
-
-				if (cmp_type == ExpressionType::COMPARE_EQUAL) {
-					// Equality: split into easy + hard parts
-					// MAX(expr) = K → (expr <= K) AND (MAX(expr) >= K)
-					// MIN(expr) = K → (expr >= K) AND (MIN(expr) <= K)
-
-					// Easy part: per-row bound
-					auto easy_cmp_type = is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO
-					                            : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-					auto easy = make_uniq<ComparisonExpression>(
-					    easy_cmp_type,
-					    func.children[0]->Copy(), comp.right->Copy());
-					new_constraints.push_back(std::move(easy));
-
-					// Hard part: create indicator
-					auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
-					                            : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-					string ind_name = "__minmax_ind_" + to_string(minmax_counter++) + "__";
-					idx_t ind_idx = var_names.size();
-					var_names.push_back(ind_name);
-					var_types.push_back(LogicalType::INTEGER);
-					is_boolean_var.push_back(true);
-					variables.emplace(ind_name, ind_idx);
-					minmax_indicator_links.emplace_back(fname, ind_idx);
-
-					// Per-row Big-M constraint + SUM(y) >= 1
-					// Generated at execution time — mark with comparison type
-					// Rewrite: replace MIN/MAX with SUM for the hard part
-					// Store as SUM(expr) with hard comparison — execution layer handles Big-M
-					auto hard_func_args = vector<unique_ptr<ParsedExpression>>();
-					hard_func_args.push_back(func.children[0]->Copy());
-					auto hard_lhs = make_uniq<FunctionExpression>("sum", std::move(hard_func_args));
-					auto hard_constraint = make_uniq<ComparisonExpression>(
-					    hard_cmp_type,
-					    std::move(hard_lhs), comp.right->Copy());
-
-					// Replace current expression with the hard constraint
-					// (easy part was added to new_constraints)
-					expr = std::move(hard_constraint);
-					return;
-				}
-
-				if (is_easy) {
-					// Easy case: strip the aggregate, make it per-row
-					// MAX(expr) <= K → expr <= K
-					// MIN(expr) >= K → expr >= K
-					comp.left = std::move(func.children[0]);
-					out_was_easy = true;
-					return;
-				}
-
-				if (is_hard) {
-					// Hard case: create indicator variable for Big-M linearization
-					string ind_name = "__minmax_ind_" + to_string(minmax_counter++) + "__";
-					idx_t ind_idx = var_names.size();
-					var_names.push_back(ind_name);
-					var_types.push_back(LogicalType::INTEGER);
-					is_boolean_var.push_back(true);
-					variables.emplace(ind_name, ind_idx);
-					minmax_indicator_links.emplace_back(fname, ind_idx);
-
-					// Rewrite: replace MIN/MAX with SUM so it flows through normalization
-					// The execution layer will detect the minmax indicator and generate
-					// the appropriate Big-M constraints
-					func.function_name = "sum";
-					return;
-				}
-			}
-		}
-	}
-
-	// Recurse into conjunction children
-	if (expr->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
-		auto &conj = expr->Cast<ConjunctionExpression>();
-		for (auto &child : conj.children) {
-			bool child_easy = false;
-			RewriteMinMaxInExpression(child, new_constraints, variables,
-			                          var_names, var_types, is_boolean_var,
-			                          minmax_indicator_links, minmax_counter, child_easy);
-		}
-	}
-}
-
-// Top-level wrapper for MIN/MAX constraint rewriting.
-static void RewriteMinMaxConstraints(unique_ptr<ParsedExpression> &constraints,
-                                      case_insensitive_map_t<idx_t> &variables,
-                                      vector<string> &var_names,
-                                      vector<LogicalType> &var_types,
-                                      vector<bool> &is_boolean_var,
-                                      vector<pair<string, idx_t>> &minmax_indicator_links) {
-	if (!constraints) return;
-
-	idx_t minmax_counter = 0;
-	vector<unique_ptr<ParsedExpression>> new_constraints;
-
-	bool was_easy = false;
-	RewriteMinMaxInExpression(constraints, new_constraints, variables,
-	                          var_names, var_types, is_boolean_var,
-	                          minmax_indicator_links, minmax_counter, was_easy);
-
-	// Append generated constraints to the constraint tree
-	for (auto &nc : new_constraints) {
-		if (constraints) {
-			constraints = make_uniq<ConjunctionExpression>(
-			    ExpressionType::CONJUNCTION_AND,
-			    std::move(constraints), std::move(nc));
-		} else {
-			constraints = std::move(nc);
-		}
-	}
-}
+// MIN/MAX constraint and objective rewriting is now fully handled by
+// DecideOptimizer::RewriteMinMax (post-binding). The binder binds MIN/MAX as normal
+// BoundAggregateExpression nodes; the optimizer classifies easy/hard, creates
+// indicator variables, and rewrites to SUM.
 
 // Rewrite IN domain constraints on DECIDE variables into auxiliary binary indicator
 // variables + cardinality/linking constraints.
@@ -823,7 +506,10 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 						return;
 					}
 
-					// General case: create K auxiliary BOOLEAN indicator variables
+					// General case: create K auxiliary indicator variables
+					// Note: these use INTEGER (not BOOLEAN) because the binder generates
+					// arithmetic expressions (z_1 + z_2 + ... = 1) that require integer arithmetic.
+					// Bounds (0 <= z <= 1) are generated explicitly below.
 					vector<string> ind_names;
 					for (idx_t i = 0; i < K; i++) {
 						string ind_name = "__in_ind_" + var_name + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
@@ -892,51 +578,8 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 	});
 }
 
-// Rewrite not-equal (<>) constraints by creating auxiliary BOOLEAN indicator variables.
-// The indicator variables are declared here; Big-M constraints are generated at execution
-// time when variable bounds are known (following the COUNT indicator pattern).
-// x <> K → needs one auxiliary z per <> constraint
-// SUM(expr) <> K → needs one auxiliary z per <> constraint
-static void RewriteNotEqual(unique_ptr<ParsedExpression> &expr,
-                             case_insensitive_map_t<idx_t> &variables,
-                             vector<bool> &is_boolean_var,
-                             vector<string> &var_names,
-                             vector<LogicalType> &var_types,
-                             vector<idx_t> &ne_indicator_indices,
-                             idx_t &ne_counter) {
-	// Check for WHEN/PER wrappers — recurse into inner constraint
-	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr->Cast<FunctionExpression>();
-		if (func.is_operator && (func.function_name == WHEN_CONSTRAINT_TAG ||
-		                          func.function_name == PER_CONSTRAINT_TAG) &&
-		    !func.children.empty()) {
-			RewriteNotEqual(func.children[0], variables, is_boolean_var,
-			                var_names, var_types, ne_indicator_indices, ne_counter);
-			return;
-		}
-	}
-	if (expr->GetExpressionClass() == ExpressionClass::COMPARISON) {
-		auto &comp = expr->Cast<ComparisonExpression>();
-		if (comp.type == ExpressionType::COMPARE_NOTEQUAL) {
-			// Create auxiliary BOOLEAN indicator variable
-			string ind_name = "__ne_ind_" + to_string(ne_counter++) + "__";
-			idx_t ind_idx = var_names.size();
-			var_names.push_back(ind_name);
-			var_types.push_back(LogicalType::INTEGER);
-			is_boolean_var.push_back(true);
-			variables.emplace(ind_name, ind_idx);
-			ne_indicator_indices.push_back(ind_idx);
-			return;
-		}
-	}
-	if (expr->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
-		auto &conj = expr->Cast<ConjunctionExpression>();
-		for (auto &child : conj.children) {
-			RewriteNotEqual(child, variables, is_boolean_var, var_names,
-			                var_types, ne_indicator_indices, ne_counter);
-		}
-	}
-}
+// NOTE: RewriteNotEqual has been moved to DecideOptimizer (src/optimizer/decide/decide_optimizer.cpp).
+// It now operates on BoundExpressions post-binding instead of ParsedExpressions pre-binding.
 
 unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_ptr<BoundTableRef> from_table) {
 	D_ASSERT(from_table);
@@ -1038,22 +681,30 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         // Capture user var count BEFORE any rewrites that add auxiliary variables
         idx_t num_user_vars = var_names.size();
 
-        // Rewrite COUNT(var) -> SUM(var) for BOOLEAN decision variables,
-        // or COUNT(var) -> SUM(indicator) for INTEGER variables (adds indicator vars)
-        case_insensitive_map_t<idx_t> count_indicator_map;
+        // COUNT(x) rewrite is handled by DecideOptimizer::RewriteCountToSum (post-binding).
+        // COUNT indicator bounds (0 <= z <= 1) are handled automatically by BOOLEAN type
+        // in physical_decide.cpp — no explicit bounds generation needed.
+
+        // MIN/MAX rewrite is handled by DecideOptimizer::RewriteMinMax (post-binding).
+
+        // Rewrite IN domain constraints: x IN (v1, ..., vK) → indicator variables + constraints
         if (statement.decide_constraints) {
-            RewriteCountToSum(statement.decide_constraints, decide_variable_names,
-                              is_boolean_var, var_names, var_types, count_indicator_map);
-        }
-        if (statement.decide_objective) {
-            RewriteCountToSum(statement.decide_objective, decide_variable_names,
-                              is_boolean_var, var_names, var_types, count_indicator_map);
+            idx_t in_counter = 0;
+            RewriteInDomain(statement.decide_constraints, decide_variable_names,
+                            is_boolean_var, var_names, var_types, in_counter);
         }
 
-        // Generate implicit bounds (0 <= z <= 1) for newly created indicator variables
-        for (auto &entry : count_indicator_map) {
-            idx_t ind_idx = entry.second;
-            auto z_ref = make_uniq<ColumnRefExpression>(var_names[ind_idx]);
+        // NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
+        // (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
+
+        // COUNT/MIN/MAX indicator bounds are handled automatically by BOOLEAN type
+        // in physical_decide.cpp. NE indicator bounds are handled by DecideOptimizer.
+        // IN indicators use INTEGER (needed for arithmetic in parsed constraints),
+        // so they need explicit bounds (0 <= z <= 1).
+        for (idx_t i = num_user_vars; i < var_names.size(); i++) {
+            if (!is_boolean_var[i]) continue;
+            if (var_types[i] == LogicalType::BOOLEAN) continue; // auto-bounds via physical_decide
+            auto z_ref = make_uniq<ColumnRefExpression>(var_names[i]);
             auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
             auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
             auto lower = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, z_ref->Copy(), std::move(zero));
@@ -1067,153 +718,11 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             }
         }
 
-        // Rewrite MIN/MAX aggregate constraints into linearized forms
-        // Easy cases: MAX(expr) <= K → expr <= K, MIN(expr) >= K → expr >= K
-        // Hard cases: create Big-M indicator variables (linked at execution time)
-        vector<pair<string, idx_t>> minmax_indicator_links;
-        RewriteMinMaxConstraints(statement.decide_constraints, decide_variable_names,
-                                 var_names, var_types, is_boolean_var, minmax_indicator_links);
+        // MIN/MAX objective rewrite is handled by DecideOptimizer::RewriteMinMaxObjective (post-binding).
+        // MIN/MAX aggregates pass through normalization and binding as normal functions.
 
-        // Rewrite IN domain constraints: x IN (v1, ..., vK) → indicator variables + constraints
-        if (statement.decide_constraints) {
-            idx_t in_counter = 0;
-            RewriteInDomain(statement.decide_constraints, decide_variable_names,
-                            is_boolean_var, var_names, var_types, in_counter);
-        }
-
-        // Rewrite not-equal (<>) constraints: declare auxiliary indicator variables
-        // (Big-M constraints generated at execution time when bounds are known)
-        vector<idx_t> ne_indicator_indices;
-        if (statement.decide_constraints) {
-            idx_t ne_counter = 0;
-            RewriteNotEqual(statement.decide_constraints, decide_variable_names,
-                            is_boolean_var, var_names, var_types, ne_indicator_indices, ne_counter);
-        }
-
-        // Generate implicit bounds (0 <= z <= 1) for newly created IN/NE indicator variables
-        // (count indicator bounds are already handled above)
-        for (idx_t i = count_indicator_map.empty() ? num_user_vars : var_names.size(); i < var_names.size(); i++) {
-            // Only generate bounds for variables added by IN or NE rewrites
-            // that aren't already covered by count indicator bounds
-        }
-        // Actually, bounds for all boolean auxiliary vars are generated below
-        // by the existing boolean bounds generation at line 642. But IN/NE indicator
-        // vars are added AFTER that loop runs. So we need explicit bounds here.
-        {
-            idx_t bounds_start = num_user_vars;
-            // Skip count indicator vars (already have bounds from the loop above)
-            for (auto &entry : count_indicator_map) {
-                (void)entry; // count indicators already have bounds
-            }
-            // Generate bounds for IN and NE indicator variables
-            for (idx_t i = bounds_start; i < var_names.size(); i++) {
-                if (!is_boolean_var[i]) continue;
-                // Check if this variable already has bounds from count_indicator_map
-                bool has_bounds = false;
-                for (auto &entry : count_indicator_map) {
-                    if (entry.second == i) { has_bounds = true; break; }
-                }
-                if (has_bounds) continue;
-
-                auto z_ref = make_uniq<ColumnRefExpression>(var_names[i]);
-                auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
-                auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
-                auto lower = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, z_ref->Copy(), std::move(zero));
-                auto upper = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(z_ref), std::move(one));
-                auto bounds = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower), std::move(upper));
-                if (statement.decide_constraints) {
-                    statement.decide_constraints = make_uniq<ConjunctionExpression>(
-                        ExpressionType::CONJUNCTION_AND, std::move(bounds), std::move(statement.decide_constraints));
-                } else {
-                    statement.decide_constraints = std::move(bounds);
-                }
-            }
-        }
-
-        // Detect MIN/MAX in objective and rewrite to SUM for normalization.
-        // Also detect nested aggregate patterns for PER objectives:
-        //   SUM(MAX(expr)) PER col → inner=max, outer=sum
-        //   MAX(SUM(expr)) PER col → inner=sum, outer=max
-        string minmax_objective_type;
-        string per_inner_objective_type;
-        string per_outer_objective_type;
-        if (statement.decide_objective) {
-            auto *obj_expr = statement.decide_objective.get();
-            unique_ptr<ParsedExpression> *obj_owner = &statement.decide_objective;
-
-            // Unwrap PER wrapper (outermost layer) to inspect inner
-            bool has_per = false;
-            FunctionExpression *per_func = nullptr;
-            if (obj_expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-                auto &func = obj_expr->Cast<FunctionExpression>();
-                if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG && !func.children.empty()) {
-                    has_per = true;
-                    per_func = &func;
-                    obj_expr = func.children[0].get();
-                    obj_owner = &func.children[0];
-                }
-            }
-
-            // Unwrap WHEN wrapper (inside PER, if present)
-            if (obj_expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-                auto &func = obj_expr->Cast<FunctionExpression>();
-                if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
-                    obj_expr = func.children[0].get();
-                    obj_owner = &func.children[0];
-                }
-            }
-
-            // Now obj_expr points to the actual aggregate(s)
-            if (obj_expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
-                auto &outer_func = obj_expr->Cast<FunctionExpression>();
-                auto outer_name = StringUtil::Lower(outer_func.function_name);
-
-                // Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX
-                bool found_nested = false;
-                if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max") &&
-                    outer_func.children.size() == 1 &&
-                    outer_func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
-                    auto &inner_func = outer_func.children[0]->Cast<FunctionExpression>();
-                    auto inner_name = StringUtil::Lower(inner_func.function_name);
-
-                    if ((inner_name == "sum" || inner_name == "min" || inner_name == "max") &&
-                        inner_func.children.size() == 1 &&
-                        ReferencesDecideVariable(*inner_func.children[0], decide_variable_names)) {
-                        found_nested = true;
-                        per_outer_objective_type = outer_name;
-                        per_inner_objective_type = inner_name;
-
-                        // Rewrite inner MIN/MAX → SUM for normalization
-                        if (inner_name == "min" || inner_name == "max") {
-                            inner_func.function_name = "sum";
-                        }
-                        // Strip outer wrapper: replace OUTER(INNER(expr)) with INNER(expr)
-                        *obj_owner = std::move(outer_func.children[0]);
-                    }
-                }
-                if (!found_nested && has_per && (outer_name == "min" || outer_name == "max") &&
-                           outer_func.children.size() == 1 &&
-                           ReferencesDecideVariable(*outer_func.children[0], decide_variable_names)) {
-                    // Flat MIN/MAX + PER → error (ambiguous without outer aggregate)
-                    throw BinderException(
-                        "MINIMIZE/MAXIMIZE %s(...) PER is ambiguous. "
-                        "With PER, use a nested aggregate to specify how per-group values are combined: "
-                        "e.g., SUM(%s(...)) PER col or MAX(%s(...)) PER col.",
-                        StringUtil::Upper(outer_name), StringUtil::Upper(outer_name),
-                        StringUtil::Upper(outer_name));
-                } else if (!found_nested && !has_per && (outer_name == "min" || outer_name == "max") &&
-                           outer_func.children.size() == 1 &&
-                           ReferencesDecideVariable(*outer_func.children[0], decide_variable_names)) {
-                    // Non-PER MIN/MAX objective (existing behavior)
-                    minmax_objective_type = outer_name;
-                    outer_func.function_name = "sum";
-                }
-            }
-        }
-
-        // Rewrite ABS(expr) → auxiliary variable + linearization constraints
-        RewriteAbsLinearization(statement.decide_constraints, statement.decide_objective,
-                                decide_variable_names, var_names, var_types, is_boolean_var);
+        // ABS linearization is now fully handled by DecideOptimizer::RewriteAbs (post-binding).
+        // ABS(expr) passes through normalization and binding as a normal function.
         idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
 
         if (statement.decide_constraints) {
@@ -1231,12 +740,14 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         // Isolate with brackets to avoid multiple active binders.
         {
             DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
+            decide_constraints_binder.var_types = var_types;
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         {
             DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
+            decide_objective_binder.var_types = var_types;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
             result->decide_sense = statement.decide_sense;
@@ -1253,17 +764,10 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         }
         result->num_auxiliary_vars = num_auxiliary_vars;
 
-        // Build count_indicator_links from the map
-        for (auto &entry : count_indicator_map) {
-            idx_t indicator_idx = entry.second;
-            idx_t original_idx = decide_variable_names[entry.first];
-            result->count_indicator_links.emplace_back(indicator_idx, original_idx);
-        }
-        result->ne_indicator_indices = std::move(ne_indicator_indices);
-        result->minmax_indicator_links = std::move(minmax_indicator_links);
-        result->minmax_objective_type = std::move(minmax_objective_type);
-        result->per_inner_objective_type = std::move(per_inner_objective_type);
-        result->per_outer_objective_type = std::move(per_outer_objective_type);
+        // count_indicator_links is now populated by DecideOptimizer (post-binding)
+        // ne_indicator_indices is now populated by DecideOptimizer (post-binding)
+        // minmax_indicator_links, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
+        // are now populated by DecideOptimizer::RewriteMinMax (post-binding)
 
         // Hide auxiliary vars from SELECT * by truncating the bind context binding.
         // The decide_variables vector still has ALL vars (user + aux) for the execution layer,

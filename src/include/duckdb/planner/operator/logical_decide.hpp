@@ -39,7 +39,7 @@ public:
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
 
-    // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
+    // Number of auxiliary variables at the end of decide_variables (created by binder and optimizer)
     idx_t num_auxiliary_vars = 0;
 
     // Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
@@ -51,12 +51,19 @@ public:
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<pair<string, idx_t>> minmax_indicator_links;
 
-    // If objective uses MIN/MAX aggregate: "min" or "max", empty if SUM/AVG
-    string minmax_objective_type;
+    // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // PER on objective: inner and outer aggregate types (empty if no PER on objective)
-    string per_inner_objective_type;
-    string per_outer_objective_type;
+    // Flat (non-PER) objective: original aggregate type before rewrite to SUM
+    ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
+    // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
+    bool flat_objective_is_easy = false;
+
+    // PER nested objective: OUTER(INNER(expr)) PER col
+    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
+    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
+    // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
+    bool per_inner_is_easy = false;
+    bool per_outer_is_easy = false;
 
 public:
     // --- Implement virtual functions ---

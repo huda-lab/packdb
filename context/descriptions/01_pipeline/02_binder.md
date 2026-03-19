@@ -89,22 +89,25 @@ The `DecideObjectiveBinder` handles WHEN on the objective (`MAXIMIZE SUM(...) WH
 - The PER column creates one constraint per distinct value of that column.
 - Combined WHEN+PER: WHEN filters rows first, then PER groups the remaining rows.
 
-## 6. Rewrite Passes (Proto-Optimizer)
+## 6. Rewrite Passes (Now in Optimizer)
 
-These algebraic rewrites live in `bind_select_node.cpp` and are applied during binding. They are **optimizer candidates** — algebraic rewrites that logically belong in a dedicated optimizer pass but currently live in the binder for simplicity.
+These algebraic rewrites have been migrated to `DecideOptimizer` in `src/optimizer/decide/decide_optimizer.cpp`. The binder validates and binds the relevant expressions (recognizing COUNT, AVG, ABS, MIN, MAX as valid DECIDE aggregates/functions); the optimizer performs the algebraic transformations.
 
 ### 6.1 COUNT → SUM Rewrite
 
-- **BOOLEAN variables**: `COUNT(x)` is directly rewritten to `SUM(x)` since a BOOLEAN var is 0 or 1, so counting non-zero = summing.
-- **INTEGER variables**: Creates an indicator variable `__count_ind_VAR__` (BOOLEAN), rewrites `COUNT(x)` → `SUM(indicator)`. At execution time, Big-M linking constraints are generated: `x <= M * indicator` and `x >= indicator` (ensuring indicator=1 iff x>0).
-- **REAL variables**: Not yet supported; throws an explicit error.
-- **Code**: `RewriteCountToSum()` in `bind_select_node.cpp` (lines ~413-466)
+- The binder recognizes `COUNT(x)` as a valid DECIDE aggregate (via `GetExpressionType`) and binds it into a `BoundAggregateExpression`. The binder validates that the argument is a single DECIDE variable and rejects REAL variables.
+- The actual rewrite is performed by `DecideOptimizer::RewriteCountToSum` in the optimizer:
+  - **BOOLEAN variables**: Replaces COUNT with SUM over the same variable (counting non-zero = summing for 0/1).
+  - **INTEGER variables**: Creates an indicator variable `__count_ind_VAR__` (BOOLEAN), replaces COUNT with SUM(indicator). At execution time, Big-M linking constraints are generated via `count_indicator_links`.
+  - **REAL variables**: Rejected by the binder with an explicit error.
+- **Binder code**: `GetExpressionType()` in `decide_constraints_binder.cpp` and `decide_objective_binder.cpp`
+- **Optimizer code**: `DecideOptimizer::RewriteCountToSum` in `decide_optimizer.cpp`
 
 ### 6.2 AVG → SUM Rewrite
 
 - `AVG(expr)` is rewritten to `SUM(expr)` with a special tag (`AVG_REWRITE_TAG` alias).
 - At execution time, the model builder detects this tag and scales the RHS by the number of rows in each group, effectively converting `AVG(expr) <= K` into `SUM(expr) <= K * N`.
-- **Code**: `RewriteAvgToSum()` in `bind_select_node.cpp` (lines ~490-505)
+- **Code**: `DecideOptimizer::RewriteAvgToSum` in `decide_optimizer.cpp`
 
 ### 6.3 ABS Linearization
 
@@ -113,9 +116,10 @@ These algebraic rewrites live in `bind_select_node.cpp` and are applied during b
   - Generates two linearization constraints: `aux >= expr` and `aux >= -expr`
   - Replaces `ABS(expr)` with `aux` in the original expression
 - This works because minimizing `aux` subject to `aux >= expr` and `aux >= -expr` forces `aux = |expr|`.
-- **Code**: `RewriteAbsInExpression()` / `RewriteAbsLinearization()` in `bind_select_node.cpp` (lines ~510-591)
+- The binder binds ABS as a normal `BoundFunctionExpression`. The symbolic normalization layer treats ABS as an opaque placeholder (`__ABS_N__`) to preserve it through algebraic simplification. The optimizer handles all detection, aux var creation, and constraint generation.
+- **Code**: `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`
 
-> **Note**: All three rewrites are tagged as **optimizer candidates** — they perform algebraic transformations, not semantic validation, and should eventually migrate to a `LogicalDecideOptimizer` pass.
+> **Note**: All rewrites in this section are now implemented in `DecideOptimizer`. The binder's role is limited to semantic validation and binding.
 
 ## 7. Auxiliary Variable Management
 

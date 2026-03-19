@@ -63,7 +63,15 @@ static Symbolic ApplySymbolicPower(const Symbolic &base, const Symbolic &exponen
 static bool SymbolicContainsDecideVariable(const Symbolic &s, const case_insensitive_map_t<idx_t> &decide_variables) {
     if (s.type() == typeid(Symbol)) {
         auto name = CastPtr<const Symbol>(s)->name;
-        return decide_variables.count(name) > 0;
+        if (decide_variables.count(name) > 0) {
+            return true;
+        }
+        // ABS placeholders contain decide variables by construction
+        // (only created when the inner expression references a decide variable)
+        if (name.rfind("__ABS_", 0) == 0) {
+            return true;
+        }
+        return false;
     }
     if (s.type() == typeid(Numeric)) {
         return false;
@@ -383,6 +391,15 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 auto base = ToSymbolicRecursive(*func_expr.children[0], ctx);
                 auto exponent = ToSymbolicRecursive(*func_expr.children[1], ctx);
                 return ApplySymbolicPower(base, exponent);
+            } else if (func_name_lower == "abs") {
+                // ABS is nonlinear — treat as opaque placeholder (like subqueries).
+                // Normalization sees it as a plain variable; the optimizer linearizes it later.
+                if (func_expr.children.size() != 1) {
+                    throw InternalException("ToSymbolic: ABS function requires one argument");
+                }
+                string placeholder = "__ABS_" + to_string(ctx.abs_map.size()) + "__";
+                ctx.abs_map[placeholder] = expr.Copy();
+                return Symbolic(placeholder);
             } else {
                 throw InternalException("ToSymbolic: Unsupported function: %s", func_expr.function_name);
             }
@@ -497,7 +514,7 @@ static void CollectDecideFactors(const Symbolic &node, vector<Symbolic> &decide_
     }
     if (node.type() == typeid(Symbol)) {
         auto name = CastPtr<const Symbol>(node)->name;
-        if (decide_variables.count(name) > 0) {
+        if (decide_variables.count(name) > 0 || name.rfind("__ABS_", 0) == 0) {
             decide_factors.push_back(node);
         } else {
             other_factors.push_back(node);
@@ -724,6 +741,10 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
         // Check if it's a subquery placeholder
         if (ctx.subquery_map.count(name)) {
             return ctx.subquery_map[name]->Copy();
+        }
+        // Check if it's an ABS placeholder
+        if (ctx.abs_map.count(name)) {
+            return ctx.abs_map[name]->Copy();
         }
         // Treat any plain symbol as a column/variable reference
         return make_uniq_base<ParsedExpression, ColumnRefExpression>(name);
