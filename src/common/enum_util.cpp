@@ -1188,25 +1188,6 @@ DestroyBufferUpon EnumUtil::FromString<DestroyBufferUpon>(const char *value) {
 	return static_cast<DestroyBufferUpon>(StringUtil::StringToEnum(GetDestroyBufferUponValues(), 3, "DestroyBufferUpon", value));
 }
 
-const StringUtil::EnumStringLiteral *GetDeterministicConstraintSenseValues() {
-	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(DeterministicConstraintSense::GTEQ), "GTEQ" },
-		{ static_cast<uint32_t>(DeterministicConstraintSense::LTEQ), "LTEQ" },
-		{ static_cast<uint32_t>(DeterministicConstraintSense::EQ), "EQ" }
-	};
-	return values;
-}
-
-template<>
-const char* EnumUtil::ToChars<DeterministicConstraintSense>(DeterministicConstraintSense value) {
-	return StringUtil::EnumToString(GetDeterministicConstraintSenseValues(), 3, "DeterministicConstraintSense", static_cast<uint32_t>(value));
-}
-
-template<>
-DeterministicConstraintSense EnumUtil::FromString<DeterministicConstraintSense>(const char *value) {
-	return static_cast<DeterministicConstraintSense>(StringUtil::StringToEnum(GetDeterministicConstraintSenseValues(), 3, "DeterministicConstraintSense", value));
-}
-
 const StringUtil::EnumStringLiteral *GetDistinctTypeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DistinctType::DISTINCT), "DISTINCT" },

@@ -21,12 +21,6 @@ enum class DecideExpression : uint8_t {
     SUM
 };
 
-enum class DeterministicConstraintSense : uint8_t {
-    GTEQ,
-    LTEQ,
-    EQ
-};
-
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
     NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)
