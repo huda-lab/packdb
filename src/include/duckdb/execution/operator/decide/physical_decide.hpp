@@ -128,6 +128,10 @@ public:
     }
 
 public:
+    string GetName() const override;
+    InsertionOrderPreservingMap<string> ParamsToString() const override;
+
+public:
     //! Helper methods for expression analysis (used by DecideGlobalSinkState)
 
     //! Find a DECIDE variable in an expression tree

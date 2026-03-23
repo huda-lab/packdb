@@ -2,6 +2,10 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 
 #include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 
 namespace duckdb {
 
@@ -38,6 +42,89 @@ void LogicalDecide::ResolveTypes() {
 
 vector<idx_t> LogicalDecide::GetTableIndex() const {
 	return vector<idx_t> {decide_index};
+}
+
+string LogicalDecide::GetName() const {
+	return "DECIDE";
+}
+
+void LogicalDecide::CollectConstraintStrings(const Expression &expr, vector<string> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
+			// PER wrapper: child[0] is the constraint, children[1..N] are PER columns
+			string per_suffix = " PER ";
+			for (idx_t i = 1; i < conj.children.size(); i++) {
+				if (i > 1) {
+					per_suffix += ", ";
+				}
+				per_suffix += conj.children[i]->GetName();
+			}
+			// Recurse into child[0]; append PER suffix to each leaf
+			vector<string> inner;
+			CollectConstraintStrings(*conj.children[0], inner);
+			for (auto &s : inner) {
+				out.push_back(s + per_suffix);
+			}
+			return;
+		}
+		if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+			// WHEN wrapper: child[0] is the constraint, child[1] is the condition
+			string when_suffix = " WHEN " + conj.children[1]->GetName();
+			vector<string> inner;
+			CollectConstraintStrings(*conj.children[0], inner);
+			for (auto &s : inner) {
+				out.push_back(s + when_suffix);
+			}
+			return;
+		}
+		// Regular AND conjunction: recurse on each child
+		for (auto &child : conj.children) {
+			CollectConstraintStrings(*child, out);
+		}
+		return;
+	}
+	// Leaf node (comparison or other): use ToString for the full expression
+	out.push_back(expr.GetName());
+}
+
+InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
+	InsertionOrderPreservingMap<string> result;
+
+	// Variables (exclude auxiliary variables)
+	string vars_info;
+	idx_t user_var_count = decide_variables.size() - num_auxiliary_vars;
+	for (idx_t i = 0; i < user_var_count; i++) {
+		if (i > 0) {
+			vars_info += "\n";
+		}
+		vars_info += decide_variables[i]->GetName();
+	}
+	result["Variables"] = vars_info;
+
+	// Objective
+	string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
+	if (decide_objective) {
+		obj_info += decide_objective->GetName();
+	}
+	result["Objective"] = obj_info;
+
+	// Constraints: walk the AND-tree and collect individual constraints
+	if (decide_constraints) {
+		vector<string> constraint_strs;
+		CollectConstraintStrings(*decide_constraints, constraint_strs);
+		string constraints_info;
+		for (idx_t i = 0; i < constraint_strs.size(); i++) {
+			if (i > 0) {
+				constraints_info += "\n";
+			}
+			constraints_info += constraint_strs[i];
+		}
+		result["Constraints"] = constraints_info;
+	}
+
+	SetParamsEstimatedCardinality(result);
+	return result;
 }
 
 } // namespace duckdb

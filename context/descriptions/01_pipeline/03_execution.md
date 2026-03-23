@@ -28,5 +28,8 @@ Transforms evaluated constraints into a solver-agnostic `ILPModel` via `ILPModel
 ### 2.5 Phase 5: Result Projection (Source)
 Projects solution values back onto original rows with type-specific casting. See `03e_result_projection.md`.
 
+### 2.6 EXPLAIN & Serialization
+Both `LogicalDecide` and `PhysicalDecide` expose structured plan output for `EXPLAIN`, `EXPLAIN ANALYZE`, and `EXPLAIN (FORMAT JSON)`. Serialization support enables prepared statement caching. See `04_explain.md`.
+
 ## 3. Data Consistency
 A critical design choice is that PackDB guarantees **read consistency**. The optimization is performed on the snapshot of data seen by the query. Any concurrent modifications to the tables do not affect the running optimization model, as it works on the materialized buffer.

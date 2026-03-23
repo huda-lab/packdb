@@ -74,12 +74,20 @@ public:
     // Resolve the output types
     void ResolveTypes() override;
 
+    string GetName() const override;
+    InsertionOrderPreservingMap<string> ParamsToString() const override;
+
     void Serialize(Serializer &serializer) const override;
     static unique_ptr<LogicalOperator> Deserialize(Deserializer &deserializer);
     
 protected:
     // The table indices that this operator produces
     vector<idx_t> GetTableIndex() const override;
+
+private:
+    //! Recursively collect individual constraints from the AND-tree expression,
+    //! unwrapping WHEN/PER wrappers for display
+    static void CollectConstraintStrings(const Expression &expr, vector<string> &out);
 };
 
 } // namespace duckdb

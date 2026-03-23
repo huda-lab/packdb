@@ -238,7 +238,84 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
     children.push_back(std::move(child));
 }
 
-// OLD STRUCTS - REMOVED (now using LinearConstraint and LinearObjective from header)
+//===--------------------------------------------------------------------===//
+// EXPLAIN Support
+//===--------------------------------------------------------------------===//
+
+string PhysicalDecide::GetName() const {
+	return "DECIDE";
+}
+
+static void CollectConstraintStringsPhysical(const Expression &expr, vector<string> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
+			string per_suffix = " PER ";
+			for (idx_t i = 1; i < conj.children.size(); i++) {
+				if (i > 1) {
+					per_suffix += ", ";
+				}
+				per_suffix += conj.children[i]->GetName();
+			}
+			vector<string> inner;
+			CollectConstraintStringsPhysical(*conj.children[0], inner);
+			for (auto &s : inner) {
+				out.push_back(s + per_suffix);
+			}
+			return;
+		}
+		if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+			string when_suffix = " WHEN " + conj.children[1]->GetName();
+			vector<string> inner;
+			CollectConstraintStringsPhysical(*conj.children[0], inner);
+			for (auto &s : inner) {
+				out.push_back(s + when_suffix);
+			}
+			return;
+		}
+		for (auto &child : conj.children) {
+			CollectConstraintStringsPhysical(*child, out);
+		}
+		return;
+	}
+	out.push_back(expr.GetName());
+}
+
+InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
+	InsertionOrderPreservingMap<string> result;
+
+	string vars_info;
+	idx_t user_var_count = decide_variables.size() - num_auxiliary_vars;
+	for (idx_t i = 0; i < user_var_count; i++) {
+		if (i > 0) {
+			vars_info += "\n";
+		}
+		vars_info += decide_variables[i]->GetName();
+	}
+	result["Variables"] = vars_info;
+
+	string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
+	if (decide_objective) {
+		obj_info += decide_objective->GetName();
+	}
+	result["Objective"] = obj_info;
+
+	if (decide_constraints) {
+		vector<string> constraint_strs;
+		CollectConstraintStringsPhysical(*decide_constraints, constraint_strs);
+		string constraints_info;
+		for (idx_t i = 0; i < constraint_strs.size(); i++) {
+			if (i > 0) {
+				constraints_info += "\n";
+			}
+			constraints_info += constraint_strs[i];
+		}
+		result["Constraints"] = constraints_info;
+	}
+
+	SetEstimatedCardinality(result, estimated_cardinality);
+	return result;
+}
 
 //===--------------------------------------------------------------------===//
 // Multi-variable per-row constraint helpers

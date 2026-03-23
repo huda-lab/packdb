@@ -61,6 +61,7 @@ make decide-test
 ./test/decide/run_tests.sh -m when_perrow            # WHEN on per-row bounds
 ./test/decide/run_tests.sh -m when_compound          # compound WHEN (AND/OR)
 ./test/decide/run_tests.sh -m per_clause             # PER keyword
+./test/decide/run_tests.sh -m explain                # EXPLAIN / EXPLAIN ANALYZE output tests
 ./test/decide/run_tests.sh -m sql_joins              # JOIN tests
 ./test/decide/run_tests.sh -m large_scale            # performance / scaling
 
@@ -144,6 +145,12 @@ make decide-test
 | Marker | File | Tests | Status |
 |--------|------|-------|--------|
 | `per_clause` | `test_per_clause.py` | 3 | passing |
+
+### EXPLAIN Output
+
+| Marker | File | Tests | Status |
+|--------|------|-------|--------|
+| `explain` | `test_explain.py` | 21 | passing |
 
 ### Scale & Performance
 

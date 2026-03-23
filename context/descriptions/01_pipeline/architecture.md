@@ -62,3 +62,4 @@ PackDB links against DuckDB as a loadable extension. It registers:
 -   New Parser Keywords: `DECIDE`, `SUCH THAT`, `MAXIMIZE`, `MINIMIZE`.
 -   New Transformer Rules: To convert parsed nodes into logical operators.
 -   New Physical Operator: `PhysicalDecide`.
+-   EXPLAIN Support: Both `LogicalDecide` and `PhysicalDecide` override `GetName()` and `ParamsToString()` to produce structured DECIDE node output in `EXPLAIN`, `EXPLAIN ANALYZE`, and `EXPLAIN (FORMAT JSON)`. See `01_pipeline/04_explain.md` for details.

@@ -36,6 +36,7 @@ This makes it trivial to determine what exists vs. what needs building.
 4. `01_pipeline/trace_life_of_a_query.md` — A concrete example walking through every stage.
 5. The individual stage docs (`01_parser.md`, `02_binder.md`, `03_execution.md`) as needed.
 6. For execution details, the sub-docs (`03a` through `03e`) break down each phase.
+7. `01_pipeline/04_explain.md` — EXPLAIN output, serialization, and profiling for the DECIDE operator.
 
 You do not need to read `00_project_overview/background_theory.md` unless you want the
 academic motivation. You do not need to read `01_pipeline/code_structure.md` unless you
@@ -55,6 +56,7 @@ are about to modify source code and need to know where things live on disk.
 | — Model Building       | Transforms `SolverInput` → `ILPModel`                                    | `01_pipeline/03c_model_building.md` | `src/packdb/utility/ilp_model_builder.cpp`                                   |
 | — Solver Backends      | Gurobi (preferred) / HiGHS (fallback) dispatch                           | `01_pipeline/03d_solver_backends.md` | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp`            |
 | — Result Projection    | Projects solution values onto rows with type-specific casting             | `01_pipeline/03e_result_projection.md` | `physical_decide.cpp` (GetData)                                           |
+| EXPLAIN                | EXPLAIN / EXPLAIN ANALYZE / FORMAT JSON output for DECIDE operator        | `01_pipeline/04_explain.md`            | `logical_decide.cpp`, `physical_decide.cpp`, `serialize_logical_operator.cpp` |
 
 > **Note**: Algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
 

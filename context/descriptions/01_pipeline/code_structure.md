@@ -83,6 +83,8 @@ classDiagram
         +decide_objective
         +num_auxiliary_vars
         +count_indicator_links
+        +GetName() string
+        +ParamsToString() Map
     }
 
     class PhysicalOperator {
@@ -92,6 +94,8 @@ classDiagram
         +GlobalSinkState
         +Finalize()
         +GetData()
+        +GetName() string
+        +ParamsToString() Map
     }
 
     class SolverInput {
@@ -135,6 +139,10 @@ classDiagram
 -   **`Sink(GlobalSinkState, LocalSinkState, DataChunk)`**: Materializes input rows into the `DecideGlobalSinkState`.
 -   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds WHEN+PER group mappings, generates Big-M linking constraints for COUNT indicators, constructs `SolverInput`, calls `SolveILP()`, and stores the solution vector.
 -   **`GetData(ExecutionContext, DataChunk)`**: Streaming output. Re-scans the materialized data, projects solution values with type-specific casting (BOOLEAN/INTEGER/DOUBLE rounding), and filters out auxiliary variables.
+
+### EXPLAIN Support (Logical & Physical)
+-   **`LogicalDecide::GetName()`** / **`PhysicalDecide::GetName()`**: Return `"DECIDE"` for the plan renderer.
+-   **`LogicalDecide::ParamsToString()`** / **`PhysicalDecide::ParamsToString()`**: Build an `InsertionOrderPreservingMap` with `Variables`, `Objective`, and `Constraints` entries. Constraints are extracted by recursively splitting the AND-tree via `CollectConstraintStrings`, unwrapping WHEN/PER wrappers into display suffixes.
 
 ### `src/packdb/utility/ilp_model_builder.cpp`
 -   **`ILPModel::Build(const SolverInput &input)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row) and applies AVG→SUM RHS scaling.
