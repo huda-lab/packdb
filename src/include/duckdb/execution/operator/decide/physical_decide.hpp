@@ -15,9 +15,10 @@ namespace duckdb {
 struct LinearTerm {
     idx_t variable_index;              // Which DECIDE variable (or INVALID_INDEX for constants)
     unique_ptr<Expression> coefficient; // Row-varying expression to evaluate later
+    int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
 
-    LinearTerm(idx_t var_idx, unique_ptr<Expression> coef)
-        : variable_index(var_idx), coefficient(std::move(coef)) {}
+    LinearTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
+        : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {}
 };
 
 //! Represents a complete constraint after term extraction

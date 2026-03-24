@@ -22,7 +22,7 @@ This makes it trivial to determine what exists vs. what needs building.
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
 | `00_project_overview/` | What PackDB is, the theory behind it, and the DECIDE syntax reference                                              | You are new to the project or need to understand what queries are valid       |
 | `01_pipeline/`         | The query processing pipeline: architecture, each stage in order, source-code map, and a concrete end-to-end trace | You are working on or debugging any part of the DECIDE query path             |
-| `02_operations/`       | Testing methodology, release workflow, and known limitations                                                       | You need to run tests, cut a release, or check whether a feature is supported |
+| `02_operations/`       | Testing methodology, release workflow, benchmarking, and known limitations                                         | You need to run tests, cut a release, benchmark performance, or check whether a feature is supported |
 | `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md                                        | You want to know if a construct is valid, or are implementing a new keyword   |
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
 

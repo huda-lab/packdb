@@ -361,8 +361,9 @@ tools/pythonpkg/duckdb_build/
 
 
 
-# HiGHS solver logs
-HiGHS.log
+# HiGHS solver logs (any casing: HiGHS.log, Highs.log, highs.log)
+[Hh]i[Gg][Hh][Ss].[Ll]og
+[Hh]ighs.[Ll]og
 test/automated-old/highs
 test/automated-old/highs.log
 
@@ -385,9 +386,14 @@ wheels-macos-14/
 test/automated-old/=
 
 
-# highs log
-highs.log
+# Removed duplicate highs.log entry (consolidated above)
 
+
+# Inherited upstream files (not used by PackDB)
+CITATION.cff
+.codecov.yml
+.sanitizer-leak-suppressions.txt
+.sanitizer-thread-suppressions.txt
 
 # notes
 context/descriptions/todo.md

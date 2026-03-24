@@ -16,8 +16,9 @@ Build output: `build/release/packdb` (CLI), `build/release/src/libduckdb.so`
 ```bash
 make decide-test                       # Run DECIDE differential tests
 make decide-setup                      # Setup test environment only
+make decide-bench                      # Run performance benchmarks (with stage timers)
 ```
-Tests are in `test/decide/`.
+Tests are in `test/decide/`. Benchmarks are in `benchmark/decide/`.
 
 ## Key PackDB source paths
 
@@ -93,9 +94,10 @@ See `.claude/lessons.md` for corrections and gotchas discovered during developme
 
 ## Development Priorities
 
-1. **Expressivity**: PER keyword, COUNT/AVG aggregates, IS REAL variables
-   - See `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
-2. **Optimizer**: Big-M reformulation, push-down / pull-out rewrites
+1. **Performance**: Benchmarking infrastructure in place (`make decide-bench`). Solver dominates execution time (~95% at scale). Focus on reducing solver input size and improving formulations.
+   - See `context/descriptions/02_operations/benchmarking.md`
+2. **Expressivity**: See `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
+3. **Optimizer**: Big-M reformulation, push-down / pull-out rewrites
    - See `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`)
 
 ## Documentation

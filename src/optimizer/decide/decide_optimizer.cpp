@@ -1,6 +1,8 @@
 #include "duckdb/optimizer/decide_optimizer.hpp"
 
+#include <cstdlib>
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -42,11 +44,22 @@ unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator
 }
 
 void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
+	bool bench = std::getenv("PACKDB_BENCH") != nullptr;
+	Profiler timer;
+	if (bench) {
+		timer.Start();
+	}
+
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
 	RewriteNotEqual(decide);
 	RewriteCountToSum(decide);
 	RewriteAvgToSum(decide);
+
+	if (bench) {
+		timer.End();
+		fprintf(stderr, "PACKDB_BENCH: optimizer_ms=%.2f\n", timer.Elapsed() * 1000.0);
+	}
 }
 
 void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {

@@ -2,6 +2,8 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <cmath>
+#include <cstdlib>
+#include "duckdb/common/profiler.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
@@ -350,6 +352,14 @@ static void CollectDecideVarRefs(const Expression &expr, int sign,
             CollectDecideVarRefs(*func.children[1], sign, refs, op);
             return;
         }
+        if (func.function.name == "*" && func.children.size() == 2) {
+            // Multiplication: descend into both children to find decide variables.
+            // Sign propagates unchanged — * doesn't flip algebraic sign, it changes
+            // the coefficient magnitude (handled separately by FindVarCoefficient).
+            CollectDecideVarRefs(*func.children[0], sign, refs, op);
+            CollectDecideVarRefs(*func.children[1], sign, refs, op);
+            return;
+        }
     }
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
         auto &cast = expr.Cast<BoundCastExpression>();
@@ -390,6 +400,44 @@ static unique_ptr<Expression> StripDecideVars(const Expression &expr, const Phys
             std::move(new_child), cast.return_type, cast.bound_cast.Copy(), cast.try_cast);
     }
     return expr.Copy();
+}
+
+//! Walk through +/- nodes to find the sub-expression containing a specific decide
+//! variable, then extract its coefficient using ExtractCoefficientWithoutVariable.
+//! Returns the unsigned coefficient (sign is tracked separately by CollectDecideVarRefs).
+static unique_ptr<Expression> FindVarCoefficient(
+    const Expression &expr, idx_t var_idx, const PhysicalDecide &op) {
+    if (!op.ContainsVariable(expr, var_idx)) {
+        return nullptr;
+    }
+    // Bare variable reference: coefficient is 1
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+        if (op.FindDecideVariable(expr) == var_idx) {
+            return make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
+        }
+        return nullptr;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+        auto &func = expr.Cast<BoundFunctionExpression>();
+        // Multiplication: this is the coefficient node — extract the non-variable part
+        if (func.function.name == "*") {
+            return op.ExtractCoefficientWithoutVariable(expr, var_idx);
+        }
+        // Addition/subtraction: recurse into the child that contains the variable
+        if ((func.function.name == "+" || func.function.name == "-") && func.children.size() == 2) {
+            for (auto &child : func.children) {
+                auto result = FindVarCoefficient(*child, var_idx, op);
+                if (result) {
+                    return result;
+                }
+            }
+        }
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        auto &cast = expr.Cast<BoundCastExpression>();
+        return FindVarCoefficient(*cast.child, var_idx, op);
+    }
+    return nullptr;
 }
 
 //===--------------------------------------------------------------------===//
@@ -497,18 +545,21 @@ public:
                         vector<ExprVarRef> lhs_refs;
                         CollectDecideVarRefs(*lhs, +1, lhs_refs, op);
 
-                        // LHS vars keep their sign; RHS vars move to LHS with negated sign
+                        // LHS vars: extract row-varying coefficients, keep sign
                         for (auto &ref : lhs_refs) {
-                            constraint->lhs_terms.push_back(LinearTerm{
-                                ref.var_idx,
-                                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(ref.sign))
-                            });
+                            auto coef = FindVarCoefficient(*lhs, ref.var_idx, op);
+                            if (!coef) {
+                                coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
+                            }
+                            constraint->lhs_terms.push_back(LinearTerm{ref.var_idx, std::move(coef), ref.sign});
                         }
+                        // RHS vars: extract row-varying coefficients, negate sign (moving to LHS)
                         for (auto &ref : rhs_refs) {
-                            constraint->lhs_terms.push_back(LinearTerm{
-                                ref.var_idx,
-                                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(-ref.sign))
-                            });
+                            auto coef = FindVarCoefficient(*comp.right, ref.var_idx, op);
+                            if (!coef) {
+                                coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
+                            }
+                            constraint->lhs_terms.push_back(LinearTerm{ref.var_idx, std::move(coef), -ref.sign});
                         }
 
                         // RHS becomes data-only: DECIDE vars replaced with constant 0
@@ -735,8 +786,16 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
+    bool bench = std::getenv("PACKDB_BENCH") != nullptr;
+    Profiler model_timer;
+    Profiler solver_timer;
+
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
+
+    if (bench) {
+        model_timer.Start();
+    }
 
     // Validate input data
     if (num_rows == 0) {
@@ -839,7 +898,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             eval_const.row_coefficients[term_idx].size());
                     }
 
-                    eval_const.row_coefficients[term_idx].push_back(double_val);
+                    eval_const.row_coefficients[term_idx].push_back(double_val * term.sign);
                 }
             }
         }
@@ -1096,7 +1155,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             gstate.evaluated_objective_coefficients[term_idx].size());
                     }
 
-                    gstate.evaluated_objective_coefficients[term_idx].push_back(double_val);
+                    gstate.evaluated_objective_coefficients[term_idx].push_back(
+                        double_val * gstate.objective->terms[term_idx].sign);
                 }
             }
         }
@@ -1852,7 +1912,25 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     }
 
+    // Capture model size before solve (solver may move data)
+    size_t bench_total_vars = (size_t)(solver_input.num_rows * solver_input.num_decide_vars);
+    size_t bench_total_constraints = solver_input.constraints.size() + solver_input.global_constraints.size();
+
+    if (bench) {
+        model_timer.End();
+        solver_timer.Start();
+    }
+
     gstate.ilp_solution = SolveILP(solver_input);
+
+    if (bench) {
+        solver_timer.End();
+        fprintf(stderr, "PACKDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
+        fprintf(stderr, "PACKDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
+        fprintf(stderr, "PACKDB_BENCH: total_variables=%zu\n", bench_total_vars);
+        fprintf(stderr, "PACKDB_BENCH: total_constraints=%zu\n", bench_total_constraints);
+        fprintf(stderr, "PACKDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
+    }
 
     return SinkFinalizeType::READY;
 }
