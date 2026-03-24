@@ -1,51 +1,115 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="logo/DuckDB_Logo-horizontal.svg">
-    <source media="(prefers-color-scheme: dark)" srcset="logo/DuckDB_Logo-horizontal-dark-mode.svg">
-    <img alt="DuckDB logo" src="logo/DuckDB_Logo-horizontal.svg" height="100">
-  </picture>
-</div>
-<br>
+### Optimization, Native in SQL
 
-<p align="center">
-  <a href="https://github.com/duckdb/duckdb/actions"><img src="https://github.com/duckdb/duckdb/actions/workflows/Main.yml/badge.svg?branch=main" alt="Github Actions Badge"></a>
-  <a href="https://discord.gg/tcvwpjfnZx"><img src="https://shields.io/discord/909674491309850675" alt="discord" /></a>
-  <a href="https://github.com/duckdb/duckdb/releases/"><img src="https://img.shields.io/github/v/release/duckdb/duckdb?color=brightgreen&display_name=tag&logo=duckdb&logoColor=white" alt="Latest Release"></a>
-</p>
+PackDB extends DuckDB with declarative optimization.  
+Select optimal subsets of data with constraints and objectives — no external tools required.
 
-## DuckDB
+  
+  
 
-DuckDB is a high-performance analytical database system. It is designed to be fast, reliable, portable, and easy to use. DuckDB provides a rich SQL dialect, with support far beyond basic SQL. DuckDB supports arbitrary and nested correlated subqueries, window functions, collations, complex types (arrays, structs, maps), and [several extensions designed to make SQL easier to use](https://duckdb.org/docs/stable/guides/sql_features/friendly_sql).
 
-DuckDB is available as a [standalone CLI application](https://duckdb.org/docs/stable/clients/cli/overview) and has clients for [Python](https://duckdb.org/docs/stable/clients/python/overview), [R](https://duckdb.org/docs/stable/clients/r), [Java](https://duckdb.org/docs/stable/clients/java), [Wasm](https://duckdb.org/docs/stable/clients/wasm/overview), etc., with deep integrations with packages such as [pandas](https://duckdb.org/docs/guides/python/sql_on_pandas) and [dplyr](https://duckdb.org/docs/stable/clients/r#duckplyr-dplyr-api).
 
-For more information on using DuckDB, please refer to the [DuckDB documentation](https://duckdb.org/docs/stable/).
+  
 
-## Installation
 
-If you want to install DuckDB, please see [our installation page](https://duckdb.org/docs/installation/) for instructions.
-
-## Data Import
-
-For CSV files and Parquet files, data import is as simple as referencing the file in the FROM clause:
+## Quick Example
 
 ```sql
-SELECT * FROM 'myfile.csv';
-SELECT * FROM 'myfile.parquet';
+SELECT item, value, weight, x AS selected
+FROM Items
+DECIDE x IS BOOLEAN
+SUCH THAT
+    SUM(x * weight) <= 50
+MAXIMIZE SUM(x * value);
 ```
 
-Refer to our [Data Import](https://duckdb.org/docs/stable/data/overview) section for more information.
+## Why PackDB?
 
-## SQL Reference
+- **Native SQL** — Express optimization as a SQL extension. No context switching between your database and an external solver.
+- **Zero Data Movement** — Solve directly on database buffers. No export/import overhead.
+- **Declarative** — Define *what* to optimize, not *how*. The system handles ILP formulation automatically.
+- **Built on DuckDB** — Columnar storage, vectorized execution, and an embedded [HiGHS](https://highs.dev/) solver. Optional [Gurobi](https://www.gurobi.com/) support for commercial workloads.
 
-The documentation contains a [SQL introduction and reference](https://duckdb.org/docs/stable/sql/introduction).
+## DECIDE Syntax
 
-## Development
+```sql
+SELECT select_list
+FROM table_expression
+[WHERE ...]
+DECIDE variable_name [IS type] [, ...]
+SUCH THAT constraint [AND constraint ...]
+[MAXIMIZE | MINIMIZE] SUM|MIN|MAX(linear_expression)
+```
 
-For development, DuckDB requires [CMake](https://cmake.org), Python3 and a `C++11` compliant compiler. Run `make` in the root directory to compile the sources. For development, use `make debug` to build a non-optimized debug version. You should run `make unit` and `make allunit` to verify that your version works properly after making changes. To test performance, you can run `BUILD_BENCHMARK=1 BUILD_TPCH=1 make` and then perform several standard benchmarks from the root directory by executing `./build/release/benchmark/benchmark_runner`. The details of benchmarks are in our [Benchmark Guide](benchmark/README.md).
 
-Please also refer to our [Build Guide](https://duckdb.org/docs/stable/dev/building) and [Contribution Guide](CONTRIBUTING.md).
+| Feature                  | Details                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| **Variable types**       | `IS BOOLEAN` (0/1), `IS INTEGER` (non-negative, default), `IS REAL` (continuous) |
+| **Constraint operators** | `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN`                                 |
+| **Aggregates**           | `SUM()`, `COUNT()`, `AVG()`, `MIN()`, `MAX()`                                    |
+| **Conditional**          | `expression WHEN condition` (postfix)                                            |
+| **Grouping**             | `SUM(expr) op rhs PER column` — one constraint per distinct group                |
 
-## Support
 
-See the [Support Options](https://duckdblabs.com/support/) page.
+For the full syntax specification, see `[context/descriptions/00_project_overview/syntax_reference.md](context/descriptions/00_project_overview/syntax_reference.md)`.
+
+## Building from Source
+
+PackDB requires [CMake](https://cmake.org), Python3, and a C++11 compliant compiler.
+
+```bash
+make release
+```
+
+Build output:
+
+- **CLI**: `build/release/packdb`
+- **Library**: `build/release/src/libduckdb.so`
+
+## Running Tests
+
+```bash
+make decide-test       # Run DECIDE differential tests
+make decide-setup      # Setup test environment only
+```
+
+Tests are located in `[test/decide/](test/decide/)`.
+
+## Example Problem Domains
+
+PackDB can express a wide range of optimization problems directly in SQL:
+
+- **Knapsack / Packing** — Maximize value within weight or budget limits
+- **Diet / Nutrition** — Meet nutritional targets while minimizing cost
+- **Portfolio Selection** — Maximize return under risk constraints
+- **Resource Allocation** — Assign limited resources to maximize output
+- **Production Planning** — Optimize production quantities with capacity constraints
+- **Assignment** — Assign items to resources optimally
+- **Scheduling** — Complex constraint satisfaction over time slots
+- **Multi-period Optimization** — Time-indexed decision problems with carry-over constraints
+
+## Documentation
+
+Full documentation lives in `[context/descriptions/](context/descriptions/)`. Start with the [README there](context/descriptions/README.md) for navigation and reading order.
+
+Key areas:
+
+- `[00_project_overview/](context/descriptions/00_project_overview/)` — Syntax specification
+- `[01_pipeline/](context/descriptions/01_pipeline/)` — Query processing architecture
+- `[03_expressivity/](context/descriptions/03_expressivity/)` — Feature status (WHEN, PER, aggregates, etc.)
+- `[04_optimizer/](context/descriptions/04_optimizer/)` — Optimizer rewrite strategies
+
+## Research
+
+PackDB is developed by the [HUDA Lab](https://huda-lab.github.io/) (NYU Abu Dhabi), and UMass Amherst.
+
+**Foundation papers:**
+
+- *Scalable Package Queries in Relational Database Systems* (VLDB 2016)
+- *Scalable Computation of High-Order Optimization Queries* (ACM Communications, 2019)
+- *Scaling Package Queries to a Billion Tuples* (VLDB 2024)
+
+Contact: [huda-lab@nyu.edu](mailto:huda-lab@nyu.edu)
+
+## License
+
+PackDB is released under the MIT License. See [LICENSE](LICENSE) for details.
