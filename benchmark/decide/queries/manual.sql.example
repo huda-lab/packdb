@@ -1,0 +1,10 @@
+-- Manual benchmark query. Copy this file to manual.sql and edit.
+-- Run with: make decide-bench-manual
+-- The query runs against all database sizes (small/medium/large).
+-- Results are saved to results/manual.json (always overwritten).
+
+SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, x
+FROM lineitem
+DECIDE x IS BOOLEAN
+SUCH THAT SUM(x * l_quantity) <= 500
+MAXIMIZE SUM(x * l_extendedprice);

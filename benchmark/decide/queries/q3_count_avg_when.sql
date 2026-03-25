@@ -1,7 +1,6 @@
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice,
        l_discount, l_returnflag, x
 FROM lineitem
-WHERE l_orderkey < {SCALE}
 DECIDE x
 SUCH THAT x <= 5
     AND COUNT(x) >= 3

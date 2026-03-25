@@ -16,9 +16,21 @@ Build output: `build/release/packdb` (CLI), `build/release/src/libduckdb.so`
 ```bash
 make decide-test                       # Run DECIDE differential tests
 make decide-setup                      # Setup test environment only
-make decide-bench                      # Run performance benchmarks (with stage timers)
 ```
-Tests are in `test/decide/`. Benchmarks are in `benchmark/decide/`.
+Tests are in `test/decide/`.
+
+## Benchmark
+
+```bash
+make decide-bench-setup                # Generate TPC-H databases (small/medium/large)
+make decide-bench                      # Run all queries × all sizes (with stage timers)
+make decide-bench-manual               # Run custom query from queries/manual.sql
+make decide-view                       # View latest results (colored stage bars)
+```
+
+Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q1,Q3 --compare`
+
+**Optimization loop**: Use `/bench` to automate build → benchmark (medium) → analyze stages → suggest next optimization. Full docs: `context/descriptions/02_operations/benchmarking.md`.
 
 ## Key PackDB source paths
 
@@ -94,7 +106,7 @@ See `.claude/lessons.md` for corrections and gotchas discovered during developme
 
 ## Development Priorities
 
-1. **Performance**: Benchmarking infrastructure in place (`make decide-bench`). Solver dominates execution time (~95% at scale). Focus on reducing solver input size and improving formulations.
+1. **Performance**: Use `/bench` for the optimize-measure loop. Solver dominates (~95% at scale). Focus on reducing solver input size and improving formulations.
    - See `context/descriptions/02_operations/benchmarking.md`
 2. **Expressivity**: See `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
 3. **Optimizer**: Big-M reformulation, push-down / pull-out rewrites

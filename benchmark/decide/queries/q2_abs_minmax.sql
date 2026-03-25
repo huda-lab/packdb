@@ -1,6 +1,5 @@
 SELECT l_orderkey, l_linenumber, l_quantity, new_qty
 FROM lineitem
-WHERE l_orderkey < {SCALE}
 DECIDE new_qty IS REAL
 SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 200
     AND MAX(new_qty) >= 40

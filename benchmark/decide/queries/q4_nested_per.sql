@@ -1,7 +1,6 @@
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice,
        l_returnflag, x
 FROM lineitem
-WHERE l_orderkey < {SCALE}
 DECIDE x IS BOOLEAN
 SUCH THAT SUM(x) >= 2 PER l_returnflag
     AND SUM(x * l_quantity) <= 100 PER l_returnflag

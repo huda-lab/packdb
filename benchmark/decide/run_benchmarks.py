@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """PackDB DECIDE performance benchmark runner.
 
-Runs a set of DECIDE queries at multiple scales, measuring wall-clock time
-and peak memory (RSS) via /usr/bin/time -v. Outputs results to both terminal
-(formatted table) and JSON (for regression tracking).
+Runs a set of DECIDE queries against pre-generated TPC-H databases of different
+sizes (small/medium/large), measuring wall-clock time, peak memory (RSS), and
+per-stage breakdowns.
 
 Usage:
-    python3 benchmark/decide/run_benchmarks.py                  # run all
-    python3 benchmark/decide/run_benchmarks.py --queries Q1,Q3  # subset
-    python3 benchmark/decide/run_benchmarks.py --iterations 10  # more runs
-    python3 benchmark/decide/run_benchmarks.py --compare prev.json  # delta
+    python3 benchmark/decide/run_benchmarks.py                    # run all
+    python3 benchmark/decide/run_benchmarks.py --queries Q1,Q3    # subset
+    python3 benchmark/decide/run_benchmarks.py --sizes small      # single size
+    python3 benchmark/decide/run_benchmarks.py --manual           # manual query
+    python3 benchmark/decide/run_benchmarks.py --compare          # auto compare
 
-When PACKDB_BENCH=1 is set, also parses per-stage timers from packdb stderr
-(requires Phase B C++ instrumentation).
+Databases must be generated first: make decide-bench-setup
+When PACKDB_BENCH=1 is set, also parses per-stage timers from packdb stderr.
 """
 
 from __future__ import annotations
@@ -37,37 +38,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 QUERIES_DIR = SCRIPT_DIR / "queries"
 RESULTS_DIR = SCRIPT_DIR / "results"
+DATABASES_DIR = SCRIPT_DIR / "databases"
 
 PACKDB_EXE = REPO_ROOT / "build" / "release" / "packdb"
-PACKDB_DB = REPO_ROOT / "packdb.db"
 
-# Default scale points per query
-DEFAULT_SCALES: dict[str, list[int]] = {
-    "Q1": [10, 100, 500],
-    "Q2": [10, 50, 200],
-    "Q3": [10, 100, 500],
-    "Q4": [10, 50, 200],
-    "Q5": [500, 2000, 10000],
-}
-
-# Query template files
-QUERY_TEMPLATES: dict[str, str] = {
-    "Q1": "q1_knapsack_baseline.sql.template",
-    "Q2": "q2_abs_minmax.sql.template",
-    "Q3": "q3_count_avg_when.sql.template",
-    "Q4": "q4_nested_per.sql.template",
-    "Q5": "q5_stress.sql.template",
-}
-
-QUERY_DESCRIPTIONS: dict[str, str] = {
-    "Q1": "knapsack_baseline",
-    "Q2": "abs_minmax",
-    "Q3": "count_avg_when",
-    "Q4": "nested_per",
-    "Q5": "stress",
-}
-
-DEFAULT_ITERATIONS = 5
+DB_SIZES = ["small", "medium", "large"]
+DEFAULT_ITERATIONS = 3
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,7 +69,6 @@ def get_system_info() -> dict:
         "cpu": platform.processor() or "unknown",
         "python": platform.python_version(),
     }
-    # Try to get total RAM on Linux
     try:
         with open("/proc/meminfo") as f:
             for line in f:
@@ -106,40 +81,58 @@ def get_system_info() -> dict:
     return info
 
 
-def ensure_database() -> None:
-    """Ensure packdb.db exists with TPC-H data, generating if needed."""
-    # Check if DB exists and has tables (read-only to avoid locks)
-    if PACKDB_DB.exists():
+def is_dirty() -> bool:
+    """Check if the git working tree has uncommitted changes."""
+    try:
         result = subprocess.run(
-            [str(PACKDB_EXE), str(PACKDB_DB), "-readonly", "-c",
-             "SELECT COUNT(*) FROM lineitem;"],
-            capture_output=True, text=True, timeout=30,
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
         )
-        if result.returncode == 0 and "Error" not in result.stderr:
-            return
-        # DB exists but no lineitem table — needs TPC-H data
-
-    print("Setting up TPC-H data (sf=0.01)...")
-    setup_sql = "LOAD tpch; CALL dbgen(sf=0.01);"
-    result = subprocess.run(
-        [str(PACKDB_EXE), str(PACKDB_DB), "-c", setup_sql],
-        capture_output=True, text=True, timeout=120,
-    )
-    if result.returncode != 0:
-        print(f"ERROR: Failed to generate TPC-H data:\n{result.stderr}", file=sys.stderr)
-        sys.exit(1)
-    print("TPC-H data loaded successfully.")
+        return bool(result.stdout.strip())
+    except FileNotFoundError:
+        return False
 
 
-def load_template(query_name: str) -> str:
-    """Load a query template file."""
-    template_file = QUERIES_DIR / QUERY_TEMPLATES[query_name]
-    return template_file.read_text()
+def discover_queries() -> dict[str, Path]:
+    """Discover query files by globbing queries/q*.sql."""
+    queries: dict[str, Path] = {}
+    for path in sorted(QUERIES_DIR.glob("q*.sql")):
+        if path.suffix == ".sql" and not path.name.endswith(".example"):
+            m = re.match(r"q(\d+)", path.stem)
+            if m:
+                queries[f"Q{m.group(1)}"] = path
+    return queries
 
 
-def render_query(template: str, scale: int) -> str:
-    """Replace {SCALE} placeholder in template."""
-    return template.replace("{SCALE}", str(scale))
+def get_query_description(filename: str) -> str:
+    """Extract description from query filename.
+
+    q1_knapsack_baseline.sql -> knapsack_baseline
+    """
+    stem = Path(filename).stem
+    m = re.match(r"q\d+_(.*)", stem)
+    return m.group(1) if m else stem
+
+
+def find_previous_result(current_commit: str) -> Path | None:
+    """Walk git log to find the most recent commit with a result file."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "--format=%h", "-n", "50"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        if result.returncode != 0:
+            return None
+        for commit_hash in result.stdout.strip().splitlines():
+            commit_hash = commit_hash.strip()
+            if commit_hash == current_commit:
+                continue
+            result_path = RESULTS_DIR / f"{commit_hash}.json"
+            if result_path.exists():
+                return result_path
+    except FileNotFoundError:
+        pass
+    return None
 
 
 def parse_time_output(stderr: str) -> dict:
@@ -178,7 +171,6 @@ def parse_bench_output(stderr: str) -> dict:
     for m in re.finditer(r"PACKDB_BENCH:\s*(\w+)=([\d.]+)", stderr):
         key = m.group(1)
         val = m.group(2)
-        # Convert to float if it looks numeric
         try:
             stages[key] = float(val) if "." in val else int(val)
         except ValueError:
@@ -186,9 +178,8 @@ def parse_bench_output(stderr: str) -> dict:
     return stages
 
 
-def run_single(query_sql: str, timeout: int = 600) -> dict:
+def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
     """Run a single benchmark query, returning timing and memory metrics."""
-    # Write query to a temp file (avoids shell escaping issues with stdin)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False) as f:
         f.write(query_sql)
         sql_path = f.name
@@ -197,7 +188,7 @@ def run_single(query_sql: str, timeout: int = 600) -> dict:
         env = os.environ.copy()
         cmd = [
             "/usr/bin/time", "-v",
-            str(PACKDB_EXE), str(PACKDB_DB), "-readonly",
+            str(PACKDB_EXE), str(db_path), "-readonly",
         ]
 
         with open(sql_path) as sql_file:
@@ -223,7 +214,6 @@ def run_single(query_sql: str, timeout: int = 600) -> dict:
 
         # Capture any errors
         if result.returncode != 0:
-            # Filter out /usr/bin/time lines to get actual error
             error_lines = [
                 line for line in result.stderr.splitlines()
                 if not line.strip().startswith(("Command", "Elapsed", "Maximum",
@@ -283,65 +273,32 @@ def compute_stats(runs: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Output
+# Comparison
 # ---------------------------------------------------------------------------
-
-
-def print_table(results: list[dict], commit: str) -> None:
-    """Print a formatted results table to terminal."""
-    print()
-    print(f"PackDB Benchmark Results (commit: {commit})")
-    print("=" * 78)
-
-    header = f"{'Query':<25} {'Scale':>6} {'Median(s)':>10} {'StdDev':>8} {'PeakRSS(MB)':>12}"
-    print(header)
-    print("-" * 78)
-
-    for entry in results:
-        name = f"{entry['query']}_{QUERY_DESCRIPTIONS.get(entry['query'], '')}"
-        scale = entry["scale"]
-        stats = entry.get("stats", {})
-
-        median = stats.get("median_wall_time_s")
-        stddev = stats.get("stddev_wall_time_s")
-        rss_kb = stats.get("median_peak_rss_kb")
-
-        median_str = f"{median:.4f}" if median is not None else "FAIL"
-        stddev_str = f"{stddev:.4f}" if stddev is not None else "-"
-        rss_str = f"{rss_kb / 1024:.1f}" if rss_kb is not None else "-"
-
-        print(f"{name:<25} {scale:>6} {median_str:>10} {stddev_str:>8} {rss_str:>12}")
-
-        # Print stage breakdown if available
-        stages = stats.get("stages")
-        if stages:
-            stage_parts = [f"{k}={v}" for k, v in stages.items()]
-            print(f"{'':>25} {'':>6}   stages: {', '.join(stage_parts)}")
-
-    print("=" * 78)
-    print()
 
 
 def print_comparison(current: list[dict], previous: dict) -> None:
     """Print a comparison table between current and previous results."""
-    prev_lookup: dict[tuple[str, int], dict] = {}
+    prev_lookup: dict[tuple[str, str], dict] = {}
     for entry in previous.get("queries", []):
-        key = (entry["query"], entry["scale"])
+        key = (entry["query"], entry.get("size", ""))
         prev_lookup[key] = entry.get("stats", {})
 
     print()
     print(f"Comparison: {previous.get('commit', '?')} -> current")
     print("=" * 90)
-    header = (f"{'Query':<25} {'Scale':>6} {'Prev(s)':>9} {'Curr(s)':>9} "
+    header = (f"{'Query':<25} {'Size':>8} {'Prev(s)':>9} {'Curr(s)':>9} "
               f"{'Delta':>8} {'%':>7} {'RSS Delta':>10}")
     print(header)
     print("-" * 90)
 
     for entry in current:
-        name = f"{entry['query']}_{QUERY_DESCRIPTIONS.get(entry['query'], '')}"
-        scale = entry["scale"]
+        query = entry["query"]
+        desc = entry.get("description", query)
+        name = f"{query}_{desc}" if desc != query else query
+        size = entry["size"]
         curr_stats = entry.get("stats", {})
-        prev_stats = prev_lookup.get((entry["query"], scale), {})
+        prev_stats = prev_lookup.get((query, size), {})
 
         curr_t = curr_stats.get("median_wall_time_s")
         prev_t = prev_stats.get("median_wall_time_s")
@@ -365,7 +322,7 @@ def print_comparison(current: list[dict], previous: dict) -> None:
             rss_delta_mb = (curr_rss - prev_rss) / 1024
             rss_delta_str = f"{rss_delta_mb:+.1f}MB"
 
-        print(f"{name:<25} {scale:>6} {prev_str:>9} {curr_str:>9} "
+        print(f"{name:<25} {size:>8} {prev_str:>9} {curr_str:>9} "
               f"{delta_str:>8} {pct_str:>7} {rss_delta_str:>10}")
 
     print("=" * 90)
@@ -384,20 +341,20 @@ def main() -> None:
         help="Comma-separated list of queries to run (e.g., Q1,Q3). Default: all",
     )
     parser.add_argument(
-        "--scales", type=str, default=None,
-        help="Comma-separated list of scales to override defaults (e.g., 50,500)",
+        "--sizes", type=str, default=None,
+        help="Comma-separated DB sizes (e.g., small,medium). Default: all",
     )
     parser.add_argument(
         "--iterations", type=int, default=DEFAULT_ITERATIONS,
-        help=f"Number of iterations per query/scale (default: {DEFAULT_ITERATIONS})",
+        help=f"Number of iterations per query/size (default: {DEFAULT_ITERATIONS})",
     )
     parser.add_argument(
-        "--output", type=str, default=None,
-        help="Custom JSON output path (default: results/<commit>_<timestamp>.json)",
+        "--manual", action="store_true",
+        help="Run queries/manual.sql instead of standard queries",
     )
     parser.add_argument(
-        "--compare", type=str, default=None,
-        help="Path to previous results JSON for comparison",
+        "--compare", nargs="?", const="auto", default=None,
+        help="Compare with previous results. No arg = auto-find, or specify commit hash",
     )
     parser.add_argument(
         "--timeout", type=int, default=600,
@@ -411,79 +368,137 @@ def main() -> None:
         print("Run 'make release' first.", file=sys.stderr)
         sys.exit(1)
 
-    ensure_database()
-
-    # Determine which queries to run
-    if args.queries:
-        query_names = [q.strip().upper() for q in args.queries.split(",")]
-        for q in query_names:
-            if q not in QUERY_TEMPLATES:
-                print(f"ERROR: Unknown query '{q}'. Available: {', '.join(sorted(QUERY_TEMPLATES))}",
-                      file=sys.stderr)
-                sys.exit(1)
-    else:
-        query_names = sorted(QUERY_TEMPLATES.keys())
-
-    # Determine scale overrides
-    scale_override = None
-    if args.scales:
-        scale_override = [int(s.strip()) for s in args.scales.split(",")]
+    # Determine sizes
+    sizes = [s.strip() for s in args.sizes.split(",")] if args.sizes else DB_SIZES
+    for s in sizes:
+        db_path = DATABASES_DIR / f"{s}.db"
+        if not db_path.exists():
+            print(f"ERROR: Database not found: {db_path}", file=sys.stderr)
+            print("Run 'make decide-bench-setup' to generate databases.", file=sys.stderr)
+            sys.exit(1)
 
     commit = get_git_commit()
     system_info = get_system_info()
+    dirty = is_dirty()
 
-    print(f"PackDB DECIDE Benchmark (commit: {commit})")
+    # --- Manual mode ---
+    if args.manual:
+        manual_path = QUERIES_DIR / "manual.sql"
+        if not manual_path.exists():
+            print(f"ERROR: {manual_path} not found.", file=sys.stderr)
+            print(f"Copy {QUERIES_DIR / 'manual.sql.example'} to manual.sql and edit.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        sql = manual_path.read_text()
+        all_results: list[dict] = []
+
+        print(f"PackDB Manual Benchmark (commit: {commit}{'*' if dirty else ''})")
+        print(f"Sizes: {', '.join(sizes)}")
+        print(f"Iterations: {args.iterations}")
+        if os.environ.get("PACKDB_BENCH"):
+            print("Stage timers: ENABLED (PACKDB_BENCH=1)")
+        print()
+
+        for size in sizes:
+            db_path = DATABASES_DIR / f"{size}.db"
+            print(f"[manual] size={size}", end="", flush=True)
+
+            runs: list[dict] = []
+            for i in range(args.iterations):
+                metrics = run_single(sql, db_path, timeout=args.timeout)
+                runs.append(metrics)
+                print("." if metrics.get("exit_code") == 0 else "X", end="", flush=True)
+
+            stats = compute_stats(runs)
+            entry = {
+                "query": "manual",
+                "description": "manual",
+                "size": size,
+                "sql": sql.strip(),
+                "runs": runs,
+                "stats": stats,
+            }
+            all_results.append(entry)
+            median = stats.get("median_wall_time_s")
+            print(f" {median:.4f}s" if median is not None else " FAILED")
+
+        output = {
+            "commit": commit,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "system": system_info,
+            "iterations": args.iterations,
+            "sizes": sizes,
+            "queries": all_results,
+        }
+
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = RESULTS_DIR / "manual.json"
+        with open(output_path, "w") as f:
+            json.dump(output, f, indent=2)
+        print(f"\nResults saved to: {output_path}")
+
+        subprocess.run([sys.executable, str(SCRIPT_DIR / "view_results.py"), "manual"])
+        return
+
+    # --- Standard mode ---
+    available_queries = discover_queries()
+    if not available_queries:
+        print("ERROR: No query files found in queries/", file=sys.stderr)
+        sys.exit(1)
+
+    if args.queries:
+        query_names = [q.strip().upper() for q in args.queries.split(",")]
+        for q in query_names:
+            if q not in available_queries:
+                print(f"ERROR: Unknown query '{q}'. "
+                      f"Available: {', '.join(sorted(available_queries))}",
+                      file=sys.stderr)
+                sys.exit(1)
+    else:
+        query_names = sorted(available_queries.keys())
+
+    print(f"PackDB DECIDE Benchmark (commit: {commit}{'*' if dirty else ''})")
     print(f"Queries: {', '.join(query_names)}")
+    print(f"Sizes: {', '.join(sizes)}")
     print(f"Iterations: {args.iterations}")
     if os.environ.get("PACKDB_BENCH"):
         print("Stage timers: ENABLED (PACKDB_BENCH=1)")
     print()
 
-    # Run benchmarks
     all_results: list[dict] = []
-    total_combos = sum(
-        len(scale_override or DEFAULT_SCALES[q]) for q in query_names
-    )
+    total_combos = len(query_names) * len(sizes)
     combo_idx = 0
 
     for query_name in query_names:
-        template = load_template(query_name)
-        scales = scale_override or DEFAULT_SCALES[query_name]
+        query_path = available_queries[query_name]
+        sql = query_path.read_text()
+        desc = get_query_description(query_path.name)
 
-        for scale in scales:
+        for size in sizes:
             combo_idx += 1
-            desc = QUERY_DESCRIPTIONS.get(query_name, query_name)
-            print(f"[{combo_idx}/{total_combos}] {query_name}_{desc} (scale={scale})", end="", flush=True)
+            db_path = DATABASES_DIR / f"{size}.db"
+            print(f"[{combo_idx}/{total_combos}] {query_name}_{desc} (size={size})",
+                  end="", flush=True)
 
-            sql = render_query(template, scale)
             runs: list[dict] = []
-
             for i in range(args.iterations):
-                metrics = run_single(sql, timeout=args.timeout)
+                metrics = run_single(sql, db_path, timeout=args.timeout)
                 runs.append(metrics)
-
-                # Progress indicator
-                if metrics.get("exit_code") == 0:
-                    print(".", end="", flush=True)
-                else:
-                    print("X", end="", flush=True)
+                print("." if metrics.get("exit_code") == 0 else "X", end="", flush=True)
 
             stats = compute_stats(runs)
-
             entry = {
                 "query": query_name,
-                "scale": scale,
+                "description": desc,
+                "size": size,
+                "sql": sql.strip(),
                 "runs": runs,
                 "stats": stats,
             }
             all_results.append(entry)
-
-            # Print inline summary
             median = stats.get("median_wall_time_s")
-            if median is not None:
-                print(f" {median:.4f}s")
-            else:
-                print(" FAILED")
+            print(f" {median:.4f}s" if median is not None else " FAILED")
 
     # Build output document
     output = {
@@ -491,32 +506,39 @@ def main() -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "system": system_info,
         "iterations": args.iterations,
+        "sizes": sizes,
         "queries": all_results,
     }
 
-    # Print results table
-    print_table(all_results, commit)
-
-    # Print comparison if requested
-    if args.compare:
-        try:
-            with open(args.compare) as f:
-                prev = json.load(f)
-            print_comparison(all_results, prev)
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"WARNING: Could not load comparison file: {e}", file=sys.stderr)
-
     # Save JSON
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = RESULTS_DIR / f"{commit}_{ts}.json"
-
+    identifier = "dirty" if dirty else commit
+    output_path = RESULTS_DIR / f"{identifier}.json"
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
-    print(f"Results saved to: {output_path}")
+    print(f"\nResults saved to: {output_path}")
+
+    # Comparison
+    if args.compare:
+        if args.compare == "auto":
+            prev_path = find_previous_result(commit)
+        else:
+            prev_path = RESULTS_DIR / f"{args.compare}.json"
+
+        if prev_path and prev_path.exists():
+            try:
+                with open(prev_path) as f:
+                    prev = json.load(f)
+                print_comparison(all_results, prev)
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"WARNING: Could not load comparison file: {e}", file=sys.stderr)
+        elif args.compare != "auto":
+            print(f"WARNING: No results found for '{args.compare}'", file=sys.stderr)
+        else:
+            print("No previous results found for comparison.")
+
+    # Invoke viewer
+    subprocess.run([sys.executable, str(SCRIPT_DIR / "view_results.py"), identifier])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-bench grammar grammar-build
+.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
 
 all: release
 opt: release
@@ -536,8 +536,17 @@ decide-setup:
 decide-test:
 	test/decide/run_tests.sh
 
+decide-bench-setup:
+	python3 benchmark/decide/generate_databases.py
+
 decide-bench:
 	PACKDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py
+
+decide-bench-manual:
+	PACKDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --manual
+
+decide-view:
+	python3 benchmark/decide/view_results.py
 
 grammar:
 	python3 scripts/generate_grammar.py
