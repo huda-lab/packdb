@@ -32,8 +32,11 @@ bool GurobiSolver::IsAvailable() {
 #if PACKDB_HAS_GUROBI
     static bool available = []() {
         GRBenv *env = nullptr;
-        int error = GRBloadenv(&env, nullptr);
-        bool ok = (error == 0 && env != nullptr);
+        bool ok = false;
+        if (GRBemptyenv(&env) == 0 && env != nullptr) {
+            GRBsetintparam(env, "OutputFlag", 0);
+            ok = (GRBstartenv(env) == 0);
+        }
         if (env) {
             GRBfreeenv(env);
         }
@@ -54,14 +57,19 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     //===--------------------------------------------------------------------===//
 
     GurobiGuard guard;
-    int error = GRBloadenv(&guard.env, nullptr);
-    if (error) {
+    int error = GRBemptyenv(&guard.env);
+    if (error || !guard.env) {
         throw InternalException("Failed to create Gurobi environment (error %d). "
                                 "Check that GUROBI_HOME is set and license is valid.",
                                 error);
     }
-
     GRBsetintparam(guard.env, "OutputFlag", 0);
+    error = GRBstartenv(guard.env);
+    if (error) {
+        throw InternalException("Failed to start Gurobi environment (error %d). "
+                                "Check that GUROBI_HOME is set and license is valid.",
+                                error);
+    }
 
     //===--------------------------------------------------------------------===//
     // 2. Create model with variables

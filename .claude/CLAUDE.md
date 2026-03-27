@@ -88,7 +88,7 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 - DECIDE clause keywords: DECIDE, SUCH THAT, MAXIMIZE, MINIMIZE, WHEN
 - WHEN is postfix on constraints and objectives: `expression WHEN condition` (not `WHEN condition THEN expression`)
 - Only linear constraints/objectives supported (no quadratic)
-- Solver strategy: Gurobi (preferred, commercial) with HiGHS (bundled, open-source) fallback
+- Solver strategy: Gurobi (primary, commercial) — empirically much faster in practice. HiGHS (bundled, open-source) is retained as a fallback only; it is significantly slower and not recommended for production use.
 - Always use `python3` (not `python`) — `python` is not available on this system
 
 ## Grammar Changes

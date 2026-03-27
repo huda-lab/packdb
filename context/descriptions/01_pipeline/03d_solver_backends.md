@@ -21,8 +21,8 @@ vector<double> SolveILP(const SolverInput &input) {
 
 ## Solver Selection
 
-- If `GurobiSolver::IsAvailable()` returns true, Gurobi is used.
-- Otherwise, HiGHS (via `DeterministicNaive`) is used as the fallback.
+- If `GurobiSolver::IsAvailable()` returns true, Gurobi is used. **Gurobi is the primary solver** and is strongly recommended — empirical benchmarking has shown it to be significantly faster than HiGHS for PackDB workloads.
+- Otherwise, HiGHS (via `DeterministicNaive`) is used as a fallback. HiGHS is substantially slower in practice and should only be used when a Gurobi license is unavailable.
 
 `GurobiSolver::IsAvailable()` performs a one-time lazy check (static local variable with lambda initialization): it attempts to create a Gurobi environment via `GRBloadenv()`. If compilation did not include Gurobi (`PACKDB_HAS_GUROBI` not defined), it always returns false.
 
@@ -62,6 +62,8 @@ After `GRBoptimize()`, the status is checked:
 Solution values are extracted via `GRBgetdblattrarray(GRB_DBL_ATTR_X, ...)` into a `vector<double>`. Each value is validated as finite (not NaN or Infinity).
 
 ## HiGHS Backend
+
+> **Note**: HiGHS is retained as an open-source fallback for environments without a Gurobi license. Empirical benchmarking has shown it to be significantly slower than Gurobi for PackDB workloads. It is not recommended for production use.
 
 Uses HiGHS's **C++ API** (`Highs.h`). Despite the class name `DeterministicNaive`, this is a full-featured MIP solver.
 
