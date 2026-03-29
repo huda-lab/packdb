@@ -2,11 +2,11 @@
 
 ## Overview
 
-The model builder transforms the solver-agnostic `SolverInput` (evaluated constraints with numeric coefficients) into an `ILPModel` (flat variable arrays + constraint list in COO format). This is the bridge between PackDB's domain model and the generic ILP formulation that any solver backend can consume.
+The model builder transforms the solver-agnostic `SolverInput` (evaluated constraints with numeric coefficients) into a `SolverModel` (flat variable arrays + constraint list in COO format + optional Q matrix for QP). This is the bridge between PackDB's domain model and the generic optimization formulation that any solver backend can consume.
 
-The core logic lives in `ILPModel::Build()`, a static method that takes a `SolverInput` and returns a fully constructed `ILPModel`.
+The core logic lives in `SolverModel::Build()`, a static method that takes a `SolverInput` and returns a fully constructed `SolverModel`.
 
-**Key Source File**: `src/packdb/utility/ilp_model_builder.cpp` (~247 lines)
+**Key Source File**: `src/packdb/utility/ilp_model_builder.cpp` (~384 lines)
 **Headers**: `src/include/duckdb/packdb/ilp_model.hpp`, `src/include/duckdb/packdb/solver_input.hpp`
 
 ## Variable Setup
@@ -46,11 +46,11 @@ The `maximize` flag is set from `input.sense`.
 
 ## Constraint Building
 
-Each `EvaluatedConstraint` is converted to one or more `ILPConstraint` structs. The path depends on whether the constraint is aggregate (SUM-level) and whether it has groups (WHEN/PER).
+Each `EvaluatedConstraint` is converted to one or more `ModelConstraint` structs. The path depends on whether the constraint is aggregate (SUM-level) and whether it has groups (WHEN/PER).
 
 ### Path 1: Aggregate, Ungrouped (No WHEN, No PER)
 
-Fast path when `row_group_ids` is empty. A single `ILPConstraint` is produced that sums over all rows:
+Fast path when `row_group_ids` is empty. A single `ModelConstraint` is produced that sums over all rows:
 
 - For each term with a valid variable index, all rows contribute: variable index `row * num_decide_vars + decide_var_idx`, coefficient from `row_coefficients[term_idx][row]`.
 - RHS comes from `rhs_values[0]`.
@@ -58,7 +58,7 @@ Fast path when `row_group_ids` is empty. A single `ILPConstraint` is produced th
 
 ### Path 2: Aggregate, Grouped (WHEN and/or PER)
 
-A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one `ILPConstraint` is emitted per non-empty group:
+A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one `ModelConstraint` is emitted per non-empty group:
 
 - Only rows in the group contribute coefficients.
 - RHS comes from `rhs_values[0]`.
@@ -66,7 +66,7 @@ A `group_to_rows` index is built: for each group ID, collect which rows belong t
 
 ### Path 3: Per-Row
 
-One `ILPConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint contains only the terms for that single row, with RHS from `rhs_values[row]`.
+One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint contains only the terms for that single row, with RHS from `rhs_values[row]`.
 
 ## `ApplyComparisonSense()`
 
@@ -82,12 +82,26 @@ Converts DuckDB's `ExpressionType` comparisons to ILP constraint sense character
 
 Note: The sense characters `'>'` and `'<'` represent `>=` and `<=` respectively (standard ILP convention). Strict inequalities are converted by adjusting the RHS, which is exact for integer variables but an approximation for continuous variables.
 
-## `ILPConstraint` Format
+## Quadratic Objective (Q Matrix)
+
+When `input.has_quadratic_objective` is true, the model builder constructs the Q matrix for the standard QP form `minimize (1/2) x^T Q x + c^T x`.
+
+The inner linear expression of `SUM(POWER(expr, 2))` has already been evaluated per-row in `SolverInput::quadratic_inner_coefficients`. For each row, the inner expression is `sum_t(a_{t,row} * x_{var_t})`. The Q matrix is built by summing the outer products across all rows:
+
+1. **Variable terms**: For each row, collect non-zero coefficients for each DECIDE variable. Build Q entries from the outer product: `Q[i,j] += 2 * a_i * a_j` (factor of 2 on all entries — both diagonal and off-diagonal — due to the `(1/2) x^T Q x` convention).
+
+2. **Constant terms**: If the inner expression has a constant part `c`, the expansion `(expr + c)^2 = expr^2 + 2c·expr + c^2` produces linear cross-terms `2c·a_t` that are added to `obj_coeffs`.
+
+3. **Storage**: Q is accumulated in a `std::map<pair<int,int>, double>` (lower triangle, row >= col) then serialized to COO vectors (`q_rows`, `q_cols`, `q_vals`).
+
+**Convexity guarantee**: Because Q = sum(a·a^T) = A^T A, it is always positive semidefinite by construction. This is the key payoff of the syntax-enforced convexity design.
+
+## `ModelConstraint` Format
 
 Each constraint is stored in COO (coordinate) format:
 
 ```
-struct ILPConstraint {
+struct ModelConstraint {
     vector<int> indices;        // Variable indices into the flattened array
     vector<double> coefficients; // Coefficient for each variable
     char sense;                 // '<' (<=), '>' (>=), '=' (==)
@@ -97,18 +111,22 @@ struct ILPConstraint {
 
 This format is consumed directly by Gurobi (`GRBaddconstr` takes COO) and converted to CSR for HiGHS.
 
-## `ILPModel` Structure
+## `SolverModel` Structure
 
 ```
-struct ILPModel {
+struct SolverModel {
     idx_t num_vars;              // total_vars = num_rows * num_decide_vars
     vector<double> col_lower;    // Lower bounds per solver variable
     vector<double> col_upper;    // Upper bounds per solver variable
     vector<bool> is_integer;     // True for INTEGER/BOOLEAN, false for REAL
     vector<bool> is_binary;      // True for BOOLEAN (subset of integer)
-    vector<double> obj_coeffs;   // Objective coefficient per solver variable
+    vector<double> obj_coeffs;   // Linear objective coefficient per variable
     bool maximize;               // True = maximize, false = minimize
-    vector<ILPConstraint> constraints;
+    vector<int> q_rows;          // Q matrix row indices (COO, lower triangle)
+    vector<int> q_cols;          // Q matrix column indices (COO, lower triangle)
+    vector<double> q_vals;       // Q matrix values
+    bool has_quadratic_obj;      // True if QP objective present
+    vector<ModelConstraint> constraints;
 };
 ```
 

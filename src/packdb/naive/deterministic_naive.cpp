@@ -7,7 +7,7 @@
 
 namespace duckdb {
 
-vector<double> DeterministicNaive::Solve(const ILPModel &model) {
+vector<double> DeterministicNaive::Solve(const SolverModel &model) {
     idx_t total_vars = model.num_vars;
 
     //===--------------------------------------------------------------------===//
@@ -25,7 +25,7 @@ vector<double> DeterministicNaive::Solve(const ILPModel &model) {
     ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
 
     //===--------------------------------------------------------------------===//
-    // 2. Convert ILPModel constraints to HiGHS range format + COO matrix
+    // 2. Convert SolverModel constraints to HiGHS range format + COO matrix
     //===--------------------------------------------------------------------===//
 
     vector<int> a_rows;
@@ -107,6 +107,59 @@ vector<double> DeterministicNaive::Solve(const ILPModel &model) {
     HighsStatus status = highs.passModel(lp);
     if (status != HighsStatus::kOk) {
         throw InternalException("Failed to pass model to HiGHS: status %d", (int)status);
+    }
+
+    //===--------------------------------------------------------------------===//
+    // 3b. Add quadratic objective (Hessian) if present
+    //===--------------------------------------------------------------------===//
+
+    if (model.has_quadratic_obj && !model.q_vals.empty()) {
+        // HiGHS does not support MIQP — reject if any variable is integer
+        for (idx_t i = 0; i < total_vars; i++) {
+            if (model.is_integer[i]) {
+                throw InvalidInputException(
+                    "Quadratic objectives with integer/boolean variables (MIQP) require Gurobi. "
+                    "HiGHS only supports continuous quadratic programs (QP). "
+                    "Either install Gurobi, or change all DECIDE variables to IS REAL.");
+            }
+        }
+
+        // Convert COO lower-triangle Q to CSC format for HiGHS passHessian.
+        // HiGHS expects the lower triangle in column-major compressed sparse column format.
+        idx_t num_nz = model.q_vals.size();
+
+        // Count entries per column
+        vector<HighsInt> col_count(total_vars, 0);
+        for (idx_t k = 0; k < num_nz; k++) {
+            col_count[model.q_cols[k]]++;
+        }
+
+        // Build column start array
+        vector<HighsInt> q_start(total_vars + 1, 0);
+        for (idx_t c = 0; c < total_vars; c++) {
+            q_start[c + 1] = q_start[c] + col_count[c];
+        }
+
+        // Fill CSC arrays
+        vector<HighsInt> q_index(num_nz);
+        vector<double> q_value(num_nz);
+        vector<HighsInt> current_pos(q_start.begin(), q_start.begin() + total_vars);
+
+        for (idx_t k = 0; k < num_nz; k++) {
+            int col = model.q_cols[k];
+            HighsInt pos = current_pos[col];
+            q_index[pos] = model.q_rows[k];
+            q_value[pos] = model.q_vals[k];
+            current_pos[col]++;
+        }
+
+        status = highs.passHessian((HighsInt)total_vars, (HighsInt)num_nz,
+                                   (HighsInt)HessianFormat::kTriangular,
+                                   q_start.data(), q_index.data(), q_value.data());
+        if (status != HighsStatus::kOk) {
+            throw InternalException("Failed to pass quadratic objective (Hessian) to HiGHS: status %d",
+                                    (int)status);
+        }
     }
 
     //===--------------------------------------------------------------------===//

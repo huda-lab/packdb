@@ -175,6 +175,53 @@ When a `WHEN` condition is present, coefficients for non-matching rows are set t
 
 ---
 
+### Convex Quadratic Objectives (QP)
+
+PackDB supports convex quadratic programming (QP) objectives via the `MINIMIZE SUM(POWER(linear_expr, 2))` syntax. This enables L2 (least-squares) minimization, where the goal is to minimize the sum of squared deviations.
+
+**Syntax Forms** (all equivalent):
+
+```sql
+MINIMIZE SUM(POWER(x - target, 2))    -- POWER function
+MINIMIZE SUM((x - target) ** 2)        -- ** operator (DuckDB translates to POWER)
+MINIMIZE SUM((x - target) * (x - target))  -- explicit self-multiplication
+```
+
+**Convexity by Syntax**: The parser enforces convexity by restricting the syntax to squared linear expressions only. This guarantees the resulting Q matrix is Positive Semidefinite (PSD) by construction (Q = A^T A), eliminating the need for runtime PSD checks. The following are rejected:
+
+- `MAXIMIZE SUM(POWER(x, 2))` — Maximizing a sum of squares is non-convex
+- `MINIMIZE SUM(POWER(x, 3))` — Only exponent 2 is supported
+- `MINIMIZE SUM(x * y)` — Product of different DECIDE variables is not allowed (use `POWER(x - y, 2)` instead)
+
+**Solver Support**:
+- **Gurobi**: Full QP and MIQP (quadratic with integer/boolean variables) support via `GRBaddqpterms`
+- **HiGHS**: Continuous QP only (no integer variables). MIQP with HiGHS throws an error directing the user to either install Gurobi or use `IS REAL` variables.
+
+**Examples**:
+
+```sql
+-- Data repair: minimize L2 deviation from original values
+MINIMIZE SUM(POWER(new_val - old_val, 2))
+
+-- Regression-like: find x closest to targets within bounds
+SELECT id, ROUND(x, 2) FROM data
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MINIMIZE SUM(POWER(x - target, 2))
+
+-- QP with aggregate constraint
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 500
+MINIMIZE SUM(POWER(x - target, 2))
+```
+
+**Mathematical Formulation**: The objective `MINIMIZE SUM(POWER(a₁x + a₂y + c, 2))` is expanded into the standard QP form `(1/2) x^T Q x + c^T x` where:
+- Q is built from the outer product of the inner linear expression's coefficients (Q[i,j] = 2·a_i·a_j summed over rows; factor of 2 on all entries due to the (1/2) x^T Q x convention)
+- Linear terms arise from constant parts of the inner expression (cross terms: 2·c·aᵢ)
+- The Q matrix is stored in COO (Coordinate) format in `SolverModel`, then converted to CSC for HiGHS
+
+---
+
 ## Use Cases
 
 | Task | Typical Objective |
@@ -185,7 +232,8 @@ When a `WHEN` condition is present, coefficients for non-matching rows are set t
 | Maximize retained data after cleaning | `MAXIMIZE SUM(keep)` |
 | Outlier removal | `MAXIMIZE SUM(keep)` |
 | Entity resolution / deduplication | `MAXIMIZE SUM(keepS) + SUM(keepP)` |
-| Data repair / imputation | `MINIMIZE SUM(ABS(new_val - old_val))` |
+| Data repair / imputation (L1) | `MINIMIZE SUM(ABS(new_val - old_val))` |
+| Data repair / imputation (L2) | `MINIMIZE SUM(POWER(new_val - old_val, 2))` |
 
 ---
 
@@ -207,8 +255,28 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
   - Handles WHEN condition extraction on objective
   - Binds nested aggregate PER objectives (inner/outer aggregate detection)
 
+- **SUM argument validation**: `src/planner/expression_binder/decide_binder.cpp`
+  - `ValidateSumArgumentInternal` validates the expression tree inside SUM()
+  - Accepts `POWER(linear_expr, 2)`, `POW(linear_expr, 2)` for QP objectives
+  - Accepts `(expr) * (expr)` where both sides are identical (equivalent to POWER)
+  - Rejects `POWER(expr, N)` for N != 2, products of different DECIDE variables, non-constant exponents
+
 - **Nested aggregate detection**: `src/planner/binder/query_node/bind_select_node.cpp`
   - Detects `OUTER(INNER(expr)) PER col` pattern and validates flat MIN/MAX + PER is disallowed
 
-- **Execution** (objective coefficient construction + WHEN masking + PER auxiliary building):
+- **Expression analysis** (quadratic detection + term extraction):
   `src/execution/operator/decide/physical_decide.cpp`
+  - Detects `POWER(expr, 2)` and `(expr) * (expr)` patterns in bound expressions
+  - Enforces `MINIMIZE` for quadratic objectives
+  - Extracts inner linear expression terms into `Objective::squared_terms`
+
+- **Solver input**: `src/include/duckdb/packdb/solver_input.hpp`
+  - `quadratic_inner_coefficients`, `quadratic_inner_variable_indices`, `has_quadratic_objective`
+
+- **Model building** (Q matrix construction):
+  `src/packdb/utility/ilp_model_builder.cpp`
+  - Builds Q matrix via outer products of per-row inner expression coefficients
+  - Handles constant-term cross-contributions to linear objective
+
+- **Gurobi QP**: `src/packdb/gurobi/gurobi_solver.cpp` — calls `GRBaddqpterms` for Q matrix
+- **HiGHS QP**: `src/packdb/naive/deterministic_naive.cpp` — calls `passHessian` with COO→CSC conversion; rejects MIQP

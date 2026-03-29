@@ -7,24 +7,25 @@
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
-// Data Structures for Linear Term Extraction
+// Data Structures for Expression Term Extraction
 //===--------------------------------------------------------------------===//
 
-//! Represents a single linear term: variable_index * coefficient_expression
-//! variable_index can be DConstants::INVALID_INDEX for constant terms
-struct LinearTerm {
+//! Represents a single term: variable_index * coefficient_expression
+//! variable_index can be DConstants::INVALID_INDEX for constant terms.
+//! Used in both linear and quadratic (inner) expressions.
+struct Term {
     idx_t variable_index;              // Which DECIDE variable (or INVALID_INDEX for constants)
     unique_ptr<Expression> coefficient; // Row-varying expression to evaluate later
     int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
 
-    LinearTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
+    Term(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
         : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {}
 };
 
 //! Represents a complete constraint after term extraction
-struct LinearConstraint {
-    vector<LinearTerm> lhs_terms;       // All additive terms from LHS
-    unique_ptr<Expression> rhs_expr;    // RHS expression (may contain aggregates)
+struct DecideConstraint {
+    vector<Term> lhs_terms;              // All additive terms from LHS
+    unique_ptr<Expression> rhs_expr;     // RHS expression (may contain aggregates)
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
     bool was_avg_rewrite = false;        // True if this aggregate was originally AVG (RHS needs scaling)
@@ -34,16 +35,25 @@ struct LinearConstraint {
     unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
 
-    LinearConstraint() = default;
+    DecideConstraint() = default;
 };
 
-//! Represents the objective function after term extraction
-struct LinearObjective {
-    vector<LinearTerm> terms;           // All objective terms
+//! Represents the objective function after term extraction.
+//! Supports both linear objectives (terms only) and quadratic objectives
+//! of the form MINIMIZE SUM((linear_expr)^2) + linear_terms.
+struct Objective {
+    vector<Term> terms;                    // Linear objective terms
     unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns; // PackDB: optional PER grouping columns (empty = no grouping)
 
-    LinearObjective() = default;
+    //! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
+    //! When non-empty, the objective includes a quadratic component: SUM((inner_expr)^2).
+    //! Convexity is guaranteed by syntax: only squared linear expressions are accepted,
+    //! producing Q = A^T A which is always positive semidefinite.
+    vector<Term> squared_terms;
+    bool has_quadratic = false;
+
+    Objective() = default;
 };
 
 //===--------------------------------------------------------------------===//
@@ -148,9 +158,9 @@ public:
     //! For example: from "x * 5 * l_tax", removes x and returns "5 * l_tax"
     unique_ptr<Expression> ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const;
 
-    //! Main visitor: extract all linear terms from a SUM argument
+    //! Main visitor: extract all terms from a SUM argument
     //! Handles + operators (recursively), * operators (extract var and coef), constants
-    void ExtractLinearTerms(const Expression &expr, vector<LinearTerm> &out_terms) const;
+    void ExtractTerms(const Expression &expr, vector<Term> &out_terms) const;
 };
 
 } // namespace duckdb

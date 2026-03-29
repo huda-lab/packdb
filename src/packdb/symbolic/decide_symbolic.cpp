@@ -357,7 +357,7 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 } else if (func_expr.function_name == "/") {
                     D_ASSERT(args.size() == 2);
                     return args[0] / args[1];
-                } else if (func_expr.function_name == "^") {
+                } else if (func_expr.function_name == "^" || func_expr.function_name == "**") {
                     D_ASSERT(args.size() == 2);
                     return ApplySymbolicPower(args[0], args[1]);
                 } else {
@@ -1037,6 +1037,58 @@ unique_ptr<ParsedExpression> NormalizeDecideConstraints(const ParsedExpression &
     return NormalizeConstraintsRecursive(expr, decide_variables);
 }
 
+static bool ExprContainsDecideVar(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+    if (IsDecideVariable(expr, variables)) return true;
+    bool found = false;
+    ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+        if (!found && ExprContainsDecideVar(child, variables)) {
+            found = true;
+        }
+    });
+    return found;
+}
+
+static bool SumInnerIsQuadratic(const ParsedExpression &inner,
+                                const case_insensitive_map_t<idx_t> &decide_variables) {
+    if (inner.GetExpressionClass() != ExpressionClass::FUNCTION) return false;
+    auto &func = inner.Cast<FunctionExpression>();
+    string name_lower = StringUtil::Lower(func.function_name);
+
+    // POWER(expr, 2), POW(expr, 2)
+    if (!func.is_operator && (name_lower == "power" || name_lower == "pow")) {
+        if (func.children.size() == 2 &&
+            func.children[1]->GetExpressionClass() == ExpressionClass::CONSTANT) {
+            double val;
+            if (IsNumericConstant(*func.children[1], val) && val == 2.0) {
+                return ExprContainsDecideVar(*func.children[0], decide_variables);
+            }
+        }
+        return false;
+    }
+
+    // expr ** 2
+    if (func.is_operator && func.function_name == "**") {
+        if (func.children.size() == 2 &&
+            func.children[1]->GetExpressionClass() == ExpressionClass::CONSTANT) {
+            double val;
+            if (IsNumericConstant(*func.children[1], val) && val == 2.0) {
+                return ExprContainsDecideVar(*func.children[0], decide_variables);
+            }
+        }
+        return false;
+    }
+
+    // (expr) * (expr) where both sides are identical and contain a DECIDE variable
+    if (func.is_operator && func.function_name == "*") {
+        if (func.children.size() == 2 &&
+            func.children[0]->ToString() == func.children[1]->ToString()) {
+            return ExprContainsDecideVar(*func.children[0], decide_variables);
+        }
+    }
+
+    return false;
+}
+
 unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
                                                       const case_insensitive_map_t<idx_t> &decide_variables) {
     // Expect SUM(inner), possibly wrapped in WHEN or PER
@@ -1070,6 +1122,13 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
     if (StringUtil::Lower(f.function_name) != "sum" || f.children.empty()) {
         return expr.Copy();
     }
+
+    // Skip normalization for quadratic objectives — the symbolic expansion
+    // would destroy the POWER(expr, 2) structure that the QP pipeline needs.
+    if (SumInnerIsQuadratic(*f.children[0], decide_variables)) {
+        return expr.Copy();
+    }
+
     // Convert inner to Symbolic and simplify
     SymbolicTranslationContext ctx(decide_variables);
     Symbolic inner_sym = ToSymbolicObj(*f.children[0], ctx).expand().simplify();

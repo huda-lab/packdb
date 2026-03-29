@@ -2,11 +2,12 @@
 #include "duckdb/common/exception.hpp"
 
 #include <cmath>
+#include <map>
 
 namespace duckdb {
 
-ILPModel ILPModel::Build(const SolverInput &input) {
-    ILPModel model;
+SolverModel SolverModel::Build(const SolverInput &input) {
+    SolverModel model;
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
@@ -108,11 +109,94 @@ ILPModel ILPModel::Build(const SolverInput &input) {
     }
 
     //===--------------------------------------------------------------------===//
+    // 2b. Build quadratic objective (Q matrix) if present
+    //===--------------------------------------------------------------------===//
+
+    if (input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty()) {
+        model.has_quadratic_obj = true;
+
+        // The inner expression of SUM(POWER(expr, 2)) has been evaluated per-row.
+        // For each row, the inner expression is: sum_t(a_{t,row} * x_{var_t}).
+        // Expanding the square: (sum a_t x_t)^2 = sum_i sum_j a_i a_j x_i x_j
+        // Summing over rows gives Q[i,j] = sum_row(a_{i,row} * a_{j,row}).
+        // We also extract linear terms from the constant parts (c_row):
+        // (sum a_t x_t + c)^2 contributes 2*c*a_t to the linear coefficient of x_t.
+
+        idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
+
+        // Accumulate Q in a map: (var_i, var_j) -> value (lower triangle only, var_i >= var_j)
+        std::map<std::pair<int,int>, double> q_map;
+
+        for (idx_t row = 0; row < num_rows; row++) {
+            // Collect per-row coefficients for variable terms
+            struct VarCoeff { int flat_idx; double coeff; };
+            vector<VarCoeff> row_terms;
+
+            for (idx_t t = 0; t < num_q_terms; t++) {
+                idx_t decide_var_idx = input.quadratic_inner_variable_indices[t];
+                double a = input.quadratic_inner_coefficients[t][row];
+                if (a == 0.0) continue;
+
+                if (decide_var_idx == DConstants::INVALID_INDEX) {
+                    // Constant term — contributes to linear objective: 2*c*a_t for each variable term
+                    // and c^2 to the constant offset (already accumulated in quadratic_constant_offset)
+                    // Linear contributions are added below after collecting all terms
+                    continue;
+                }
+
+                int flat_idx = static_cast<int>(row * num_decide_vars + decide_var_idx);
+                row_terms.push_back({flat_idx, a});
+            }
+
+            // Build Q entries from outer product of this row's terms.
+            // Standard QP form is (1/2) x^T Q x, so Q[i,j] = 2 * sum_rows(a_i * a_j).
+            // Both diagonal and off-diagonal need the factor of 2.
+            for (idx_t i = 0; i < row_terms.size(); i++) {
+                for (idx_t j = 0; j <= i; j++) {
+                    int ri = row_terms[i].flat_idx;
+                    int rj = row_terms[j].flat_idx;
+                    int lo = std::max(ri, rj);
+                    int hi = std::min(ri, rj);
+                    double val = 2.0 * row_terms[i].coeff * row_terms[j].coeff;
+                    q_map[{lo, hi}] += val;
+                }
+            }
+
+            // Handle constant term contributions to linear objective
+            // Find constant term for this row (variable_index == INVALID_INDEX)
+            double c_row = 0.0;
+            for (idx_t t = 0; t < num_q_terms; t++) {
+                if (input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
+                    c_row += input.quadratic_inner_coefficients[t][row];
+                }
+            }
+            if (c_row != 0.0) {
+                // (expr + c)^2 = expr^2 + 2*c*expr + c^2
+                // The 2*c*a_t terms go into linear objective
+                for (auto &vt : row_terms) {
+                    model.obj_coeffs[vt.flat_idx] += 2.0 * c_row * vt.coeff;
+                }
+            }
+        }
+
+        // Convert map to COO vectors
+        model.q_rows.reserve(q_map.size());
+        model.q_cols.reserve(q_map.size());
+        model.q_vals.reserve(q_map.size());
+        for (auto &entry : q_map) {
+            if (entry.second == 0.0) continue;
+            model.q_rows.push_back(entry.first.first);
+            model.q_cols.push_back(entry.first.second);
+            model.q_vals.push_back(entry.second);
+        }
+    }
+
+    //===--------------------------------------------------------------------===//
     // 3. Build constraints
     //===--------------------------------------------------------------------===//
 
-    // Helper: apply comparison sense to an ILP constraint
-    auto ApplyComparisonSense = [](ILPConstraint &constr, ExpressionType cmp, double rhs) {
+    // Helper: apply comparison sense to a constraint
+    auto ApplyComparisonSense = [](ModelConstraint &constr, ExpressionType cmp, double rhs) {
         if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
             constr.sense = '>'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
@@ -135,7 +219,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
         if (is_aggregate) {
             if (!has_groups) {
                 // FAST PATH: no WHEN, no PER — one constraint summing all rows
-                ILPConstraint constr;
+                ModelConstraint constr;
 
                 for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                     idx_t decide_var_idx = eval_const.variable_indices[term_idx];
@@ -193,7 +277,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                     if (group_rows[g].empty()) {
                         continue;
                     }
-                    ILPConstraint constr;
+                    ModelConstraint constr;
 
                     for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                         idx_t decide_var_idx = eval_const.variable_indices[term_idx];
@@ -224,7 +308,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
                 if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
                     continue;
                 }
-                ILPConstraint constr;
+                ModelConstraint constr;
 
                 for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                     idx_t decide_var_idx = eval_const.variable_indices[term_idx];
@@ -246,7 +330,7 @@ ILPModel ILPModel::Build(const SolverInput &input) {
 
     // Append raw global constraints (for MIN/MAX objective linking, etc.)
     for (auto &raw : input.global_constraints) {
-        ILPConstraint constr;
+        ModelConstraint constr;
         constr.indices = raw.indices;
         constr.coefficients = raw.coefficients;
         constr.sense = raw.sense;

@@ -3,8 +3,9 @@
 //
 // duckdb/packdb/solver_input.hpp
 //
-// Solver-agnostic input structs for the DECIDE ILP formulation.
+// Solver-agnostic input structs for the DECIDE optimization formulation.
 // These are built by physical_decide.cpp and consumed by the solver facade.
+// Supports LP, MILP, and convex QP/MIQP objectives.
 //
 //===----------------------------------------------------------------------===//
 
@@ -50,10 +51,20 @@ struct SolverInput {
     // Constraints
     vector<EvaluatedConstraint> constraints;
 
-    // Objective
+    // Linear objective
     vector<vector<double>> objective_coefficients; // [term_idx][row_idx]
     vector<idx_t> objective_variable_indices;      // [term_idx]
     DecideSense sense;
+
+    // Quadratic objective: inner linear expression of SUM(POWER(expr, 2)).
+    // When has_quadratic_objective is true, the objective includes a convex
+    // quadratic component. The inner expression coefficients are stored per-term
+    // and per-row, just like the linear objective. The model builder expands
+    // these into the Q matrix via outer products (Q = A^T A, always PSD).
+    bool has_quadratic_objective = false;
+    vector<vector<double>> quadratic_inner_coefficients; // [term_idx][row_idx]
+    vector<idx_t> quadratic_inner_variable_indices;      // [term_idx]
+    double quadratic_constant_offset = 0.0;              // sum of c_i^2 terms (for reporting)
 
     // Objective PER grouping (mirrors constraint row_group_ids pattern)
     vector<idx_t> objective_row_group_ids;  // per-row group assignment

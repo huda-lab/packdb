@@ -38,6 +38,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Uncorrelated scalar subqueries | Yes | — |
 | Correlated scalar subqueries | Yes (per-row constraints; aggregate requires scalar RHS) | — |
 | Linear constraints | Yes | — |
+| Quadratic objective: `MINIMIZE SUM(POWER(expr, 2))` | Yes (convex QP, syntax-enforced) | — |
 | Non-linear constraints (`x * y`) | Not supported (by design) | — |
 | `WHEN` on constraints | Yes | — |
 | `WHEN` on objective | Yes | — |

@@ -2,11 +2,11 @@
 
 ## Overview
 
-PackDB uses a solver facade pattern. The `SolveILP()` function in `ilp_solver.cpp` builds an `ILPModel` from the `SolverInput`, then dispatches to the best available solver backend. The function is 6 lines of logic:
+PackDB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the best available solver backend. The function is 6 lines of logic:
 
 ```cpp
-vector<double> SolveILP(const SolverInput &input) {
-    ILPModel model = ILPModel::Build(input);
+vector<double> SolveModel(const SolverInput &input) {
+    SolverModel model = SolverModel::Build(input);
     if (GurobiSolver::IsAvailable()) {
         return GurobiSolver::Solve(model);
     }
@@ -43,6 +43,7 @@ An RAII wrapper `GurobiGuard` manages `GRBmodel*` and `GRBenv*` lifetime. The de
    - `GRB_CONTINUOUS` for continuous variables
 3. **Model sense**: Set via `GRBsetintattr(GRB_INT_ATTR_MODELSENSE, ...)` to `GRB_MAXIMIZE` or `GRB_MINIMIZE`.
 4. **Constraints**: Added individually via `GRBaddconstr()`, which directly accepts COO format (index array, coefficient array, sense char, RHS).
+5. **Quadratic objective** (QP/MIQP): If the model has a quadratic objective (`has_quadratic_obj`), Q matrix terms are added via `GRBaddqpterms()` which takes COO format (row indices, column indices, values). Gurobi natively supports both continuous QP and MIQP (quadratic with integer/boolean variables).
 
 ### Solving and Status
 
@@ -83,7 +84,7 @@ ILP sense characters are converted to HiGHS range format (`row_lower`, `row_uppe
 
 ### Matrix Format Conversion
 
-The `ILPModel` stores constraints in COO format (row index, column index, value triples). HiGHS requires CSR (Compressed Sparse Row) format with `start_`, `index_`, `value_` arrays.
+The `SolverModel` stores constraints in COO format (row index, column index, value triples). HiGHS requires CSR (Compressed Sparse Row) format with `start_`, `index_`, `value_` arrays.
 
 The conversion:
 1. Count non-zeros per row (via `row_starts[a_rows[i] + 1]++`)
@@ -116,6 +117,17 @@ Logging is disabled with `log_to_console = false`. The model is passed via `high
 
 Solution is extracted from `highs.getSolution().col_value`, validated for completeness and finite values.
 
+### Quadratic Objective (QP via HiGHS)
+
+If `model.has_quadratic_obj` is true, the Q matrix is passed via `highs.passHessian()`. HiGHS expects CSC (Compressed Sparse Column) format for the lower triangle.
+
+**MIQP Limitation**: HiGHS does not support mixed-integer quadratic programs. If any variable is integer/boolean and the objective is quadratic, an `InvalidInputException` is thrown directing the user to install Gurobi or use `IS REAL` variables.
+
+The COO→CSC conversion:
+1. Count entries per column
+2. Build column start offsets via prefix sum
+3. Scatter COO entries into CSC positions
+
 ## Error Messages
 
 Both backends produce identical user-facing error messages for each failure mode, ensuring a consistent experience regardless of which solver is active. Messages include:
@@ -128,9 +140,9 @@ Both backends produce identical user-facing error messages for each failure mode
 
 To add a new solver:
 
-1. Create a new class with a static `Solve(const ILPModel &) -> vector<double>` method.
+1. Create a new class with a static `Solve(const SolverModel &) -> vector<double>` method.
 2. Optionally add a static `IsAvailable()` method for runtime detection.
 3. Add a dispatch entry in `ilp_solver.cpp` (between Gurobi and HiGHS, or as a new priority level).
-4. The `ILPModel` struct provides everything needed: variable bounds/types, objective coefficients, and constraints in COO format.
+4. The `SolverModel` struct provides everything needed: variable bounds/types, objective coefficients (linear + quadratic Q matrix), and constraints in COO format.
 
 No changes to the expression analysis, coefficient evaluation, or model building phases are required.

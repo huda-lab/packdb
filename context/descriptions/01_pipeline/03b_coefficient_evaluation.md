@@ -4,7 +4,7 @@
 
 After expression analysis extracts the *structure* of constraints and objectives (which variable, which coefficient expression), this phase *evaluates* those coefficient expressions against the materialized data to produce concrete numeric values. This happens in the `Finalize()` method of `PhysicalDecide`.
 
-The input to this phase is a set of `LinearConstraint` and `LinearObjective` structs (from Phase 1) containing unevaluated expression trees. The output is `EvaluatedConstraint` structs and objective coefficient arrays containing concrete `double` values for every (term, row) pair.
+The input to this phase is a set of `DecideConstraint` and `Objective` structs (from Phase 1) containing unevaluated expression trees. The output is `EvaluatedConstraint` structs and objective coefficient arrays containing concrete `double` values for every (term, row) pair.
 
 **Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (`Finalize()` method, lines ~564-1219)
 
@@ -108,4 +108,6 @@ The evaluated data is packaged into a `SolverInput` struct:
 - `objective_variable_indices[term_idx]`: Which variable each objective term references
 - `sense`: MAXIMIZE or MINIMIZE
 
-This `SolverInput` is then passed to `SolveILP()`, which hands it to the model builder (Phase 3) and solver backend (Phase 4).
+When the objective is quadratic (`has_quadratic = true`), the same evaluation runs on `squared_terms` instead of `terms`, populating `quadratic_inner_coefficients` and `quadratic_variable_indices` in the `SolverInput`.
+
+This `SolverInput` is then passed to `SolveModel()`, which hands it to the model builder (Phase 3) and solver backend (Phase 4).

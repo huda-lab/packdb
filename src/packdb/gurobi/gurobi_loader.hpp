@@ -39,7 +39,7 @@ static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
 static constexpr const char *GRB_DBL_ATTR_X = "X";
 
 //===----------------------------------------------------------------------===//
-// Function pointer table for the 12 Gurobi C API functions PackDB uses
+// Function pointer table for the 13 Gurobi C API functions PackDB uses
 //===----------------------------------------------------------------------===//
 
 struct GurobiAPI {
@@ -58,6 +58,7 @@ struct GurobiAPI {
 	int (*setintattr)(void *model, const char *attrname, int newvalue);
 	int (*addconstr)(void *model, int numnz, int *cind, double *cval,
 	                 char sense, double rhs, const char *constrname);
+	int (*addqpterms)(void *model, int numqnz, int *qrow, int *qcol, double *qval);
 
 	// Solve and query
 	int (*optimize)(void *model);

@@ -112,7 +112,7 @@ static void *SearchDir(const std::string &dir, std::string &matched_name) {
 	return handle;
 }
 
-//! Resolve all 12 function pointers from the loaded library.
+//! Resolve all 13 function pointers from the loaded library.
 //! Returns true if ALL symbols were found.
 static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	// Helper macro for cleaner symbol resolution
@@ -128,6 +128,7 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	LOAD_SYM(freemodel,         "GRBfreemodel")
 	LOAD_SYM(setintattr,        "GRBsetintattr")
 	LOAD_SYM(addconstr,         "GRBaddconstr")
+	LOAD_SYM(addqpterms,       "GRBaddqpterms")
 	LOAD_SYM(optimize,          "GRBoptimize")
 	LOAD_SYM(getintattr,        "GRBgetintattr")
 	LOAD_SYM(getdblattrarray,   "GRBgetdblattrarray")

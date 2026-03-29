@@ -175,14 +175,25 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
     return expr.Copy();
 }
 
-void PhysicalDecide::ExtractLinearTerms(const Expression &expr, vector<LinearTerm> &out_terms) const {
+void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_terms) const {
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
         auto &func = expr.Cast<BoundFunctionExpression>();
 
         // Addition: recursively process all children
         if (func.function.name == "+") {
             for (auto &child : func.children) {
-                ExtractLinearTerms(*child, out_terms);
+                ExtractTerms(*child, out_terms);
+            }
+            return;
+        }
+
+        // Subtraction: first child positive, second child negated
+        if (func.function.name == "-" && func.children.size() == 2) {
+            ExtractTerms(*func.children[0], out_terms);
+            idx_t before = out_terms.size();
+            ExtractTerms(*func.children[1], out_terms);
+            for (idx_t i = before; i < out_terms.size(); i++) {
+                out_terms[i].sign *= -1;
             }
             return;
         }
@@ -193,11 +204,11 @@ void PhysicalDecide::ExtractLinearTerms(const Expression &expr, vector<LinearTer
 
             if (var_idx == DConstants::INVALID_INDEX) {
                 // No variable found - this is a constant term
-                out_terms.push_back(LinearTerm{DConstants::INVALID_INDEX, func.Copy()});
+                out_terms.push_back(Term{DConstants::INVALID_INDEX, func.Copy()});
             } else {
                 // Variable found - extract coefficient
                 auto coef = ExtractCoefficientWithoutVariable(func, var_idx);
-                out_terms.push_back(LinearTerm{var_idx, std::move(coef)});
+                out_terms.push_back(Term{var_idx, std::move(coef)});
             }
             return;
         }
@@ -206,7 +217,7 @@ void PhysicalDecide::ExtractLinearTerms(const Expression &expr, vector<LinearTer
     // Handle casts
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
         auto &cast = expr.Cast<BoundCastExpression>();
-        ExtractLinearTerms(*cast.child, out_terms);
+        ExtractTerms(*cast.child, out_terms);
         return;
     }
 
@@ -214,10 +225,10 @@ void PhysicalDecide::ExtractLinearTerms(const Expression &expr, vector<LinearTer
     idx_t var_idx = FindDecideVariable(expr);
     if (var_idx == DConstants::INVALID_INDEX) {
         // Constant term
-        out_terms.push_back(LinearTerm{DConstants::INVALID_INDEX, expr.Copy()});
+        out_terms.push_back(Term{DConstants::INVALID_INDEX, expr.Copy()});
     } else {
         // Just a variable (coefficient = 1)
-        out_terms.push_back(LinearTerm{var_idx,
+        out_terms.push_back(Term{var_idx,
             make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
     }
 }
@@ -490,7 +501,7 @@ public:
             case ExpressionClass::BOUND_COMPARISON: {
                 auto &comp = expr.Cast<BoundComparisonExpression>();
 
-                auto constraint = make_uniq<LinearConstraint>();
+                auto constraint = make_uniq<DecideConstraint>();
                 constraint->comparison_type = comp.type;
                 constraint->rhs_expr = comp.right->Copy();
 
@@ -519,7 +530,7 @@ public:
                 if (lhs->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
                     // SUM(...) aggregate constraint (AVG has been rewritten to SUM by DecideOptimizer)
                     auto &agg = lhs->Cast<BoundAggregateExpression>();
-                    op.ExtractLinearTerms(*agg.children[0], constraint->lhs_terms);
+                    op.ExtractTerms(*agg.children[0], constraint->lhs_terms);
                     constraint->lhs_is_aggregate = true;
                     constraint->was_avg_rewrite = (agg.alias == AVG_REWRITE_TAG);
                     // Parse MIN/MAX indicator tag if present
@@ -551,7 +562,7 @@ public:
                             if (!coef) {
                                 coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
                             }
-                            constraint->lhs_terms.push_back(LinearTerm{ref.var_idx, std::move(coef), ref.sign});
+                            constraint->lhs_terms.push_back(Term{ref.var_idx, std::move(coef), ref.sign});
                         }
                         // RHS vars: extract row-varying coefficients, negate sign (moving to LHS)
                         for (auto &ref : rhs_refs) {
@@ -559,7 +570,7 @@ public:
                             if (!coef) {
                                 coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
                             }
-                            constraint->lhs_terms.push_back(LinearTerm{ref.var_idx, std::move(coef), -ref.sign});
+                            constraint->lhs_terms.push_back(Term{ref.var_idx, std::move(coef), -ref.sign});
                         }
 
                         // RHS becomes data-only: DECIDE vars replaced with constant 0
@@ -568,7 +579,7 @@ public:
                         // Simple single-variable constraint (e.g., x <= 5)
                         idx_t var_idx = op.FindDecideVariable(*lhs);
                         if (var_idx != DConstants::INVALID_INDEX) {
-                            constraint->lhs_terms.push_back(LinearTerm{
+                            constraint->lhs_terms.push_back(Term{
                                 var_idx,
                                 make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))
                             });
@@ -576,7 +587,7 @@ public:
                     } else {
                         // Multi-variable per-row constraint with complex LHS
                         // (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0)
-                        op.ExtractLinearTerms(*lhs, constraint->lhs_terms);
+                        op.ExtractTerms(*lhs, constraint->lhs_terms);
                     }
                 }
 
@@ -627,8 +638,70 @@ public:
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
             auto &agg = expr->Cast<BoundAggregateExpression>();
 
-            objective = make_uniq<LinearObjective>();
-            op.ExtractLinearTerms(*agg.children[0], objective->terms);
+            objective = make_uniq<Objective>();
+
+            // Check if the SUM argument is a quadratic pattern: POWER(expr, 2) or expr * expr
+            auto *sum_arg = agg.children[0].get();
+            // Unwrap casts
+            while (sum_arg->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                sum_arg = sum_arg->Cast<BoundCastExpression>().child.get();
+            }
+
+            bool is_quadratic = false;
+            const Expression *inner_linear_expr = nullptr;
+
+            if (sum_arg->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                auto &func = sum_arg->Cast<BoundFunctionExpression>();
+                string fname = StringUtil::Lower(func.function.name);
+
+                if (fname == "power" || fname == "pow" || fname == "**") {
+                    // POWER(linear_expr, 2) — unwrap casts around the exponent
+                    // DuckDB's binder may wrap the integer literal 2 in a BoundCastExpression
+                    if (func.children.size() == 2) {
+                        const Expression *exp_expr = func.children[1].get();
+                        while (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                            exp_expr = exp_expr->Cast<BoundCastExpression>().child.get();
+                        }
+                        if (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                            auto &exp_val = exp_expr->Cast<BoundConstantExpression>();
+                            double exponent = exp_val.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                            if (exponent == 2.0) {
+                                is_quadratic = true;
+                                inner_linear_expr = func.children[0].get();
+                            }
+                        }
+                    }
+                } else if (fname == "*" && func.children.size() == 2) {
+                    // (expr) * (expr) — check if both sides are identical
+                    if (func.children[0]->ToString() == func.children[1]->ToString()) {
+                        // Verify the inner expression contains a DECIDE variable
+                        if (op.FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
+                            is_quadratic = true;
+                            inner_linear_expr = func.children[0].get();
+                        }
+                    }
+                }
+            }
+
+            if (is_quadratic && inner_linear_expr) {
+                // Quadratic objective: SUM(POWER(linear_expr, 2))
+                // Enforce MINIMIZE-only for convex QP
+                if (op.decide_sense == DecideSense::MAXIMIZE) {
+                    throw InvalidInputException(
+                        "MAXIMIZE is not supported with quadratic objectives (POWER(..., 2)). "
+                        "Maximizing a sum of squares is non-convex. Use MINIMIZE instead.");
+                }
+                objective->has_quadratic = true;
+                // Unwrap casts from inner expression
+                while (inner_linear_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    inner_linear_expr = inner_linear_expr->Cast<BoundCastExpression>().child.get();
+                }
+                op.ExtractTerms(*inner_linear_expr, objective->squared_terms);
+            } else {
+                // Linear objective (existing path)
+                op.ExtractTerms(*agg.children[0], objective->terms);
+            }
+
             objective->when_condition = std::move(when_cond);
             objective->per_columns = std::move(per_cols);
         }
@@ -731,21 +804,24 @@ public:
 
     const PhysicalDecide &op;
 
-    // NEW: Using LinearConstraint and LinearObjective
-    vector<unique_ptr<LinearConstraint>> constraints;
-    unique_ptr<LinearObjective> objective;
+    vector<unique_ptr<DecideConstraint>> constraints;
+    unique_ptr<Objective> objective;
 
     //===--------------------------------------------------------------------===//
     // Evaluated Coefficients (Phase 2)
     //===--------------------------------------------------------------------===//
 
-    // Uses duckdb::EvaluatedConstraint from deterministic_naive.hpp
     vector<EvaluatedConstraint> evaluated_constraints;
     vector<vector<double>> evaluated_objective_coefficients;  // [term_idx][row_idx]
     vector<idx_t> objective_variable_indices;
 
-    // This will hold the solution from the ILP solver
-    vector<double> ilp_solution;  // Changed to double for HiGHS compatibility
+    // Quadratic objective: evaluated inner linear expression coefficients
+    vector<vector<double>> evaluated_quadratic_coefficients;  // [term_idx][row_idx]
+    vector<idx_t> quadratic_variable_indices;
+    bool has_quadratic_objective = false;
+    double quadratic_constant_offset = 0.0;
+
+    vector<double> ilp_solution;
 };
 
 class DecideLocalSinkState : public LocalSinkState {
@@ -1098,14 +1174,29 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 2. Evaluate objective
     if (gstate.objective) {
+        // Determine which term list to evaluate (linear or quadratic inner)
+        auto &active_terms = gstate.objective->has_quadratic
+            ? gstate.objective->squared_terms
+            : gstate.objective->terms;
+        auto &active_coefficients = gstate.objective->has_quadratic
+            ? gstate.evaluated_quadratic_coefficients
+            : gstate.evaluated_objective_coefficients;
+        auto &active_var_indices = gstate.objective->has_quadratic
+            ? gstate.quadratic_variable_indices
+            : gstate.objective_variable_indices;
+
+        if (gstate.objective->has_quadratic) {
+            gstate.has_quadratic_objective = true;
+        }
+
         // Build transformed expressions
         vector<unique_ptr<Expression>> transformed_coefficients;
-        for (auto &term : gstate.objective->terms) {
-            gstate.objective_variable_indices.push_back(term.variable_index);
+        for (auto &term : active_terms) {
+            active_var_indices.push_back(term.variable_index);
             transformed_coefficients.push_back(TransformToChunkExpression(*term.coefficient, context));
         }
 
-        gstate.evaluated_objective_coefficients.resize(gstate.objective->terms.size());
+        active_coefficients.resize(active_terms.size());
 
         // Scan and evaluate chunk by chunk
         ColumnDataScanState obj_scan_state;
@@ -1138,7 +1229,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             "DECIDE objective coefficient returned NULL at row %llu. "
                             "NULL values are not allowed in optimization objective. "
                             "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
-                            gstate.evaluated_objective_coefficients[term_idx].size());
+                            active_coefficients[term_idx].size());
                     }
 
                     double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
@@ -1152,11 +1243,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             "  • Arithmetic overflow in calculations\n"
                             "  • NULL values that propagated through math operations\n"
                             "Check your objective expressions and input data.",
-                            gstate.evaluated_objective_coefficients[term_idx].size());
+                            active_coefficients[term_idx].size());
                     }
 
-                    gstate.evaluated_objective_coefficients[term_idx].push_back(
-                        double_val * gstate.objective->terms[term_idx].sign);
+                    active_coefficients[term_idx].push_back(
+                        double_val * active_terms[term_idx].sign);
                 }
             }
         }
@@ -1186,8 +1277,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     bool condition_met = val.IsNull() ? false : val.GetValue<bool>();
                     if (!condition_met) {
                         // Zero out all objective coefficients for this row
-                        for (idx_t term_idx = 0; term_idx < gstate.evaluated_objective_coefficients.size(); term_idx++) {
-                            gstate.evaluated_objective_coefficients[term_idx][row_offset + row_in_chunk] = 0.0;
+                        for (idx_t term_idx = 0; term_idx < active_coefficients.size(); term_idx++) {
+                            active_coefficients[term_idx][row_offset + row_in_chunk] = 0.0;
                         }
                     }
                 }
@@ -1418,10 +1509,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Constraints
     solver_input.constraints = std::move(gstate.evaluated_constraints);
 
-    // Objective
+    // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
     solver_input.sense = decide_sense;
+
+    // Quadratic objective (if present)
+    if (gstate.has_quadratic_objective) {
+        solver_input.has_quadratic_objective = true;
+        solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
+        solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
+        for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
+            solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
+        }
+        solver_input.quadratic_constant_offset = gstate.quadratic_constant_offset;
+    }
 
     // Evaluate PER column for objective grouping (must happen after solver_input is constructed)
     if (gstate.objective && !gstate.objective->per_columns.empty()) {
@@ -1938,7 +2040,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_timer.Start();
     }
 
-    gstate.ilp_solution = SolveILP(solver_input);
+    gstate.ilp_solution = SolveModel(solver_input);
 
     if (bench) {
         solver_timer.End();

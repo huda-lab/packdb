@@ -536,8 +536,8 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 					    make_uniq<ConstantExpression>(Value::INTEGER(1)));
 
 					// Linking constraint: x + (-v1)*z_1 + (-v2)*z_2 + ... + (-vK)*z_K = 0
-					// Uses only + and * so ExtractLinearTerms can parse terms correctly
-					// (ExtractLinearTerms doesn't handle the - operator)
+					// Uses only + and * so ExtractTerms can parse terms correctly
+					// (ExtractTerms doesn't handle the - operator)
 					unique_ptr<ParsedExpression> linking_lhs = make_uniq<ColumnRefExpression>(var_name);
 					for (idx_t i = 0; i < K; i++) {
 						// Build (-vi) * zi term: negate value inside coefficient

@@ -43,7 +43,7 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
-vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
+vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
     auto &api = GurobiLoader::API();
     idx_t total_vars = ilp.num_vars;
 
@@ -110,6 +110,22 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
                              constr.sense, constr.rhs, nullptr);
         if (error) {
             throw InternalException("Failed to add constraint to Gurobi: %s",
+                                    api.geterrormsg(guard.env));
+        }
+    }
+
+    //===--------------------------------------------------------------------===//
+    // 3b. Add quadratic objective terms (QP/MIQP)
+    //===--------------------------------------------------------------------===//
+
+    if (ilp.has_quadratic_obj && !ilp.q_vals.empty()) {
+        error = api.addqpterms(guard.model,
+                               (int)ilp.q_vals.size(),
+                               const_cast<int *>(ilp.q_rows.data()),
+                               const_cast<int *>(ilp.q_cols.data()),
+                               const_cast<double *>(ilp.q_vals.data()));
+        if (error) {
+            throw InternalException("Failed to add quadratic objective terms to Gurobi: %s",
                                     api.geterrormsg(guard.env));
         }
     }

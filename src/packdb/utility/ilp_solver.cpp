@@ -5,8 +5,8 @@
 
 namespace duckdb {
 
-vector<double> SolveILP(const SolverInput &input) {
-    ILPModel model = ILPModel::Build(input);
+vector<double> SolveModel(const SolverInput &input) {
+    SolverModel model = SolverModel::Build(input);
 
     if (GurobiSolver::IsAvailable()) {
         return GurobiSolver::Solve(model);

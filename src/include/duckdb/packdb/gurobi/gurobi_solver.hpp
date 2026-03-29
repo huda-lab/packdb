@@ -12,7 +12,7 @@
 
 namespace duckdb {
 
-struct ILPModel;
+struct SolverModel;
 
 class GurobiSolver {
 public:
@@ -20,9 +20,9 @@ public:
     static bool IsAvailable();
 
     //! Solves the optimization problem using Gurobi.
-    //! Takes a solver-agnostic ILPModel (already built from SolverInput).
+    //! Takes a solver-agnostic SolverModel (already built from SolverInput).
     //! Returns the solution vector (size = num_vars).
-    static vector<double> Solve(const ILPModel &model);
+    static vector<double> Solve(const SolverModel &model);
 };
 
 } // namespace duckdb

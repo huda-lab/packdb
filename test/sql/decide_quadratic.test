@@ -1,0 +1,134 @@
+# test/sql/decide_quadratic.test
+# Smoke tests for convex quadratic programming (QP) objectives.
+# Covers POWER(expr, 2) syntax, ** operator, (expr)*(expr) form,
+# and rejection of invalid quadratic patterns.
+
+# --- Setup: inline test table ---
+
+statement ok
+CREATE TABLE repairs (id INTEGER, original_val DOUBLE, target DOUBLE);
+
+statement ok
+INSERT INTO repairs VALUES
+    (1, 10.0, 12.0),
+    (2, 20.0, 18.0),
+    (3, 30.0, 25.0),
+    (4, 40.0, 38.0),
+    (5, 50.0, 55.0);
+
+# =================================================================
+# QP with POWER(expr, 2) — minimize sum of squared deviations
+# =================================================================
+
+# Basic QP: MINIMIZE SUM(POWER(x - target, 2))
+# With x constrained between 0 and 100, the optimal x_i = target_i.
+query II
+SELECT id, ROUND(x, 1)
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MINIMIZE SUM(POWER(x - target, 2));
+----
+1	12.0
+2	18.0
+3	25.0
+4	38.0
+5	55.0
+
+# QP with tighter constraints: force x between 15 and 45
+# Rows 1,2 should clip to 15; rows 4,5 clip to 45; row 3 stays at 25.
+query II
+SELECT id, ROUND(x, 1)
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 15 AND x <= 45
+MINIMIZE SUM(POWER(x - target, 2));
+----
+1	15.0
+2	18.0
+3	25.0
+4	38.0
+5	45.0
+
+# QP with aggregate constraint: mean x must be at least 35
+query I
+SELECT ROUND(AVG(x), 1)
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100 AND AVG(x) >= 35
+MINIMIZE SUM(POWER(x - target, 2));
+----
+35.0
+
+# =================================================================
+# QP with ** operator (equivalent to POWER)
+# =================================================================
+
+query II
+SELECT id, ROUND(x, 1)
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MINIMIZE SUM((x - target) ** 2);
+----
+1	12.0
+2	18.0
+3	25.0
+4	38.0
+5	55.0
+
+# =================================================================
+# QP with (expr)*(expr) multiplication form
+# =================================================================
+
+query II
+SELECT id, ROUND(x, 1)
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MINIMIZE SUM((x - target) * (x - target));
+----
+1	12.0
+2	18.0
+3	25.0
+4	38.0
+5	55.0
+
+# =================================================================
+# Error: MAXIMIZE with squared objective (non-convex)
+# =================================================================
+
+statement error
+SELECT id, x
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MAXIMIZE SUM(POWER(x - target, 2));
+----
+MAXIMIZE is not supported with quadratic objectives (POWER(..., 2)).
+
+# =================================================================
+# Error: POWER with exponent != 2
+# =================================================================
+
+statement error
+SELECT id, x
+FROM repairs
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MINIMIZE SUM(POWER(x - target, 3));
+----
+Product of different DECIDE variable expressions is not supported.
+
+# =================================================================
+# Error: product of different decision variables (non-convex)
+# =================================================================
+
+statement error
+SELECT id, x, y
+FROM repairs
+DECIDE x IS REAL, y IS REAL
+SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
+MINIMIZE SUM(x * y);
+----
+Product of different DECIDE variable expressions is not supported.

@@ -88,8 +88,6 @@ DECIDE does not override `EstimateCardinality`. The default behavior propagates 
 
 ---
 
----
-
 ## Code Pointers
 
 ### Logical Layer
