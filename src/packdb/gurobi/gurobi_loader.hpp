@@ -1,0 +1,92 @@
+//===----------------------------------------------------------------------===//
+//                         PackDB
+//
+// gurobi_loader.hpp — Runtime dynamic loading of the Gurobi C API via dlopen
+//
+// Allows a single binary to use Gurobi when available and fall back to HiGHS
+// otherwise, without requiring Gurobi headers or library at build time.
+//
+//===----------------------------------------------------------------------===//
+
+#pragma once
+
+namespace duckdb {
+
+//===----------------------------------------------------------------------===//
+// Gurobi constants (stable across versions, defined locally to avoid header dep)
+//===----------------------------------------------------------------------===//
+
+// Variable types
+static constexpr char GRB_CONTINUOUS = 'C';
+static constexpr char GRB_BINARY = 'B';
+static constexpr char GRB_INTEGER = 'I';
+
+// Objective sense
+static constexpr int GRB_MINIMIZE = 1;
+static constexpr int GRB_MAXIMIZE = -1;
+
+// Model status codes
+static constexpr int GRB_OPTIMAL = 2;
+static constexpr int GRB_INFEASIBLE = 3;
+static constexpr int GRB_INF_OR_UNBD = 4;
+static constexpr int GRB_UNBOUNDED = 5;
+static constexpr int GRB_TIME_LIMIT = 7;
+static constexpr int GRB_ITERATION_LIMIT = 8;
+
+// Attribute name strings
+static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
+static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
+static constexpr const char *GRB_DBL_ATTR_X = "X";
+
+//===----------------------------------------------------------------------===//
+// Function pointer table for the 12 Gurobi C API functions PackDB uses
+//===----------------------------------------------------------------------===//
+
+struct GurobiAPI {
+	// Environment management
+	int (*emptyenv_internal)(void **envP, int major, int minor, int tech);
+	int (*startenv)(void *env);
+	void (*freeenv)(void *env);
+	int (*setintparam)(void *env, const char *paramname, int value);
+
+	// Model management
+	int (*newmodel)(void *env, void **modelP, const char *name, int numvars,
+	                double *obj, double *lb, double *ub, char *vtype, char **varnames);
+	int (*freemodel)(void *model);
+
+	// Model building
+	int (*setintattr)(void *model, const char *attrname, int newvalue);
+	int (*addconstr)(void *model, int numnz, int *cind, double *cval,
+	                 char sense, double rhs, const char *constrname);
+
+	// Solve and query
+	int (*optimize)(void *model);
+	int (*getintattr)(void *model, const char *attrname, int *valueP);
+	int (*getdblattrarray)(void *model, const char *attrname, int start, int len, double *values);
+
+	// Error reporting
+	const char *(*geterrormsg)(void *env);
+
+	// Version extracted from loaded library
+	int version_major;
+	int version_minor;
+	int version_tech;
+};
+
+//===----------------------------------------------------------------------===//
+// Loader: thread-safe singleton that attempts dlopen once
+//===----------------------------------------------------------------------===//
+
+class GurobiLoader {
+public:
+	//! Attempt to load the Gurobi shared library. Thread-safe, runs once.
+	static bool Load();
+
+	//! Was Load() successful?
+	static bool IsLoaded();
+
+	//! Get the function pointer table (only valid when IsLoaded() == true).
+	static const GurobiAPI &API();
+};
+
+} // namespace duckdb

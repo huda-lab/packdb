@@ -1,55 +1,50 @@
 #include "duckdb/packdb/gurobi/gurobi_solver.hpp"
 #include "duckdb/packdb/ilp_model.hpp"
 #include "duckdb/common/exception.hpp"
+#include "gurobi_loader.hpp"
 
 #include <cmath>
 
-#if PACKDB_HAS_GUROBI
-#include "gurobi_c.h"
-#endif
-
 namespace duckdb {
 
-#if PACKDB_HAS_GUROBI
-
-//! RAII wrapper for Gurobi C resources
+//! RAII wrapper for Gurobi C resources (uses function pointers from loader)
 struct GurobiGuard {
-    GRBmodel *model = nullptr;
-    GRBenv *env = nullptr;
+    void *model = nullptr;
+    void *env = nullptr;
     ~GurobiGuard() {
+        auto &api = GurobiLoader::API();
         if (model) {
-            GRBfreemodel(model);
+            api.freemodel(model);
         }
         if (env) {
-            GRBfreeenv(env);
+            api.freeenv(env);
         }
     }
 };
 
-#endif // PACKDB_HAS_GUROBI
-
 bool GurobiSolver::IsAvailable() {
-#if PACKDB_HAS_GUROBI
     static bool available = []() {
-        GRBenv *env = nullptr;
+        if (!GurobiLoader::Load()) {
+            return false;
+        }
+        // Trial: can we actually create and start an environment? (license check)
+        auto &api = GurobiLoader::API();
+        void *env = nullptr;
         bool ok = false;
-        if (GRBemptyenv(&env) == 0 && env != nullptr) {
-            GRBsetintparam(env, "OutputFlag", 0);
-            ok = (GRBstartenv(env) == 0);
+        if (api.emptyenv_internal(&env, api.version_major, api.version_minor, api.version_tech) == 0 && env) {
+            api.setintparam(env, "OutputFlag", 0);
+            ok = (api.startenv(env) == 0);
         }
         if (env) {
-            GRBfreeenv(env);
+            api.freeenv(env);
         }
         return ok;
     }();
     return available;
-#else
-    return false;
-#endif
 }
 
 vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
-#if PACKDB_HAS_GUROBI
+    auto &api = GurobiLoader::API();
     idx_t total_vars = ilp.num_vars;
 
     //===--------------------------------------------------------------------===//
@@ -57,14 +52,14 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     //===--------------------------------------------------------------------===//
 
     GurobiGuard guard;
-    int error = GRBemptyenv(&guard.env);
+    int error = api.emptyenv_internal(&guard.env, api.version_major, api.version_minor, api.version_tech);
     if (error || !guard.env) {
         throw InternalException("Failed to create Gurobi environment (error %d). "
                                 "Check that GUROBI_HOME is set and license is valid.",
                                 error);
     }
-    GRBsetintparam(guard.env, "OutputFlag", 0);
-    error = GRBstartenv(guard.env);
+    api.setintparam(guard.env, "OutputFlag", 0);
+    error = api.startenv(guard.env);
     if (error) {
         throw InternalException("Failed to start Gurobi environment (error %d). "
                                 "Check that GUROBI_HOME is set and license is valid.",
@@ -86,7 +81,7 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
         }
     }
 
-    error = GRBnewmodel(guard.env, &guard.model, "packdb_decide",
+    error = api.newmodel(guard.env, &guard.model, "packdb_decide",
                          (int)total_vars,
                          const_cast<double *>(ilp.obj_coeffs.data()),
                          const_cast<double *>(ilp.col_lower.data()),
@@ -94,14 +89,14 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
                          var_types.data(), nullptr);
     if (error) {
         throw InternalException("Failed to create Gurobi model: %s",
-                                GRBgeterrormsg(guard.env));
+                                api.geterrormsg(guard.env));
     }
 
     int grb_sense = ilp.maximize ? GRB_MAXIMIZE : GRB_MINIMIZE;
-    error = GRBsetintattr(guard.model, GRB_INT_ATTR_MODELSENSE, grb_sense);
+    error = api.setintattr(guard.model, GRB_INT_ATTR_MODELSENSE, grb_sense);
     if (error) {
         throw InternalException("Failed to set Gurobi model sense: %s",
-                                GRBgeterrormsg(guard.env));
+                                api.geterrormsg(guard.env));
     }
 
     //===--------------------------------------------------------------------===//
@@ -109,13 +104,13 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     //===--------------------------------------------------------------------===//
 
     for (auto &constr : ilp.constraints) {
-        error = GRBaddconstr(guard.model, (int)constr.indices.size(),
+        error = api.addconstr(guard.model, (int)constr.indices.size(),
                              const_cast<int *>(constr.indices.data()),
                              const_cast<double *>(constr.coefficients.data()),
                              constr.sense, constr.rhs, nullptr);
         if (error) {
             throw InternalException("Failed to add constraint to Gurobi: %s",
-                                    GRBgeterrormsg(guard.env));
+                                    api.geterrormsg(guard.env));
         }
     }
 
@@ -123,10 +118,10 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     // 4. Solve
     //===--------------------------------------------------------------------===//
 
-    error = GRBoptimize(guard.model);
+    error = api.optimize(guard.model);
     if (error) {
         throw InternalException("Gurobi optimization call failed: %s",
-                                GRBgeterrormsg(guard.env));
+                                api.geterrormsg(guard.env));
     }
 
     //===--------------------------------------------------------------------===//
@@ -134,10 +129,10 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     //===--------------------------------------------------------------------===//
 
     int status;
-    error = GRBgetintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
+    error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
     if (error) {
         throw InternalException("Failed to get Gurobi status: %s",
-                                GRBgeterrormsg(guard.env));
+                                api.geterrormsg(guard.env));
     }
 
     if (status != GRB_OPTIMAL) {
@@ -182,10 +177,10 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     //===--------------------------------------------------------------------===//
 
     vector<double> result(total_vars);
-    error = GRBgetdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars, result.data());
+    error = api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars, result.data());
     if (error) {
         throw InternalException("Failed to extract Gurobi solution: %s",
-                                GRBgeterrormsg(guard.env));
+                                api.geterrormsg(guard.env));
     }
 
     for (idx_t i = 0; i < total_vars; i++) {
@@ -196,12 +191,6 @@ vector<double> GurobiSolver::Solve(const ILPModel &ilp) {
     }
 
     return result;
-
-#else
-    (void)ilp;
-    throw InternalException("Gurobi solver requested but PackDB was built without Gurobi support. "
-                            "Set GUROBI_HOME and rebuild to enable Gurobi.");
-#endif
 }
 
 } // namespace duckdb
