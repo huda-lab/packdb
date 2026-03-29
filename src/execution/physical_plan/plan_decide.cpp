@@ -22,6 +22,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->per_outer_agg = op.per_outer_agg;
     decide_op->per_inner_is_easy = op.per_inner_is_easy;
     decide_op->per_outer_is_easy = op.per_outer_is_easy;
+    decide_op->per_inner_was_avg = op.per_inner_was_avg;
     return std::move(decide_op);
 }
 

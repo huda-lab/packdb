@@ -70,11 +70,21 @@ MINIMIZE COUNT(x)                    -- minimize number of non-zero rows
 
 ### AVG() in Objective
 
-`AVG(expr)` in the objective simply becomes `SUM(expr)` — same argmax/argmin since the row count N > 0 is constant.
+**Flat (no PER)**: `AVG(expr)` in the objective simply becomes `SUM(expr)` — same argmax/argmin since the row count N > 0 is constant.
 
 ```sql
 MAXIMIZE AVG(x * profit)             -- same as MAXIMIZE SUM(x * profit)
 ```
+
+**Nested with PER (inner AVG)**: `OUTER(AVG(expr)) PER col` is supported for all outer aggregates (SUM, MIN, MAX, AVG). Unlike flat AVG, inner AVG is NOT equivalent to SUM when groups have different sizes — each group's contribution is `SUM(expr_g)/n_g`, weighting smaller groups more heavily per row. The optimizer rewrites inner AVG → SUM and sets `per_inner_was_avg = true`; the physical execution layer divides each row's coefficient by its group size.
+
+```sql
+MINIMIZE SUM(AVG(x * cost)) PER department   -- sum of per-dept average costs
+MINIMIZE MAX(AVG(x * hours)) PER empID        -- worst per-employee average workload
+MAXIMIZE MIN(AVG(x * profit)) PER region     -- best-worst regional average profit
+```
+
+**Nested with PER (outer AVG)**: `AVG(INNER(expr)) PER col` is equivalent to `SUM(INNER(expr))` for optimization — dividing by the constant number of groups G doesn't change the optimal solution.
 
 ### MIN() / MAX() in Objective
 
@@ -108,7 +118,7 @@ PER on objectives is supported with a **nested aggregate** syntax that combines 
 OUTER(INNER(expr)) PER col
 ```
 
-where `OUTER` and `INNER` are each one of `SUM`, `MIN`, or `MAX`. All 9 combinations are supported.
+where `OUTER` and `INNER` are each one of `SUM`, `MIN`, `MAX`, or `AVG`. AVG as outer is equivalent to SUM for optimization; AVG as inner scales coefficients by `1/n_g` (meaningful when groups have different sizes).
 
 **Examples**:
 
@@ -116,7 +126,7 @@ where `OUTER` and `INNER` are each one of `SUM`, `MIN`, or `MAX`. All 9 combinat
 MINIMIZE SUM(MAX(x * cost)) PER department     -- minimize sum of per-dept max costs
 MAXIMIZE MIN(SUM(x * profit)) PER region       -- maximize the worst-performing region
 MINIMIZE MAX(SUM(x * hours)) PER empID          -- minimize the peak workload
-MAXIMIZE SUM(SUM(x * value)) PER category       -- maximize total across categories
+MINIMIZE SUM(AVG(x * cost)) PER department     -- minimize sum of per-dept average costs
 ```
 
 #### Flat Aggregate + PER Behavior
@@ -128,9 +138,9 @@ MAXIMIZE SUM(SUM(x * value)) PER category       -- maximize total across categor
 
 The nested aggregate PER objective is linearized in two levels:
 
-1. **Inner level (per group)**: For each distinct value of the PER column, compute the inner aggregate. If the inner aggregate is `SUM`, this is a direct sum of per-group coefficients. If the inner aggregate is `MIN` or `MAX`, a per-group auxiliary variable is created with linking constraints (using the same easy/hard classification as non-PER MIN/MAX objectives).
+1. **Inner level (per group)**: For each distinct value of the PER column, compute the inner aggregate. If the inner aggregate is `SUM`, this is a direct sum of per-group coefficients. If the inner aggregate is `AVG`, same as SUM but each row's coefficient is divided by its group size (`1/n_g`). If the inner aggregate is `MIN` or `MAX`, a per-group auxiliary variable is created with linking constraints (using the same easy/hard classification as non-PER MIN/MAX objectives).
 
-2. **Outer level (across groups)**: The outer aggregate combines the per-group results into a single scalar objective. If the outer aggregate is `SUM`, the per-group auxiliaries (or sums) are added directly. If the outer aggregate is `MIN` or `MAX`, a global auxiliary variable is created with linking constraints across groups.
+2. **Outer level (across groups)**: The outer aggregate combines the per-group results into a single scalar objective. If the outer aggregate is `SUM` (or `AVG`, which maps to `SUM`), the per-group auxiliaries (or sums) are added directly. If the outer aggregate is `MIN` or `MAX`, a global auxiliary variable is created with linking constraints across groups.
 
 The easy/hard classification applies at each level independently:
 - **Easy inner**: `MINIMIZE MAX(...)`, `MAXIMIZE MIN(...)` inner — no Big-M at the group level.

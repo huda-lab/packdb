@@ -61,8 +61,14 @@ class PackDBCli:
         )
 
         stderr = proc.stderr.strip()
+        # Filter known solver warnings (not errors)
         if stderr:
-            raise PackDBCliError(stderr)
+            error_lines = [
+                line for line in stderr.splitlines()
+                if not line.startswith("Warning:")
+            ]
+            if error_lines:
+                raise PackDBCliError("\n".join(error_lines))
 
         stdout = proc.stdout
         # Find the JSON array start — skip any solver preamble on stdout

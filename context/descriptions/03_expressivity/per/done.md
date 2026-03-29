@@ -79,12 +79,14 @@ SUCH THAT SUM(x * hours) <= 30 WHEN title = 'Director' PER empID
 
 ### PER on Objective — Nested Aggregate Syntax
 
-PER on objectives is fully implemented using nested aggregate syntax: `OUTER(INNER(expr)) PER col`, where `OUTER` and `INNER` are each one of `SUM`, `MIN`, or `MAX`. All 9 combinations are supported.
+PER on objectives is fully implemented using nested aggregate syntax: `OUTER(INNER(expr)) PER col`, where `OUTER` and `INNER` are each one of `SUM`, `MIN`, `MAX`, or `AVG`. `AVG` as outer is equivalent to `SUM` for optimization (divides by constant G). `AVG` as inner scales each row's coefficient by `1/n_g` (the group size), which is meaningful when groups have different sizes.
 
 ```sql
 MINIMIZE SUM(MAX(x * cost)) PER department     -- minimize sum of per-dept max costs
 MAXIMIZE MIN(SUM(x * profit)) PER region       -- maximize the worst-performing region
 MINIMIZE MAX(SUM(x * hours)) PER empID          -- minimize the peak workload
+MINIMIZE SUM(AVG(x * cost)) PER department     -- minimize sum of per-dept average costs
+MINIMIZE MAX(AVG(x * hours)) PER empID          -- minimize worst per-employee average
 ```
 
 **Flat aggregate + PER behavior**:

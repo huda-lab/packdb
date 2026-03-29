@@ -517,8 +517,8 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 	auto &outer_agg = obj_expr->Cast<BoundAggregateExpression>();
 	auto outer_name = StringUtil::Lower(outer_agg.function.name);
 
-	// Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX
-	if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max") &&
+	// Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX/AVG
+	if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max" || outer_name == "avg") &&
 	    outer_agg.children.size() == 1) {
 		// Unwrap cast on inner child if present
 		Expression *inner_expr = outer_agg.children[0].get();
@@ -529,12 +529,20 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 			auto &inner_agg = inner_expr->Cast<BoundAggregateExpression>();
 			auto inner_name = StringUtil::Lower(inner_agg.function.name);
 
-			if ((inner_name == "sum" || inner_name == "min" || inner_name == "max") &&
+			if ((inner_name == "sum" || inner_name == "min" || inner_name == "max" || inner_name == "avg") &&
 			    inner_agg.children.size() == 1 &&
 			    BoundExprReferencesDecideVar(*inner_agg.children[0], decide.decide_index)) {
 				// Found nested pattern: set metadata
-				decide.per_outer_agg = StrToAggType(outer_name);
-				decide.per_inner_agg = StrToAggType(inner_name);
+				// Map outer AVG → SUM (dividing by constant G doesn't change optimal)
+				decide.per_outer_agg = (outer_name == "avg") ? ObjectiveAggregateType::SUM
+				                                             : StrToAggType(outer_name);
+				// Map inner AVG → SUM with flag for coefficient scaling
+				if (inner_name == "avg") {
+					decide.per_inner_agg = ObjectiveAggregateType::SUM;
+					decide.per_inner_was_avg = true;
+				} else {
+					decide.per_inner_agg = StrToAggType(inner_name);
+				}
 
 				// Pre-compute easy/hard classification for inner and outer levels
 				if (inner_name == "min" || inner_name == "max") {
@@ -548,8 +556,8 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 					                           (!outer_is_min && decide.decide_sense == DecideSense::MINIMIZE);
 				}
 
-				// Rewrite inner MIN/MAX → SUM for normalization
-				if (inner_name == "min" || inner_name == "max") {
+				// Rewrite inner MIN/MAX/AVG → SUM for normalization
+				if (inner_name == "min" || inner_name == "max" || inner_name == "avg") {
 					vector<unique_ptr<Expression>> sum_children;
 					sum_children.push_back(inner_agg.children[0]->Copy());
 					auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));

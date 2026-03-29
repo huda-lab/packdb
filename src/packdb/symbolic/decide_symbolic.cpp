@@ -384,6 +384,12 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 }
                 auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
                 return Symbolic("__MAX__") * inner_symbolic;
+            } else if (func_name_lower == "avg") {
+                if (func_expr.children.empty()) {
+                    throw InternalException("ToSymbolic: AVG function with no arguments");
+                }
+                auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
+                return Symbolic("__AVG__") * inner_symbolic;
             } else if (func_name_lower == "pow" || func_name_lower == "power") {
                 if (func_expr.children.size() != 2) {
                     throw InternalException("ToSymbolic: POW/POWER expects two arguments");
@@ -702,23 +708,29 @@ static bool IsMaxMarker(const Symbolic &s) {
     return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__MAX__";
 }
 
+static bool IsAvgMarker(const Symbolic &s) {
+    return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__AVG__";
+}
+
 static bool IsAggregateMarker(const Symbolic &s) {
-    return IsSumMarker(s) || IsMinMarker(s) || IsMaxMarker(s);
+    return IsSumMarker(s) || IsMinMarker(s) || IsMaxMarker(s) || IsAvgMarker(s);
 }
 
 static unique_ptr<ParsedExpression> FromSymbolicAggregateProduct(const Product &prod, SymbolicTranslationContext &ctx) {
-    // Expect one aggregate marker (__SUM__, __MIN__, __MAX__) and remaining factors as inner expression
+    // Expect one aggregate marker (__SUM__, __MIN__, __MAX__, __AVG__) and remaining factors as inner expression
     list<Symbolic> non_markers;
     bool has_sum_marker = false;
     bool has_min_marker = false;
     bool has_max_marker = false;
+    bool has_avg_marker = false;
     for (auto &f : prod.factors) {
         if (IsSumMarker(f)) has_sum_marker = true;
         else if (IsMinMarker(f)) has_min_marker = true;
         else if (IsMaxMarker(f)) has_max_marker = true;
+        else if (IsAvgMarker(f)) has_avg_marker = true;
         else non_markers.push_back(f);
     }
-    if (!(has_sum_marker || has_min_marker || has_max_marker) || non_markers.empty()) {
+    if (!(has_sum_marker || has_min_marker || has_max_marker || has_avg_marker) || non_markers.empty()) {
         // Fallback to regular product
         return FromSymbolicProduct(prod, ctx);
     }
@@ -728,7 +740,7 @@ static unique_ptr<ParsedExpression> FromSymbolicAggregateProduct(const Product &
     for (; it != non_markers.end(); ++it) inner = inner * (*it);
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(FromSymbolic(inner, ctx));
-    string func_name = has_sum_marker ? "sum" : (has_min_marker ? "min" : "max");
+    string func_name = has_sum_marker ? "sum" : (has_min_marker ? "min" : (has_max_marker ? "max" : "avg"));
     return make_uniq_base<ParsedExpression, FunctionExpression>(func_name, std::move(args));
 }
 

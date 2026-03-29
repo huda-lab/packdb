@@ -64,6 +64,8 @@ public:
     // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
     bool per_inner_is_easy = false;
     bool per_outer_is_easy = false;
+    // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
+    bool per_inner_was_avg = false;
 
 public:
     // --- Implement virtual functions ---

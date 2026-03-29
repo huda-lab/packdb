@@ -1027,6 +1027,11 @@
         "id": 214,
         "name": "per_outer_is_easy",
         "type": "bool"
+      },
+      {
+        "id": 215,
+        "name": "per_inner_was_avg",
+        "type": "bool"
       }
     ]
   }

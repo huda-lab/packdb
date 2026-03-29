@@ -1739,8 +1739,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 solver_input.global_constraints.push_back(std::move(sum_u));
             }
         } else if (!inner_is_minmax && outer_is_sum) {
-            // Inner SUM + Outer SUM: no-op (sum of group sums = global sum)
-            // Restore original objective coefficients
+            if (per_inner_was_avg) {
+                // Inner AVG + Outer SUM: scale each row's coefficient by 1/n_g
+                // SUM over groups of AVG(expr) = Σ_g (Σ_{r∈g} c_r * x_r) / n_g
+                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (row_groups[row] != DConstants::INVALID_INDEX) {
+                            idx_t g = row_groups[row];
+                            saved_obj_coefficients[t][row] /= static_cast<double>(group_rows[g].size());
+                        }
+                    }
+                }
+            }
+            // Restore (possibly scaled) objective coefficients
             solver_input.objective_coefficients = std::move(saved_obj_coefficients);
             solver_input.objective_variable_indices = std::move(saved_obj_var_indices);
         } else if (!inner_is_minmax && outer_is_minmax) {
@@ -1768,6 +1779,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     for (idx_t row : group_rows[g]) {
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
+                            if (per_inner_was_avg) {
+                                coeff /= static_cast<double>(group_rows[g].size());
+                            }
                             if (std::abs(coeff) < 1e-15) continue;
                             idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
                             rc.indices.push_back((int)var_idx);
@@ -1794,6 +1808,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     for (idx_t row : group_rows[g]) {
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
+                            if (per_inner_was_avg) {
+                                coeff /= static_cast<double>(group_rows[g].size());
+                            }
                             if (std::abs(coeff) < 1e-15) continue;
                             idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
                             rc.indices.push_back((int)var_idx);

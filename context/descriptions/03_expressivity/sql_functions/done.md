@@ -53,7 +53,9 @@ The binder recognizes COUNT as a valid DECIDE aggregate and binds it into a `Bou
 - PER: N = count of rows in each group
 - WHEN+PER: N = count of WHEN-matching rows per group
 
-**Objectives**: `MAXIMIZE/MINIMIZE AVG(expr)` simply becomes `SUM(expr)` — same argmax/argmin since N > 0 is constant.
+**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` simply becomes `SUM(expr)` — same argmax/argmin since N > 0 is constant.
+
+**Objectives (nested PER)**: `OUTER(AVG(expr)) PER col` is fully supported. Inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. Outer AVG maps to SUM (dividing by constant G). See [maximize_minimize/done.md](../maximize_minimize/done.md).
 
 ```sql
 SUCH THAT AVG(x * weight) <= 10         -- SUM(x*weight) <= 10*N

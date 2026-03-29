@@ -383,6 +383,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<uint8_t>(212, "per_outer_agg", static_cast<uint8_t>(per_outer_agg));
 	serializer.WritePropertyWithDefault<bool>(213, "per_inner_is_easy", per_inner_is_easy);
 	serializer.WritePropertyWithDefault<bool>(214, "per_outer_is_easy", per_outer_is_easy);
+	serializer.WritePropertyWithDefault<bool>(215, "per_inner_was_avg", per_inner_was_avg);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -408,6 +409,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	result->per_outer_agg = static_cast<ObjectiveAggregateType>(outer_agg_val);
 	deserializer.ReadPropertyWithDefault<bool>(213, "per_inner_is_easy", result->per_inner_is_easy);
 	deserializer.ReadPropertyWithDefault<bool>(214, "per_outer_is_easy", result->per_outer_is_easy);
+	deserializer.ReadPropertyWithDefault<bool>(215, "per_inner_was_avg", result->per_inner_was_avg);
 	return std::move(result);
 }
 

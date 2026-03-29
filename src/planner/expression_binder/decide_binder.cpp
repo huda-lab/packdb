@@ -117,7 +117,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				}
 				return true;
 			}
-			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum") {
+			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" || func_name_lower == "avg") {
 				// Nested aggregates (e.g., SUM(MAX(expr)) for PER objectives) are allowed.
 				// The optimizer will detect and rewrite them.
 				if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
