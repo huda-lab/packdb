@@ -11,9 +11,10 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
+| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, QCQP, SOCP |
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, scope, linearity | *(no planned features)* |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER | *(no planned features)* |
-| [maximize_minimize/](maximize_minimize/) | SUM, AVG, MIN/MAX, COUNT, multi-var, column arithmetic, WHEN on objective, ABS, PER on objective (nested aggregates) | *(no planned features)* |
+| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, COUNT (BOOLEAN/INTEGER), AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | COUNT (REAL), division |
@@ -52,6 +53,10 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `AVG()` over decision variables | Yes (RHS scaling) | — |
 | `ABS()` | Yes (linearized) | — |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
+
+### Problem Classification
+
+For a complete taxonomy of what mathematical optimization problem classes PackDB can express (LP, ILP, MILP, QP, MIQP, feasibility), see [problem_types/done.md](problem_types/done.md).
 
 ---
 
