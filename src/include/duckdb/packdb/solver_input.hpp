@@ -64,7 +64,6 @@ struct SolverInput {
     bool has_quadratic_objective = false;
     vector<vector<double>> quadratic_inner_coefficients; // [term_idx][row_idx]
     vector<idx_t> quadratic_inner_variable_indices;      // [term_idx]
-    double quadratic_constant_offset = 0.0;              // sum of c_i^2 terms (for reporting)
 
     // Objective PER grouping (mirrors constraint row_group_ids pattern)
     vector<idx_t> objective_row_group_ids;  // per-row group assignment

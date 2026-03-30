@@ -49,7 +49,14 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 
 - Must be a single aggregate expression: `SUM(...)`, `AVG(...)`, `MIN(...)`, or `MAX(...)`.
 - Must involve at least one decision variable.
-- Must be linear.
+- Linear objectives: must be linear in decision variables.
+- **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` is supported for convex quadratic programming. The inner expression must be linear in decision variables. Three equivalent syntax forms:
+  - `POWER(expr, 2)` / `POW(expr, 2)` — function call
+  - `expr ** 2` — exponentiation operator
+  - `(expr) * (expr)` — identical multiplication (both sides must be the same expression)
+  - Only `MINIMIZE` is allowed (maximizing a sum of squares is non-convex).
+  - Gurobi supports both continuous QP and mixed-integer QP (MIQP). HiGHS supports continuous QP only — integer/boolean variables with quadratic objectives require Gurobi.
+  - Quadratic constraints (QCQP) are not yet supported.
 
 ## 5. Aggregations
 

@@ -19,7 +19,10 @@ bool IsScalarValue(ParsedExpression &expr);
 
 bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg);
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
+                         bool allow_quadratic = false);
+
+bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
@@ -37,7 +40,7 @@ public:
     DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
 
 protected:
-    BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth);
+    BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {

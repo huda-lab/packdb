@@ -20,6 +20,13 @@ FORCE_32_BIT_FLAG ?=
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 PROJ_DIR := $(dir $(MKFILE_PATH))
 
+# Auto-detect safe parallelism: min(nproc, RAM_GB / 1.5), floor 1
+NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+MEM_GB := $(shell if [ -f /proc/meminfo ]; then awk '/MemTotal/{printf "%d", $$2/1048576}' /proc/meminfo; else sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d", $$0/1073741824}'; fi)
+MEM_JOBS := $(shell echo $$(( $(MEM_GB) * 2 / 3 )) )
+BUILD_JOBS := $(shell if [ $(MEM_JOBS) -lt $(NPROC) ] && [ $(MEM_JOBS) -gt 0 ]; then echo $(MEM_JOBS); else echo $(NPROC); fi)
+
+
 ifeq ($(GEN),ninja)
 	GENERATOR=-G "Ninja"
 	FORCE_COLOR=-DFORCE_COLORED_OUTPUT=1
@@ -323,7 +330,7 @@ release: ${EXTENSION_CONFIG_STEP}
 	mkdir -p ./build/release && \
 	cd build/release && \
 	cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_WARN_UNUSED_FLAG} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${DISABLE_SANITIZER_FLAG} ${STATIC_LIBCPP} ${CMAKE_VARS} ${CMAKE_VARS_BUILD} -DCMAKE_BUILD_TYPE=Release ../.. && \
-	cmake --build . --config Release -- -j$(nproc)
+	cmake --build . --config Release -- -j$(BUILD_JOBS)
 
 wasm_mvp: ${EXTENSION_CONFIG_STEP}
 	mkdir -p ./build/wasm_mvp && \

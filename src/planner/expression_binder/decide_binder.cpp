@@ -90,8 +90,56 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
 }
 
+// Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                        bool &has_decide_variable, string &error_msg) {
+                                        bool &has_decide_variable, string &error_msg, bool allow_quadratic);
+
+// Shared validation for POWER(expr, 2) and expr ** 2 patterns.
+// Returns true if the pattern is a valid quadratic form; sets has_decide_variable.
+// The base expression is validated as strictly linear (allow_quadratic=false) to prevent nesting.
+static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &children,
+                                   const case_insensitive_map_t<idx_t> &variables,
+                                   bool &has_decide_variable, string &error_msg, const string &label) {
+	if (children.size() != 2) {
+		error_msg = label + " requires exactly two arguments";
+		return false;
+	}
+	auto &exponent = *children[1];
+	if (exponent.GetExpressionClass() != ExpressionClass::CONSTANT) {
+		error_msg = "POWER exponent in DECIDE expression must be a constant integer (only 2 is supported)";
+		return false;
+	}
+	auto &exp_const = exponent.Cast<ConstantExpression>();
+	double exp_val;
+	try {
+		exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} catch (...) {
+		error_msg = "POWER exponent must be numeric";
+		return false;
+	}
+	if (exp_val != 2.0) {
+		error_msg = StringUtil::Format(
+		    "Only POWER(expr, 2) is supported for quadratic objectives. "
+		    "Found exponent %g. Higher powers are not allowed.", exp_val);
+		return false;
+	}
+	// Validate the base is a LINEAR expression (allow_quadratic=false prevents nesting like POWER(POWER(x,2),2))
+	bool base_has_var = false;
+	if (!ValidateSumArgumentInternal(*children[0], variables, base_has_var, error_msg, /*allow_quadratic=*/false)) {
+		error_msg = "Inside " + label + ": " + error_msg;
+		return false;
+	}
+	if (!base_has_var) {
+		error_msg = label + " in DECIDE objective must reference at least one DECIDE variable";
+		return false;
+	}
+	has_decide_variable = true;
+	return true;
+}
+
+static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
+                                        bool &has_decide_variable, string &error_msg,
+                                        bool allow_quadratic = false) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
         if (IsVariableExpression(expr, variables)) {
@@ -118,45 +166,12 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				return true;
 			}
 			if (func_name_lower == "power" || func_name_lower == "pow") {
-				// POWER(linear_expr, 2) — convex quadratic objective (QP).
-				// Accept only when the exponent is exactly 2 and the base is
-				// a linear expression in DECIDE variables.
-				if (func.children.size() != 2) {
-					error_msg = "POWER requires exactly two arguments";
+				if (!allow_quadratic) {
+					error_msg = "SUM expression must remain linear in DECIDE variables — "
+					            "POWER(expr, 2) is only allowed in objectives, not constraints";
 					return false;
 				}
-				// Validate exponent is the constant 2
-				auto &exponent = *func.children[1];
-				if (exponent.GetExpressionClass() != ExpressionClass::CONSTANT) {
-					error_msg = "POWER exponent in DECIDE expression must be a constant integer (only 2 is supported)";
-					return false;
-				}
-				auto &exp_const = exponent.Cast<ConstantExpression>();
-				double exp_val;
-				try {
-					exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-				} catch (...) {
-					error_msg = "POWER exponent must be numeric";
-					return false;
-				}
-				if (exp_val != 2.0) {
-					error_msg = StringUtil::Format(
-					    "Only POWER(expr, 2) is supported for quadratic objectives. "
-					    "Found exponent %g. Higher powers are not allowed.", exp_val);
-					return false;
-				}
-				// Validate the base is a linear expression in DECIDE variables
-				bool base_has_var = false;
-				if (!ValidateSumArgumentInternal(*func.children[0], variables, base_has_var, error_msg)) {
-					error_msg = "Inside POWER(..., 2): " + error_msg;
-					return false;
-				}
-				if (!base_has_var) {
-					error_msg = "POWER(expr, 2) in DECIDE objective must reference at least one DECIDE variable";
-					return false;
-				}
-				has_decide_variable = true;
-				return true;
+				return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg, "POWER(..., 2)");
 			}
 			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" || func_name_lower == "avg") {
 				// Nested aggregates (e.g., SUM(MAX(expr)) for PER objectives) are allowed.
@@ -173,45 +188,16 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			return false;
 		}
 		if (func_name_lower == "**") {
-			// ** is DuckDB's power operator — validate like POWER(expr, 2)
-			if (func.children.size() != 2) {
-				error_msg = "** operator requires exactly two arguments";
+			if (!allow_quadratic) {
+				error_msg = "SUM expression must remain linear in DECIDE variables — "
+				            "expr ** 2 is only allowed in objectives, not constraints";
 				return false;
 			}
-			auto &exponent = *func.children[1];
-			if (exponent.GetExpressionClass() != ExpressionClass::CONSTANT) {
-				error_msg = "POWER exponent in DECIDE expression must be a constant integer (only 2 is supported)";
-				return false;
-			}
-			auto &exp_const = exponent.Cast<ConstantExpression>();
-			double exp_val;
-			try {
-				exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-			} catch (...) {
-				error_msg = "POWER exponent must be numeric";
-				return false;
-			}
-			if (exp_val != 2.0) {
-				error_msg = StringUtil::Format(
-				    "Only POWER(expr, 2) is supported for quadratic objectives. "
-				    "Found exponent %g. Higher powers are not allowed.", exp_val);
-				return false;
-			}
-			bool base_has_var = false;
-			if (!ValidateSumArgumentInternal(*func.children[0], variables, base_has_var, error_msg)) {
-				error_msg = "Inside ** 2: " + error_msg;
-				return false;
-			}
-			if (!base_has_var) {
-				error_msg = "** 2 in DECIDE objective must reference at least one DECIDE variable";
-				return false;
-			}
-			has_decide_variable = true;
-			return true;
+			return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg, "expr ** 2");
 		}
 		if (func_name_lower == "-") {
 			for (auto &child : func.children) {
-				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg)) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic)) {
 					return false;
 				}
 			}
@@ -219,24 +205,27 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		}
 		if (func_name_lower == "*" || func_name_lower == "+") {
 			for (auto &child : func.children) {
-				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg)) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic)) {
 					return false;
 				}
 			}
 			if (func_name_lower == "*") {
 				idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
 				if (decide_count > 1) {
-					// Check if this is a squared expression: (expr) * (expr) where both sides are identical.
-					// This is allowed as a QP pattern equivalent to POWER(expr, 2).
-					if (func.children.size() == 2 &&
+					if (allow_quadratic && func.children.size() == 2 &&
 					    func.children[0]->ToString() == func.children[1]->ToString()) {
+						// (expr) * (expr) — QP pattern equivalent to POWER(expr, 2)
 						has_decide_variable = true;
 						return true;
 					}
-					error_msg = StringUtil::Format(
-					    "Product of different DECIDE variable expressions is not supported. "
-					    "For quadratic objectives, use POWER(expr, 2) or (expr) * (expr) "
-					    "where both sides are the same linear expression. Found '%s'", expr.ToString());
+					if (allow_quadratic) {
+						error_msg = StringUtil::Format(
+						    "Product of different DECIDE variable expressions is not supported. "
+						    "For quadratic objectives, use POWER(expr, 2) or (expr) * (expr) "
+						    "where both sides are the same linear expression. Found '%s'", expr.ToString());
+					} else {
+						error_msg = "SUM expression must remain linear in DECIDE variables";
+					}
 					return false;
 				}
 			}
@@ -251,7 +240,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 	}
 	case ExpressionClass::CAST: {
 		auto &cast = expr.Cast<CastExpression>();
-		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg);
+		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic);
 	}
     case ExpressionClass::SUBQUERY: {
         auto &subquery = expr.Cast<SubqueryExpression>();
@@ -272,9 +261,45 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
     }
 }
 
-bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg) {
+// Check if an expression contains any quadratic pattern (POWER(_, 2), **, or identical multiplication).
+// Used to detect quadratic objectives for early MAXIMIZE rejection at bind time.
+bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<FunctionExpression>();
+	string fname = StringUtil::Lower(func.function_name);
+	if (fname == "power" || fname == "pow" || fname == "**") {
+		if (func.children.size() == 2 &&
+		    func.children[1]->GetExpressionClass() == ExpressionClass::CONSTANT) {
+			auto &exp_const = func.children[1]->Cast<ConstantExpression>();
+			try {
+				double exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+				if (exp_val == 2.0 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
+					return true;
+				}
+			} catch (...) {}
+		}
+	}
+	if (fname == "*" && func.children.size() == 2) {
+		idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
+		if (decide_count > 1 && func.children[0]->ToString() == func.children[1]->ToString()) {
+			return true;
+		}
+	}
+	// Recurse into children
+	for (auto &child : func.children) {
+		if (ContainsQuadraticPattern(*child, variables)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
+                         bool allow_quadratic) {
 	bool has_decide_variable = false;
-	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg)) {
+	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg, allow_quadratic)) {
 		return false;
 	}
 	if (!has_decide_variable) {

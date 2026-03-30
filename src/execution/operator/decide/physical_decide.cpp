@@ -819,7 +819,6 @@ public:
     vector<vector<double>> evaluated_quadratic_coefficients;  // [term_idx][row_idx]
     vector<idx_t> quadratic_variable_indices;
     bool has_quadratic_objective = false;
-    double quadratic_constant_offset = 0.0;
 
     vector<double> ilp_solution;
 };
@@ -1522,7 +1521,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
             solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
         }
-        solver_input.quadratic_constant_offset = gstate.quadratic_constant_offset;
     }
 
     // Evaluate PER column for objective grouping (must happen after solver_input is constructed)

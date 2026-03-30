@@ -50,6 +50,7 @@ FROM table_expression
 DECIDE variable_name [IS type] [, ...]
 SUCH THAT constraint [AND constraint ...]
 [MAXIMIZE | MINIMIZE] SUM|MIN|MAX(linear_expression)
+[MINIMIZE] SUM(POWER(linear_expression, 2))  -- convex QP
 ```
 
 - Variable types: `IS BOOLEAN` (0/1), `IS INTEGER` (default, non-negative), `IS REAL` (continuous, non-negative)
@@ -63,7 +64,8 @@ SUCH THAT constraint [AND constraint ...]
   - **Easy objectives**: `MINIMIZE MAX(expr)`, `MAXIMIZE MIN(expr)` → global auxiliary variable `z` with per-row linking constraints (`z >= expr_i` or `z <= expr_i`).
   - **Hard objectives**: `MAXIMIZE MAX(expr)`, `MINIMIZE MIN(expr)` → global `z` + per-row binary indicators + `SUM(y) >= 1`, because finding the row that achieves the optimum requires indicator selection.
 - **PER on objectives**: Nested aggregate syntax `OUTER(INNER(expr)) PER col` where OUTER/INNER ∈ {SUM, MIN, MAX, AVG}. AVG as outer maps to SUM (constant divisor). AVG as inner scales coefficients by `1/n_g` (group size) — NOT equivalent to SUM when groups have different sizes. Flat `SUM/AVG + PER` is a no-op; flat `MIN/MAX + PER` is an error (ambiguous). Two-level ILP formulation: inner creates per-group auxiliaries, outer creates global auxiliary. Easy/hard classification applies at each level independently.
-- All expressions must be linear (no `x * y` between decision variables)
+- **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` supported. Three syntax forms: `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)`. MINIMIZE only (convex). Gurobi supports MIQP; HiGHS supports continuous QP only. Quadratic constraints (QCQP) are not yet supported.
+- Constraints must be linear (no `x * y` between decision variables). Objectives can be linear or convex quadratic.
 
 For full syntax details: `context/descriptions/00_project_overview/syntax_reference.md`
 For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
@@ -87,7 +89,7 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 - The executable is named `packdb`
 - DECIDE clause keywords: DECIDE, SUCH THAT, MAXIMIZE, MINIMIZE, WHEN
 - WHEN is postfix on constraints and objectives: `expression WHEN condition` (not `WHEN condition THEN expression`)
-- Only linear constraints/objectives supported (no quadratic)
+- Constraints must be linear; objectives support both linear and convex quadratic (QP via `MINIMIZE SUM(POWER(linear_expr, 2))`)
 - Solver strategy: Gurobi (primary, commercial) — empirically much faster in practice. HiGHS (bundled, open-source) is retained as a fallback only; it is significantly slower and not recommended for production use.
 - Always use `python3` (not `python`) — `python` is not available on this system
 

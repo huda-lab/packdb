@@ -19,6 +19,7 @@ class DecideObjectiveBinder : public DecideBinder {
 public:
     DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
     vector<LogicalType> var_types;
+    DecideSense decide_sense = DecideSense::MINIMIZE;
 
 protected:
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;

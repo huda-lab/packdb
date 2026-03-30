@@ -9,7 +9,7 @@
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/expression/subquery_expression.hpp">
+#include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -475,7 +475,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
                         colref.GetColumnName());
                     return DecideExpression::INVALID;
                 }
-            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
+            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/false)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }

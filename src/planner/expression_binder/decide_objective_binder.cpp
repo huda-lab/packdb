@@ -166,8 +166,15 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
                         colref.GetColumnName());
                     return DecideExpression::INVALID;
                 }
-            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg)) {
+            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
                 error_msg += ", found '" + expr.ToString() + "'";
+                return DecideExpression::INVALID;
+            }
+            // Reject MAXIMIZE with quadratic objectives at bind time (non-convex)
+            if (decide_sense == DecideSense::MAXIMIZE &&
+                ContainsQuadraticPattern(*func.children.front(), variables)) {
+                error_msg = "MAXIMIZE is not supported with quadratic objectives (POWER(..., 2)). "
+                            "Maximizing a sum of squares is non-convex. Use MINIMIZE instead.";
                 return DecideExpression::INVALID;
             }
             return DecideExpression::SUM;

@@ -133,14 +133,17 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             vector<VarCoeff> row_terms;
 
             for (idx_t t = 0; t < num_q_terms; t++) {
+                if (t >= input.quadratic_inner_coefficients.size() ||
+                    row >= input.quadratic_inner_coefficients[t].size()) {
+                    continue;
+                }
                 idx_t decide_var_idx = input.quadratic_inner_variable_indices[t];
                 double a = input.quadratic_inner_coefficients[t][row];
                 if (a == 0.0) continue;
 
                 if (decide_var_idx == DConstants::INVALID_INDEX) {
-                    // Constant term — contributes to linear objective: 2*c*a_t for each variable term
-                    // and c^2 to the constant offset (already accumulated in quadratic_constant_offset)
-                    // Linear contributions are added below after collecting all terms
+                    // Constant term — contributes to linear objective via 2*c*a_t cross-terms.
+                    // The c^2 constant offset doesn't affect optimality and is omitted.
                     continue;
                 }
 
@@ -155,10 +158,10 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 for (idx_t j = 0; j <= i; j++) {
                     int ri = row_terms[i].flat_idx;
                     int rj = row_terms[j].flat_idx;
-                    int lo = std::max(ri, rj);
-                    int hi = std::min(ri, rj);
+                    int q_row = std::max(ri, rj);
+                    int q_col = std::min(ri, rj);
                     double val = 2.0 * row_terms[i].coeff * row_terms[j].coeff;
-                    q_map[{lo, hi}] += val;
+                    q_map[{q_row, q_col}] += val;
                 }
             }
 
@@ -166,7 +169,9 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             // Find constant term for this row (variable_index == INVALID_INDEX)
             double c_row = 0.0;
             for (idx_t t = 0; t < num_q_terms; t++) {
-                if (input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
+                if (t < input.quadratic_inner_coefficients.size() &&
+                    row < input.quadratic_inner_coefficients[t].size() &&
+                    input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
                     c_row += input.quadratic_inner_coefficients[t][row];
                 }
             }
@@ -371,6 +376,21 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
         if (!std::isfinite(constr.rhs) && !std::isinf(constr.rhs)) {
             throw InternalException("Constraint %llu: RHS is NaN", c);
+        }
+    }
+
+    for (idx_t k = 0; k < model.q_vals.size(); k++) {
+        if (model.q_rows[k] < 0 || (idx_t)model.q_rows[k] >= total_vars ||
+            model.q_cols[k] < 0 || (idx_t)model.q_cols[k] >= total_vars) {
+            throw InternalException("Q matrix entry %llu: index out of range (row=%d, col=%d, total_vars=%llu)",
+                                    k, model.q_rows[k], model.q_cols[k], total_vars);
+        }
+        if (model.q_rows[k] < model.q_cols[k]) {
+            throw InternalException("Q matrix entry %llu: not lower triangle (row=%d < col=%d)",
+                                    k, model.q_rows[k], model.q_cols[k]);
+        }
+        if (!std::isfinite(model.q_vals[k])) {
+            throw InternalException("Q matrix entry %llu: value not finite: %f", k, model.q_vals[k]);
         }
     }
 

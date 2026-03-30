@@ -344,7 +344,11 @@ zig-cache/*
 
 # .db files
 *.db
+!packdb.db
 *.db.gz
+# keep packdb.db because its used for testing
+
+
 
 # local cmake extension config
 extension/extension_config_local.cmake

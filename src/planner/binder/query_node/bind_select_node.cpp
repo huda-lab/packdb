@@ -536,8 +536,7 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 					    make_uniq<ConstantExpression>(Value::INTEGER(1)));
 
 					// Linking constraint: x + (-v1)*z_1 + (-v2)*z_2 + ... + (-vK)*z_K = 0
-					// Uses only + and * so ExtractTerms can parse terms correctly
-					// (ExtractTerms doesn't handle the - operator)
+					// Uses only + and * for clarity (though ExtractTerms does handle subtraction)
 					unique_ptr<ParsedExpression> linking_lhs = make_uniq<ColumnRefExpression>(var_name);
 					for (idx_t i = 0; i < K; i++) {
 						// Build (-vi) * zi term: negate value inside coefficient
@@ -748,6 +747,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         {
             DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
             decide_objective_binder.var_types = var_types;
+            decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
             result->decide_sense = statement.decide_sense;

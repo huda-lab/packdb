@@ -10,19 +10,9 @@ Covers:
   - Error rejection: POWER with exponent != 2, product of different vars
 """
 
-import math
 import time
 
 import pytest
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-def _round(val, decimals=2):
-    """Safely round a value that might be a string."""
-    return round(float(val), decimals)
 
 
 # ===================================================================
@@ -199,14 +189,14 @@ class TestQuadraticErrors:
         """, match=r"MAXIMIZE is not supported with quadratic")
 
     def test_power_exponent_3_rejected(self, packdb_cli):
-        """POWER(expr, 3) is not supported — results in product of different vars."""
+        """POWER(expr, 3) is not supported — expanded form is non-linear."""
         packdb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target)
             SELECT id, x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 3))
-        """, match=r"Product of different DECIDE variable expressions")
+        """, match=r"Product of different DECIDE variable expressions|must remain linear")
 
     def test_product_of_different_vars_rejected(self, packdb_cli):
         """x * y where both are DECIDE variables should be rejected."""
