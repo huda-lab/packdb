@@ -51,9 +51,10 @@ The planner inserts a `LogicalDecide` operator into the query tree. Crucially, t
 ### 3.3 Physical Execution
 The `PhysicalDecide` operator works in a "stop-and-go" fashion (pipeline breaker):
 1.  **Sink Phase**: It consumes all input tuples from its child operator (the candidate items). These tuples are buffered in memory.
-2.  **Model Building**: It iterates over the buffered tuples to compute the coefficients for the objective function and constraints. A standard linear programming matrix (A-matrix) is constructed.
-3.  **Solve Phase**: The constructed model is passed to `ILPModel::Build()` which creates a solver-agnostic representation, then `SolveILP()` dispatches to Gurobi (primary, significantly faster in practice) or HiGHS (slow fallback if Gurobi is unavailable).
-4.  **Source Phase**: Once the solver returns, the operator augments the buffered tuples with the solution values (e.g., `x=1` or `x=0`) and streams them to the next operator (e.g., `SELECT` list projection).
+2.  **Entity Mapping (Phase 1.5)**: For table-scoped (entity-scoped) variables, the operator evaluates entity key columns per row and builds a row-to-entity mapping. This determines which rows share the same solver variable instance.
+3.  **Model Building**: It iterates over the buffered tuples to compute the coefficients for the objective function and constraints. The `VarIndexer` computes a three-block variable layout: row-scoped variables (one per row), entity-scoped variables (one per unique entity), and global auxiliary variables. The indexer replaces the previous flat `row * num_vars + var_idx` formula with scope-aware indexing.
+4.  **Solve Phase**: The constructed model is passed to `ILPModel::Build()` which creates a solver-agnostic representation, then `SolveILP()` dispatches to Gurobi (primary, significantly faster in practice) or HiGHS (slow fallback if Gurobi is unavailable).
+5.  **Source Phase**: Once the solver returns, the operator augments the buffered tuples with the solution values (e.g., `x=1` or `x=0`) and streams them to the next operator (e.g., `SELECT` list projection). For entity-scoped variables, all rows belonging to the same entity receive the same solution value via `VarIndexer::Get(var_idx, row)`.
 
 > **Note**: The execution phase is documented in detail across five sub-documents: expression analysis (03a), coefficient evaluation (03b), model building (03c), solver backends (03d), and result projection (03e). See each for implementation details.
 

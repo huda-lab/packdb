@@ -16,6 +16,22 @@ Unlike a standard `GROUP BY` or `SELECT` clause, the `DECIDE` clause introduces 
 - **Decide Variables**: These are "virtual" columns representing the decision.
 - **Binding Context**: The binder creates a special scope where these variables are valid. It verifies that variable names do not collide with existing table columns.
 
+### 2.1 Table-Scoped (Entity-Scoped) Variables
+
+When a variable declaration uses the qualified `table.variable` syntax (e.g., `DECIDE drivers.assigned IS BOOLEAN`), the binder performs additional resolution:
+
+1. **Table alias resolution**: The binder looks up the table alias (e.g., `drivers`) in the current bind context to verify that the referenced table exists in the FROM clause.
+2. **Entity key identification**: The binder identifies the entity key columns for the referenced table. These are the columns that define unique entities (typically a primary key or the columns used to distinguish rows belonging to the same entity).
+3. **EntityScopeInfo creation**: The binder creates an `EntityScopeInfo` struct containing the table alias, the source table index, column bindings for the entity keys, and the indices of scoped variables. This struct is stored on the `BoundSelectNode` and carried forward to `LogicalDecide`.
+4. **Validation**: The binder rejects invalid table aliases (table not found in FROM clause) and ensures entity key columns can be resolved.
+
+The `EntityScopeInfo` struct (defined in `logical_decide.hpp`) contains:
+- `table_alias`: The alias used in the DECIDE clause
+- `source_table_index`: Index of the source table in the plan
+- `entity_key_bindings`: Column bindings for the entity key columns
+- `entity_key_physical_indices`: Physical chunk positions (populated later during plan creation)
+- `scoped_variable_indices`: Which DECIDE variables are scoped to this entity
+
 ## 3. Constraint Validation
 
 The primary role of the `DecideConstraintsBinder` is to enforce the **Linearity Assumption** required by ILP solvers.

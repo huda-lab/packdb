@@ -176,12 +176,34 @@ variable_type:
 				{ $$ = makeTypeName("bool_variable"); $$->location = @1; }
 		;
 
-/* A single typed variable declaration: "x IS INTEGER" or just "x" (defaults to INTEGER) */
+/* A single typed variable declaration:
+ *   "x IS INTEGER"            -- row-scoped (one per result row)
+ *   "x"                       -- row-scoped, defaults to INTEGER
+ *   "T.x IS BOOLEAN"          -- table-scoped (one per entity in table T)
+ *   "T.x"                     -- table-scoped, defaults to INTEGER
+ */
 typed_decide_variable:
-			ColId IS variable_type
+			ColId '.' ColId IS variable_type
 				{
-					/* Create a comparison node: ColId = type_marker */
-					/* This reuses the existing pattern - x IS INTEGER becomes x = "integer_variable" */
+					/* Table-scoped variable: T.x IS TYPE */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make2(makeString($1), makeString($3));
+					col->location = @1;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$5, @2);
+				}
+			| ColId '.' ColId
+				{
+					/* Table-scoped variable: T.x (defaults to INTEGER) */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make2(makeString($1), makeString($3));
+					col->location = @1;
+					PGTypeName *deftype = makeTypeName("integer_variable");
+					deftype->location = @1;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)deftype, @1);
+				}
+			| ColId IS variable_type
+				{
+					/* Row-scoped variable: x IS TYPE */
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make1(makeString($1));
 					col->location = @1;
@@ -189,7 +211,7 @@ typed_decide_variable:
 				}
 			| ColId
 				{
-					/* Just a variable name - defaults to INTEGER */
+					/* Row-scoped variable: x (defaults to INTEGER) */
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make1(makeString($1));
 					col->location = @1;

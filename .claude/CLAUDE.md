@@ -47,13 +47,14 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 SELECT select_list
 FROM table_expression
 [WHERE ...]
-DECIDE variable_name [IS type] [, ...]
+DECIDE [Table.]variable_name [IS type] [, ...]
 SUCH THAT constraint [AND constraint ...]
 [MAXIMIZE | MINIMIZE] SUM|MIN|MAX(linear_expression)
 [MINIMIZE] SUM(POWER(linear_expression, 2))  -- convex QP
 ```
 
 - Variable types: `IS BOOLEAN` (0/1), `IS INTEGER` (default, non-negative), `IS REAL` (continuous, non-negative)
+- **Table-scoped variables**: `DECIDE Table.var IS TYPE` — one variable per unique entity in the source table instead of one per result row. All result rows from the same entity share the same variable value. Reduces solver variable count from `num_rows` to `num_entities`. Table qualifier must match an alias or table name in the FROM clause. Mixed queries can have both row-scoped and table-scoped variables.
 - Constraints: linear expressions with `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN` (all operators supported on both per-row and aggregate constraints; `IN` on aggregates not supported)
 - Conditional: `expression WHEN condition` (postfix, on constraints and objectives)
 - Grouping: `SUM(expr) op rhs PER column` or `PER (col1, col2, ...)` (one constraint per distinct value/combination)

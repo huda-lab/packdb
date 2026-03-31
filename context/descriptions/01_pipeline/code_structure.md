@@ -156,3 +156,21 @@ classDiagram
 
 ### `src/packdb/naive/deterministic_naive.cpp`
 -   **`DeterministicNaive::Solve(const ILPModel &)`**: Converts ILPModel to HiGHS format (COO→CSR), solves, returns solution vector.
+
+## 4. Table-Scoped Variable Support
+
+### Key Structs
+
+-   **`EntityScopeInfo`** (`src/include/duckdb/planner/operator/logical_decide.hpp`): Carries table-scoped variable metadata through the plan. Contains `table_alias`, `source_table_index`, `entity_key_bindings` (logical column bindings), `entity_key_physical_indices` (physical chunk positions, resolved during plan creation in `plan_decide.cpp`), and `scoped_variable_indices`.
+-   **`EntityMapping`** (`src/include/duckdb/packdb/solver_input.hpp`): Execution-time mapping from rows to entity IDs. Contains `num_entities` and `row_to_entity` vector. Built during Phase 1.5 in `physical_decide.cpp`.
+-   **`VarIndexer`** (`src/include/duckdb/packdb/ilp_model.hpp`): Computes and encapsulates the three-block variable layout (row-scoped, entity-scoped, global auxiliary). Provides `Get(var_idx, row)` for index lookup and `NumInstances(var_idx)` for instance count. Built via `Build()` in `ilp_model_builder.cpp`, with a lightweight `BuildRef()` variant for readback.
+
+### Key Code Paths
+
+-   **Grammar**: `third_party/libpg_query/grammar/statements/select.y` — `ColId '.' ColId IS variable_type` rule for qualified variable declarations.
+-   **Binder**: `src/planner/binder/statement/bind_select_node.cpp` — resolves table alias, creates `EntityScopeInfo`, stores on `BoundSelectNode`.
+-   **Plan creation**: `src/execution/physical_plan/plan_decide.cpp` — transfers `EntityScopeInfo` to `LogicalDecide` / `PhysicalDecide`, resolves logical column bindings to physical chunk indices via `op.children[0]->GetColumnBindings()`.
+-   **Optimizer**: `src/optimizer/decide/decide_optimizer.cpp` — auxiliary variables receive `INVALID_INDEX` scope (row-scoped); entity scope propagated via `variable_entity_scope` vector.
+-   **Execution (Phase 1.5)**: `src/execution/operator/decide/physical_decide.cpp` — evaluates entity key columns, builds `EntityMapping` using `unordered_map<string, idx_t>` with NULL-safe composite key tagging.
+-   **Model building**: `src/packdb/utility/ilp_model_builder.cpp` — `VarIndexer::Build()` computes three-block layout; aggregate constraint coefficients accumulated via `unordered_map<int, double>` for entity-scoped variables.
+-   **Readback**: `src/execution/operator/decide/physical_decide.cpp` (`GetData`) — uses `gstate.var_indexer.Get(var_idx, row)` for all variable types.

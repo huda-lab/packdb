@@ -11,7 +11,29 @@ The core logic lives in `SolverModel::Build()`, a static method that takes a `So
 
 ## Variable Setup
 
-The ILP has `num_rows * num_decide_vars` solver variables. Each DECIDE variable is replicated once per row, forming a 2D grid flattened into a 1D array indexed as `row * num_decide_vars + var_idx`.
+### VarIndexer: Three-Block Layout
+
+The `VarIndexer` (defined in `ilp_model.hpp`) computes the total number of solver variables and maps each (DECIDE variable, row) pair to a solver variable index. It uses a three-block layout:
+
+```
+Block 1: Row-scoped variables         [0, num_rows * num_row_vars)
+Block 2: Entity-scoped variables       [block1_end, block1_end + sum(num_entities_per_var))
+Block 3: Global auxiliary variables    [block2_end, block2_end + num_aux_globals)
+```
+
+**Block 1 (Row-scoped)**: Standard DECIDE variables that get one solver variable per row. Indexed as `row * num_row_vars + row_var_offset[var_idx]`. This is the traditional layout — equivalent to the old `row * num_decide_vars + var_idx` when all variables are row-scoped.
+
+**Block 2 (Entity-scoped)**: Table-scoped variables that share a solver variable across rows belonging to the same entity. Each entity-scoped variable gets `num_entities` solver variables (one per unique entity). Indexed as `entity_var_base[var_idx] + entity_id`, where `entity_id` comes from the `EntityMapping::row_to_entity` vector.
+
+**Block 3 (Global auxiliaries)**: Auxiliary variables that exist once globally (COUNT indicators, ABS linearization auxiliaries, MIN/MAX auxiliary variables). These receive `INVALID_INDEX` as their scope marker during optimizer processing, signaling row-scoped treatment.
+
+The `VarIndexer` provides two key methods:
+- **`VarIndexer::Get(var_idx, row)`**: Returns the solver variable index for a given DECIDE variable and row. For row-scoped variables, this computes `row * num_row_vars + offset`. For entity-scoped variables, this looks up `row_to_entity[row]` and returns `entity_var_base[var_idx] + entity_id`.
+- **`VarIndexer::NumInstances(var_idx)`**: Returns the number of solver variable instances for a given DECIDE variable — `num_rows` for row-scoped, `num_entities` for entity-scoped.
+
+The indexer is constructed via two static methods:
+- **`VarIndexer::Build()`**: Full construction from `SolverInput`, computing all offsets and bases.
+- **`VarIndexer::BuildRef()`**: Lightweight construction for readback that reuses the same layout without recomputing.
 
 ### Per-Variable Type and Default Bounds
 
@@ -32,7 +54,7 @@ Explicit bounds from `SolverInput` (extracted from simple constraints like `x >=
 
 ### Expansion to Solver Variables
 
-The per-variable configuration is expanded to all `num_rows * num_decide_vars` solver variables. Every row gets the same bounds and type for a given DECIDE variable.
+Bounds and type properties are assigned per solver variable instance. For row-scoped variables, every row gets the same bounds and type for a given DECIDE variable. For entity-scoped variables, each entity instance gets the same bounds and type — the number of instances is `NumInstances(var_idx)` rather than `num_rows`.
 
 ## Objective Coefficient Array
 
@@ -40,7 +62,9 @@ The objective is represented as a flat `obj_coeffs` vector of size `total_vars`,
 
 - `objective_variable_indices[term_idx]` identifies the DECIDE variable.
 - `objective_coefficients[term_idx][row]` provides the per-row coefficient.
-- Each coefficient is placed at index `row * num_decide_vars + decide_var_idx`.
+- Each coefficient is placed at the solver variable index returned by `var_indexer.Get(decide_var_idx, row)`.
+
+For entity-scoped variables, multiple rows may map to the same solver variable. When this happens, the coefficients from all rows sharing the same entity are **accumulated** (summed) into the same `obj_coeffs` slot. This correctly models the fact that one entity variable participates in the objective across all its rows.
 
 The `maximize` flag is set from `input.sense`.
 
@@ -52,7 +76,8 @@ Each `EvaluatedConstraint` is converted to one or more `ModelConstraint` structs
 
 Fast path when `row_group_ids` is empty. A single `ModelConstraint` is produced that sums over all rows:
 
-- For each term with a valid variable index, all rows contribute: variable index `row * num_decide_vars + decide_var_idx`, coefficient from `row_coefficients[term_idx][row]`.
+- For each term with a valid variable index, all rows contribute: solver variable index from `var_indexer.Get(decide_var_idx, row)`, coefficient from `row_coefficients[term_idx][row]`.
+- For entity-scoped variables, multiple rows may map to the same solver variable index. Coefficients for the same variable are accumulated using an `unordered_map<int, double>` keyed by solver variable index, then flattened to COO format. This correctly handles the case where an entity appears in multiple rows.
 - RHS comes from `rhs_values[0]`.
 - If `was_avg_rewrite` is true, the RHS is scaled by `num_rows` (converting AVG semantics to SUM).
 
@@ -66,7 +91,7 @@ A `group_to_rows` index is built: for each group ID, collect which rows belong t
 
 ### Path 3: Per-Row
 
-One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint contains only the terms for that single row, with RHS from `rhs_values[row]`.
+One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint contains only the terms for that single row, with RHS from `rhs_values[row]`. Variable indices are obtained via `var_indexer.Get(decide_var_idx, row)`.
 
 ## `ApplyComparisonSense()`
 
@@ -115,7 +140,7 @@ This format is consumed directly by Gurobi (`GRBaddconstr` takes COO) and conver
 
 ```
 struct SolverModel {
-    idx_t num_vars;              // total_vars = num_rows * num_decide_vars
+    idx_t num_vars;              // total_vars from VarIndexer (three-block layout)
     vector<double> col_lower;    // Lower bounds per solver variable
     vector<double> col_upper;    // Upper bounds per solver variable
     vector<bool> is_integer;     // True for INTEGER/BOOLEAN, false for REAL

@@ -7,7 +7,7 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
 ## Syntax
 
 ```sql
-DECIDE variable_name [IS type] [, variable_name2 [IS type2] ...]
+DECIDE [Table.]variable_name [IS type] [, [Table.]variable_name2 [IS type2] ...]
 ```
 
 Variables are declared as a comma-separated list with optional type annotations.
@@ -62,7 +62,40 @@ All declared variables are available in:
 - `MAXIMIZE` / `MINIMIZE` objective
 - The `SELECT` list (returned as output columns)
 
-Variables are **per-row**: the solver assigns one value per input row for each variable.
+### Row-Scoped (Default)
+
+By default, variables are **row-scoped**: the solver assigns one independent value per row in the input relation. When the input is a join result, each result row gets its own variable.
+
+```sql
+DECIDE x IS BOOLEAN   -- one x per result row
+```
+
+### Table-Scoped
+
+A **table-scoped** variable is declared with a table qualifier: `DECIDE Table.var IS TYPE`. Instead of one variable per result row, the solver creates one variable per unique entity in the named source table. All result rows originating from the same entity share the same variable value — the **entity consistency guarantee**.
+
+```sql
+-- One keepN per unique nurse, not per join result row
+DECIDE n.keepN IS BOOLEAN
+```
+
+**Entity identification**: All columns from the source table are used as a composite key to identify unique entities. During physical execution (Phase 1.5), the executor scans the result rows, extracts the source-table columns for each scoped variable, and builds entity-to-variable mappings. Multiple result rows with the same entity key are assigned the same solver variable index.
+
+**Aggregate semantics**: SUM and AVG aggregate over result rows, not entities. If nurse Alice appears in 5 result rows (joined with 5 shifts), `SUM(keepN)` counts Alice's `keepN` value 5 times. This follows standard SQL aggregation semantics over the join result.
+
+**Mixed queries**: A single DECIDE clause can declare both row-scoped and table-scoped variables:
+
+```sql
+DECIDE n.keepN IS BOOLEAN, scheduleHours IS INTEGER
+```
+
+Here `keepN` has one value per nurse entity, while `scheduleHours` has one value per result row.
+
+**Performance**: Table-scoped variables reduce the number of solver variables from `num_rows` (join result size) to `num_entities` (distinct entities in the source table), which can significantly reduce solver time for queries with large fan-out joins.
+
+**Limitations**:
+- The table qualifier must match a table alias or name in the `FROM` clause.
+- Entity keys are derived from all columns of the source table; there is no syntax to specify a custom key subset.
 
 ---
 
@@ -97,7 +130,7 @@ All expressions involving decision variables must be linear:
 ## Examples
 
 ```sql
--- Basic boolean selection
+-- Basic boolean selection (row-scoped)
 DECIDE keep IS BOOLEAN
 
 -- Integer variable with default type
@@ -111,17 +144,23 @@ DECIDE x IS REAL
 
 -- Mixed types in same query
 DECIDE s IS BOOLEAN, w IS REAL
+
+-- Table-scoped: one variable per nurse entity
+DECIDE n.keepN IS BOOLEAN
+
+-- Mixed: table-scoped + row-scoped in same query
+DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
 ```
 
 ---
 
 ## Code Pointers
 
-- **Grammar** (variable type rule): `third_party/libpg_query/grammar/statements/select.y:170-177`
+- **Grammar** (variable type rule): `third_party/libpg_query/grammar/statements/select.y`
   ```
   variable_type: INTEGER | REAL | BOOLEAN_P
   ```
-- **Grammar** (comma-separated variable list): `select.y:202-208`
+- **Grammar** (comma-separated variable list, including table-qualified syntax): `select.y`
   ```
   typed_decide_variable_list: typed_decide_variable | list ',' typed_decide_variable
   ```
@@ -142,3 +181,9 @@ DECIDE s IS BOOLEAN, w IS REAL
   - Gurobi: `!is_integer && !is_binary → GRB_CONTINUOUS` (`gurobi_solver.cpp`)
 
 - **Physical execution** (DOUBLE output path): `physical_decide.cpp` — returns raw `double` solution values for REAL vars
+
+- **Table-scoped variables**:
+  - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/logical_decide.hpp` — stores the table alias and entity column indices for each scoped variable
+  - `VarIndexer`: `src/include/duckdb/packdb/utility/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
+  - Entity mapping (Phase 1.5): `src/execution/operator/decide/physical_decide.cpp` — scans result rows, extracts source-table columns, builds entity-to-variable mappings
+  - Physical index resolution: `src/execution/operator/decide/plan_decide.cpp` — resolves table-scoped column references to physical indices in the execution plan

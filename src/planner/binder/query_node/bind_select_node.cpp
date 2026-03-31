@@ -18,6 +18,7 @@
 #include "duckdb/parser/tableref/joinref.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_expanded_expression.hpp"
 #include "duckdb/planner/expression_binder/column_alias_binder.hpp"
@@ -607,22 +608,32 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         vector<string> var_names;
         vector<LogicalType> var_types;
         vector<bool> is_boolean_var;  // Track which variables are BOOLEAN for generating bounds
-        
+
+        // Table-scoped variable tracking
+        vector<EntityScopeInfo> entity_scopes;
+        vector<idx_t> variable_entity_scope;  // per variable: INVALID_INDEX or index into entity_scopes
+        // Map table alias → entity_scopes index (to share scope info for multiple vars on same table)
+        case_insensitive_map_t<idx_t> table_scope_map;
+
         for (const auto& expr_ptr : statement.decide_variables) {
             string name;
+            string table_name;  // empty for row-scoped variables
             string type_marker = "integer_variable";  // Default type
-            
+
             // Handle typed variable declarations (ComparisonExpression from "x IS INTEGER")
             if (expr_ptr->GetExpressionClass() == ExpressionClass::COMPARISON) {
                 const auto& comp = expr_ptr->Cast<duckdb::ComparisonExpression>();
-                
+
                 // LHS should be the variable name (ColumnRefExpression)
                 if (comp.left->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
                     throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration: expected variable name on left side.");
                 }
                 const auto& colref = comp.left->Cast<duckdb::ColumnRefExpression>();
                 name = colref.GetColumnName();
-                
+                if (colref.IsQualified()) {
+                    table_name = colref.GetTableName();
+                }
+
                 // RHS should be the type marker (ConstantExpression with string value)
                 if (comp.right->GetExpressionClass() == ExpressionClass::CONSTANT) {
                     const auto& const_expr = comp.right->Cast<duckdb::ConstantExpression>();
@@ -634,17 +645,67 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 // Plain variable name without type (backward compatibility)
                 const auto& colref = expr_ptr->Cast<duckdb::ColumnRefExpression>();
                 name = colref.GetColumnName();
+                if (colref.IsQualified()) {
+                    table_name = colref.GetTableName();
+                }
             } else {
                 throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration.");
             }
-            
+
             if (bind_context.GetMatchingBinding(name)) {
                 throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
             }
             if (decide_variable_names.count(name)) {
                 throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
             }
-            decide_variable_names.emplace(name, var_names.size());
+
+            idx_t var_idx = var_names.size();
+
+            // Register under unqualified name (always)
+            decide_variable_names.emplace(name, var_idx);
+
+            // Handle table-scoped variable
+            idx_t scope_idx = DConstants::INVALID_INDEX;
+            if (!table_name.empty()) {
+                // Resolve table in the bind context
+                ErrorData error;
+                auto binding = bind_context.GetBinding(table_name, error);
+                if (!binding) {
+                    throw BinderException(*expr_ptr,
+                        "DECIDE variable '%s.%s': table '%s' not found in FROM clause.",
+                        table_name, name, table_name);
+                }
+
+                // Also register under qualified name so constraints can use T.x syntax
+                string qualified_name = table_name + "." + name;
+                decide_variable_names.emplace(qualified_name, var_idx);
+
+                // Reuse existing entity scope if another variable already scoped to this table
+                auto scope_it = table_scope_map.find(table_name);
+                if (scope_it != table_scope_map.end()) {
+                    scope_idx = scope_it->second;
+                    entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
+                } else {
+                    // Create new EntityScopeInfo for this table
+                    EntityScopeInfo scope_info;
+                    scope_info.table_alias = table_name;
+                    scope_info.source_table_index = binding->index;
+                    // Store column bindings for ALL columns of the source table.
+                    // Physical indices are resolved later in plan_decide.cpp
+                    // where the child's column bindings are available.
+                    for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
+                        scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
+                        scope_info.entity_key_bindings.push_back(
+                            ColumnBinding(binding->index, col_idx));
+                    }
+                    scope_info.scoped_variable_indices.push_back(var_idx);
+                    scope_idx = entity_scopes.size();
+                    table_scope_map.emplace(table_name, scope_idx);
+                    entity_scopes.push_back(std::move(scope_info));
+                }
+            }
+
+            variable_entity_scope.push_back(scope_idx);
             var_names.push_back(name);
             var_types.push_back(type_marker == "real_variable" ? LogicalType::DOUBLE : LogicalType::INTEGER);
             is_boolean_var.push_back(type_marker == "bool_variable");
@@ -763,6 +824,10 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             result->decide_variables.push_back(std::move(bound_col_ref));
         }
         result->num_auxiliary_vars = num_auxiliary_vars;
+
+        // Store table-scoped variable metadata
+        result->entity_scopes = std::move(entity_scopes);
+        result->variable_entity_scope = variable_entity_scope;
 
         // count_indicator_links is now populated by DecideOptimizer (post-binding)
         // ne_indicator_indices is now populated by DecideOptimizer (post-binding)

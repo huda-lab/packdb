@@ -3,6 +3,7 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -115,6 +116,15 @@ public:
     bool per_outer_is_easy = false;
     // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
     bool per_inner_was_avg = false;
+
+    // --- Table-scoped variable metadata ---
+
+    //! Entity scope info for each source table with table-scoped variables
+    vector<EntityScopeInfo> entity_scopes;
+
+    //! Per-variable scope assignment: INVALID_INDEX = row-scoped,
+    //! otherwise index into entity_scopes
+    vector<idx_t> variable_entity_scope;
 
 public:
     // Source interface

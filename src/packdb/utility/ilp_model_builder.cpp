@@ -3,15 +3,82 @@
 
 #include <cmath>
 #include <map>
+#include <unordered_map>
 
 namespace duckdb {
+
+// Shared logic for Build and BuildRef — populates all fields except entity data source
+static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
+                                   const vector<EntityMapping> &entity_mappings) {
+    idx.num_rows = input.num_rows;
+    idx_t num_decide_vars = input.num_decide_vars;
+
+    idx.is_entity_scoped.resize(num_decide_vars, false);
+    idx.row_var_offset.resize(num_decide_vars, DConstants::INVALID_INDEX);
+    idx.entity_var_base.resize(num_decide_vars, DConstants::INVALID_INDEX);
+    idx.var_entity_mapping_idx.resize(num_decide_vars, DConstants::INVALID_INDEX);
+
+    // Classify variables and compute offsets
+    idx_t row_var_count = 0;
+    for (idx_t v = 0; v < num_decide_vars; v++) {
+        bool scoped = !input.variable_entity_scope.empty() &&
+                      v < input.variable_entity_scope.size() &&
+                      input.variable_entity_scope[v] != DConstants::INVALID_INDEX;
+        idx.is_entity_scoped[v] = scoped;
+        if (!scoped) {
+            idx.row_var_offset[v] = row_var_count;
+            row_var_count++;
+        }
+    }
+    idx.num_row_vars = row_var_count;
+
+    // Row block: num_rows * num_row_vars
+    idx.entity_block_start = input.num_rows * row_var_count;
+
+    // Entity block: assign base offsets per entity-scoped variable
+    idx_t entity_offset = 0;
+    for (idx_t v = 0; v < num_decide_vars; v++) {
+        if (!idx.is_entity_scoped[v]) {
+            continue;
+        }
+        idx_t scope_idx = input.variable_entity_scope[v];
+        D_ASSERT(scope_idx < entity_mappings.size());
+        idx.var_entity_mapping_idx[v] = scope_idx;
+        idx.entity_var_base[v] = idx.entity_block_start + entity_offset;
+        entity_offset += entity_mappings[scope_idx].num_entities;
+    }
+
+    idx.global_block_start = idx.entity_block_start + entity_offset;
+    idx.total_vars = idx.global_block_start + input.num_global_vars;
+}
+
+VarIndexer VarIndexer::Build(const SolverInput &input) {
+    VarIndexer idx;
+    // Own a copy so this VarIndexer can outlive the SolverInput
+    idx.entity_mappings_owned = input.entity_mappings;
+    idx.entity_mappings_ref = nullptr;
+    BuildVarIndexerCommon(idx, input, idx.entity_mappings_owned);
+    return idx;
+}
+
+VarIndexer VarIndexer::BuildRef(const SolverInput &input) {
+    VarIndexer idx;
+    // Reference without copying — caller must ensure SolverInput outlives this VarIndexer
+    idx.entity_mappings_ref = &input.entity_mappings;
+    BuildVarIndexerCommon(idx, input, input.entity_mappings);
+    return idx;
+}
 
 SolverModel SolverModel::Build(const SolverInput &input) {
     SolverModel model;
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
-    idx_t total_vars = num_rows * num_decide_vars + input.num_global_vars;
+
+    // Build VarIndexer for mixed row-scoped / entity-scoped variable support.
+    // Use BuildRef — the SolverInput outlives this VarIndexer (both are local to Build).
+    VarIndexer indexer = VarIndexer::BuildRef(input);
+    idx_t total_vars = indexer.total_vars;
 
     model.num_vars = total_vars;
 
@@ -52,15 +119,21 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
     }
 
-    // Expand per-variable config to all rows
+    // Expand per-variable config to all solver variables
     model.col_lower.resize(total_vars);
     model.col_upper.resize(total_vars);
     model.is_integer.resize(total_vars, false);
     model.is_binary.resize(total_vars, false);
 
-    for (idx_t row = 0; row < num_rows; row++) {
-        for (idx_t var = 0; var < num_decide_vars; var++) {
-            idx_t var_idx = row * num_decide_vars + var;
+    for (idx_t var = 0; var < num_decide_vars; var++) {
+        idx_t num_instances = indexer.NumInstances(var);
+        for (idx_t inst = 0; inst < num_instances; inst++) {
+            idx_t var_idx;
+            if (!indexer.is_entity_scoped[var]) {
+                var_idx = inst * indexer.num_row_vars + indexer.row_var_offset[var];
+            } else {
+                var_idx = indexer.entity_var_base[var] + inst;
+            }
             model.col_lower[var_idx] = per_var_lower[var];
             model.col_upper[var_idx] = per_var_upper[var];
             model.is_integer[var_idx] = !(input.variable_types[var] == LogicalType::DOUBLE ||
@@ -69,9 +142,9 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
     }
 
-    // Append global auxiliary variables after per-row grid
+    // Append global auxiliary variables after row+entity blocks
     for (idx_t g = 0; g < input.num_global_vars; g++) {
-        idx_t var_idx = num_rows * num_decide_vars + g;
+        idx_t var_idx = indexer.global_block_start + g;
         auto gtype = input.global_variable_types[g];
         model.col_lower[var_idx] = input.global_lower_bounds[g];
         model.col_upper[var_idx] = input.global_upper_bounds[g];
@@ -87,7 +160,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
     // Set objective coefficients for global variables
     for (idx_t g = 0; g < input.num_global_vars; g++) {
-        idx_t var_idx = num_rows * num_decide_vars + g;
+        idx_t var_idx = indexer.global_block_start + g;
         if (g < input.global_obj_coeffs.size()) {
             model.obj_coeffs[var_idx] = input.global_obj_coeffs[g];
         }
@@ -99,10 +172,11 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             idx_t decide_var_idx = input.objective_variable_indices[term_idx];
 
             for (idx_t row = 0; row < num_rows; row++) {
-                idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                idx_t var_idx = indexer.Get(decide_var_idx, row);
                 if (term_idx < input.objective_coefficients.size() &&
                     row < input.objective_coefficients[term_idx].size()) {
-                    model.obj_coeffs[var_idx] = input.objective_coefficients[term_idx][row];
+                    // Use += because entity-scoped vars: multiple rows map to same solver var
+                    model.obj_coeffs[var_idx] += input.objective_coefficients[term_idx][row];
                 }
             }
         }
@@ -114,13 +188,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
     if (input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty()) {
         model.has_quadratic_obj = true;
-
-        // The inner expression of SUM(POWER(expr, 2)) has been evaluated per-row.
-        // For each row, the inner expression is: sum_t(a_{t,row} * x_{var_t}).
-        // Expanding the square: (sum a_t x_t)^2 = sum_i sum_j a_i a_j x_i x_j
-        // Summing over rows gives Q[i,j] = sum_row(a_{i,row} * a_{j,row}).
-        // We also extract linear terms from the constant parts (c_row):
-        // (sum a_t x_t + c)^2 contributes 2*c*a_t to the linear coefficient of x_t.
 
         idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
 
@@ -142,18 +209,13 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 if (a == 0.0) continue;
 
                 if (decide_var_idx == DConstants::INVALID_INDEX) {
-                    // Constant term — contributes to linear objective via 2*c*a_t cross-terms.
-                    // The c^2 constant offset doesn't affect optimality and is omitted.
                     continue;
                 }
 
-                int flat_idx = static_cast<int>(row * num_decide_vars + decide_var_idx);
+                int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
                 row_terms.push_back({flat_idx, a});
             }
 
-            // Build Q entries from outer product of this row's terms.
-            // Standard QP form is (1/2) x^T Q x, so Q[i,j] = 2 * sum_rows(a_i * a_j).
-            // Both diagonal and off-diagonal need the factor of 2.
             for (idx_t i = 0; i < row_terms.size(); i++) {
                 for (idx_t j = 0; j <= i; j++) {
                     int ri = row_terms[i].flat_idx;
@@ -166,7 +228,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             }
 
             // Handle constant term contributions to linear objective
-            // Find constant term for this row (variable_index == INVALID_INDEX)
             double c_row = 0.0;
             for (idx_t t = 0; t < num_q_terms; t++) {
                 if (t < input.quadratic_inner_coefficients.size() &&
@@ -176,8 +237,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 }
             }
             if (c_row != 0.0) {
-                // (expr + c)^2 = expr^2 + 2*c*expr + c^2
-                // The 2*c*a_t terms go into linear objective
                 for (auto &vt : row_terms) {
                     model.obj_coeffs[vt.flat_idx] += 2.0 * c_row * vt.coeff;
                 }
@@ -224,7 +283,10 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         if (is_aggregate) {
             if (!has_groups) {
                 // FAST PATH: no WHEN, no PER — one constraint summing all rows
+                // Use a map to accumulate coefficients for entity-scoped vars
+                // (multiple rows may map to the same solver variable)
                 ModelConstraint constr;
+                std::unordered_map<int, double> coeff_accum;
 
                 for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                     idx_t decide_var_idx = eval_const.variable_indices[term_idx];
@@ -232,10 +294,17 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
                         for (idx_t row = 0; row < num_rows; row++) {
                             double coeff = eval_const.row_coefficients[term_idx][row];
-                            idx_t var_idx = row * num_decide_vars + decide_var_idx;
-                            constr.indices.push_back((int)var_idx);
-                            constr.coefficients.push_back(coeff);
+                            int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                            coeff_accum[var_idx] += coeff;
                         }
+                    }
+                }
+
+                // Flush accumulated coefficients to sparse constraint
+                for (auto &pair : coeff_accum) {
+                    if (pair.second != 0.0) {
+                        constr.indices.push_back(pair.first);
+                        constr.coefficients.push_back(pair.second);
                     }
                 }
 
@@ -283,6 +352,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         continue;
                     }
                     ModelConstraint constr;
+                    std::unordered_map<int, double> coeff_accum;
 
                     for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                         idx_t decide_var_idx = eval_const.variable_indices[term_idx];
@@ -290,10 +360,16 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         if (decide_var_idx != DConstants::INVALID_INDEX) {
                             for (idx_t row : group_rows[g]) {
                                 double coeff = eval_const.row_coefficients[term_idx][row];
-                                idx_t var_idx = row * num_decide_vars + decide_var_idx;
-                                constr.indices.push_back((int)var_idx);
-                                constr.coefficients.push_back(coeff);
+                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                coeff_accum[var_idx] += coeff;
                             }
+                        }
+                    }
+
+                    for (auto &pair : coeff_accum) {
+                        if (pair.second != 0.0) {
+                            constr.indices.push_back(pair.first);
+                            constr.coefficients.push_back(pair.second);
                         }
                     }
 
@@ -320,7 +396,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
                         double coeff = eval_const.row_coefficients[term_idx][row];
-                        idx_t var_idx = row * num_decide_vars + decide_var_idx;
+                        idx_t var_idx = indexer.Get(decide_var_idx, row);
                         constr.indices.push_back((int)var_idx);
                         constr.coefficients.push_back(coeff);
                     }

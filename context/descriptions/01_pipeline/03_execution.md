@@ -16,6 +16,9 @@ DuckDB executes the query plan up to the `PhysicalDecide` node. The operator act
 
 See also: materialization is standard DuckDB pipeline behavior.
 
+### 2.1.5 Phase 1.5: Entity Mapping Construction
+For table-scoped (entity-scoped) decision variables, this phase runs after data materialization but before coefficient evaluation. It evaluates entity key columns per row and builds a mapping from rows to entity IDs. This determines which rows share the same solver variable instance. See `03b_coefficient_evaluation.md` for implementation details.
+
 ### 2.2 Phase 2: Expression Analysis
 Extracts the structure of constraints and objectives into `LinearConstraint` and `LinearObjective` structs. See `03a_expression_analysis.md`.
 

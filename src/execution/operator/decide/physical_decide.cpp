@@ -9,6 +9,7 @@
 
 #include "duckdb/packdb/utility/debug.hpp"
 #include "duckdb/packdb/ilp_solver.hpp"
+#include "duckdb/packdb/ilp_model.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -821,6 +822,7 @@ public:
     bool has_quadratic_objective = false;
 
     vector<double> ilp_solution;
+    VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
 };
 
 class DecideLocalSinkState : public LocalSinkState {
@@ -888,6 +890,74 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
 
     // Evaluate coefficients and build the model (solver provides verbose output)
+
+    //===--------------------------------------------------------------------===//
+    // PHASE 1.5: Build Entity Mappings for Table-Scoped Variables
+    //===--------------------------------------------------------------------===//
+
+    vector<EntityMapping> entity_mappings;
+    for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
+        auto &scope = entity_scopes[scope_idx];
+        EntityMapping mapping;
+        mapping.row_to_entity.resize(num_rows);
+
+        // Read entity key column values directly from the data chunk
+        // using the pre-resolved physical column indices
+        idx_t num_key_cols = scope.entity_key_physical_indices.size();
+        vector<vector<Value>> key_columns(num_key_cols);
+
+        for (idx_t col_idx = 0; col_idx < num_key_cols; col_idx++) {
+            key_columns[col_idx].reserve(num_rows);
+        }
+
+        {
+            ColumnDataScanState key_scan_state;
+            gstate.data.InitializeScan(key_scan_state);
+            DataChunk key_chunk;
+            key_chunk.Initialize(context, gstate.data.Types());
+
+            while (gstate.data.Scan(key_scan_state, key_chunk)) {
+                for (idx_t row_in_chunk = 0; row_in_chunk < key_chunk.size(); row_in_chunk++) {
+                    for (idx_t col_idx = 0; col_idx < num_key_cols; col_idx++) {
+                        idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
+                        key_columns[col_idx].push_back(key_chunk.data[phys_idx].GetValue(row_in_chunk));
+                    }
+                }
+            }
+        }
+
+        // Build composite key → entity_id map (same approach as PER grouping)
+        unordered_map<string, idx_t> key_to_entity;
+        idx_t next_entity = 0;
+
+        for (idx_t row = 0; row < num_rows; row++) {
+            string key;
+            for (idx_t col_idx = 0; col_idx < num_key_cols; col_idx++) {
+                if (col_idx > 0) {
+                    key.push_back('\0');
+                }
+                // Prefix each value with a NULL/non-NULL tag to avoid collisions
+                // between SQL NULL and the literal string "NULL"
+                auto &val = key_columns[col_idx][row];
+                if (val.IsNull()) {
+                    key.push_back('\x00');
+                } else {
+                    key.push_back('\x01');
+                    key += val.ToString();
+                }
+            }
+            auto it = key_to_entity.find(key);
+            if (it == key_to_entity.end()) {
+                key_to_entity[key] = next_entity;
+                mapping.row_to_entity[row] = next_entity;
+                next_entity++;
+            } else {
+                mapping.row_to_entity[row] = it->second;
+            }
+        }
+        mapping.num_entities = next_entity;
+        entity_mappings.push_back(std::move(mapping));
+    }
 
     //===--------------------------------------------------------------------===//
     // PHASE 2: Evaluate Coefficient Expressions
@@ -1296,6 +1366,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     SolverInput solver_input;
     solver_input.num_rows = num_rows;
     solver_input.num_decide_vars = num_decide_vars;
+    solver_input.entity_mappings = std::move(entity_mappings);
+    solver_input.variable_entity_scope = variable_entity_scope;
     
     // Variable types and bounds
     solver_input.variable_types.resize(num_decide_vars);
@@ -1622,6 +1694,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //   Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN
     //   Hard (Big-M indicators): MINIMIZE+MIN or MAXIMIZE+MAX
 
+    // Build a preliminary VarIndexer for computing absolute variable indices
+    // in the MIN/MAX objective constraint generation below.
+    // Use BuildRef — solver_input is alive for the duration of this scope.
+    VarIndexer pre_indexer = VarIndexer::BuildRef(solver_input);
+
+    // Global variables are appended at pre_indexer.global_block_start.
+    // As we add more global vars, their indices are global_block_start + g
+    // where g is the position in the global vars array.
+
     // Save objective data (needed for constraint generation in both paths)
     auto saved_obj_coefficients = solver_input.objective_coefficients;
     auto saved_obj_var_indices = solver_input.objective_variable_indices;
@@ -1678,7 +1759,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             bool inner_easy = per_inner_is_easy;
             double M = compute_big_m();
 
-            idx_t z_base = num_rows * num_decide_vars + solver_input.num_global_vars;
+            idx_t z_base = pre_indexer.global_block_start + solver_input.num_global_vars;
             for (idx_t g = 0; g < K; g++) {
                 group_value_indices[g] = z_base + g;
                 solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
@@ -1701,7 +1782,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -1728,7 +1809,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -1769,13 +1850,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         if (inner_is_minmax && outer_is_sum) {
             // Outer SUM: objective = sum of z_g's
             for (idx_t g = 0; g < K; g++) {
-                solver_input.global_obj_coeffs[group_value_indices[g] - (num_rows * num_decide_vars)] = 1.0;
+                solver_input.global_obj_coeffs[group_value_indices[g] - pre_indexer.global_block_start] = 1.0;
             }
         } else if (inner_is_minmax && outer_is_minmax) {
             // Outer MIN/MAX over z_g's: create global w auxiliary
             bool outer_easy = per_outer_is_easy;
 
-            idx_t w_idx = num_rows * num_decide_vars + solver_input.num_global_vars;
+            idx_t w_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
             solver_input.num_global_vars += 1;
             solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
             solver_input.global_lower_bounds.push_back(-1e30);
@@ -1859,7 +1940,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // Create w auxiliary for outer MIN/MAX over group sums
             bool outer_easy = per_outer_is_easy;
 
-            idx_t w_idx = num_rows * num_decide_vars + solver_input.num_global_vars;
+            idx_t w_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
             solver_input.num_global_vars += 1;
             solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
             solver_input.global_lower_bounds.push_back(-1e30);
@@ -1883,7 +1964,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                 coeff /= static_cast<double>(group_rows[g].size());
                             }
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -1912,7 +1993,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                 coeff /= static_cast<double>(group_rows[g].size());
                             }
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = row * num_decide_vars + saved_obj_var_indices[t];
+                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -1948,7 +2029,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool is_min_agg = (flat_objective_agg == ObjectiveAggregateType::MIN_AGG);
         bool is_easy = flat_objective_is_easy;
 
-        idx_t z_idx = num_rows * num_decide_vars + solver_input.num_global_vars;
+        idx_t z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
 
         // Create global variable z (continuous, unbounded)
         solver_input.num_global_vars += 1;
@@ -1973,7 +2054,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t][row];
                     if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = row * num_decide_vars + var;
+                    idx_t var_idx = pre_indexer.Get(var, row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
@@ -1999,7 +2080,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t][row];
                     if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = row * num_decide_vars + var;
+                    idx_t var_idx = pre_indexer.Get(var, row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
@@ -2029,8 +2110,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     }
 
+    // Build VarIndexer for solution readback (also used by model builder)
+    gstate.var_indexer = VarIndexer::Build(solver_input);
+
     // Capture model size before solve (solver may move data)
-    size_t bench_total_vars = (size_t)(solver_input.num_rows * solver_input.num_decide_vars);
+    size_t bench_total_vars = gstate.var_indexer.total_vars;
     size_t bench_total_constraints = solver_input.constraints.size() + solver_input.global_constraints.size();
 
     if (bench) {
@@ -2112,7 +2196,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
+                    idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -2126,7 +2210,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
+                    idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -2142,7 +2226,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
+                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -2156,7 +2240,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
+                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -2171,7 +2255,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = global_row * total_decide_vars + decide_var_idx;
+                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {

@@ -16,6 +16,9 @@ Both Gurobi and HiGHS are exact solvers. For NP-Hard problems (integer optimizat
 -   **Current Limit**: Effective for thousands of rows (HiGHS) to tens of thousands (Gurobi).
 -   **Bottleneck**: For millions of rows, an exact IP solver will time out. Solver time dominates at ~95% of total execution time at scale (see `02_operations/benchmarking.md`).
 
+### 1.3 Table-Scoped Variable Entity Keys
+Table-scoped variables (`DECIDE Table.var`) identify entities using all columns from the source table as a composite key. There is no syntax to specify a custom key subset (e.g., primary key only). For tables with many columns, this may create unnecessarily wide composite keys. Entity identification relies on exact value matching across all columns; if two rows differ in any column (even non-key columns), they are treated as distinct entities.
+
 ## 2. Future Work
 
 ### 2.1 Approximate Solvers (Heuristics)

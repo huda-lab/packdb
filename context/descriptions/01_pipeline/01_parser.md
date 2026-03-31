@@ -89,3 +89,15 @@ The parser emits a `PG_AEXPR_PER_CONSTRAINT` node (analogous to `PG_AEXPR_WHEN_C
 The symbolic layer normalizes the constraint child while passing through the PER column unchanged.
 
 **Combined PER+WHEN**: When both keywords are present, the wrapper nesting is `PER(WHEN(constraint, condition), per_column)`. The parser produces this nesting directly from the `a_expr PER a_expr WHEN a_expr` rule — PER wraps the outer layer, and WHEN wraps the inner constraint+condition pair.
+
+## 7. Table-Scoped Decision Variables
+
+Table-scoped (entity-scoped) decision variables use a qualified `table.variable` syntax, parsed via a dedicated grammar rule in `select.y`:
+
+```yacc
+ColId '.' ColId IS variable_type
+```
+
+When the parser encounters a dotted name in the `DECIDE` clause (e.g., `DECIDE drivers.assigned IS BOOLEAN`), it produces a qualified `PGColumnRef` with a two-part name list — the first part is the table alias, the second is the variable name. This is the same `PGColumnRef` structure DuckDB uses for qualified column references (e.g., `t.col`), so no new AST node types are required.
+
+The symbolic layer treats the qualified variable name as an opaque identifier during normalization, preserving the table prefix through algebraic simplification. The binder (not the parser) is responsible for resolving the table alias and validating that the referenced table exists in the query's bind context.

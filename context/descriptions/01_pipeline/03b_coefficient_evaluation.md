@@ -89,6 +89,27 @@ The objective follows the same pattern as constraints:
 
 If the objective has a WHEN condition, it is evaluated as a boolean mask. Rows where the condition is false or NULL have all their objective coefficients zeroed out (effectively excluding them from the objective sum).
 
+## Entity Mapping Construction (Phase 1.5)
+
+For table-scoped (entity-scoped) decision variables, entity mappings are constructed after data materialization but before coefficient evaluation. This determines how rows map to shared solver variable instances.
+
+### Construction Process
+
+For each `EntityScopeInfo` on the `PhysicalDecide` operator:
+
+1. **Key column evaluation**: The entity key columns (identified by `entity_key_physical_indices`) are evaluated per row from the materialized data.
+2. **Composite key hashing**: For each row, the key column values are concatenated into a composite string key with NULL-safe tagging (to distinguish NULL from the string "NULL"). This uses the same pattern as PER grouping.
+3. **Entity ID assignment**: An `unordered_map<string, idx_t>` maps each unique composite key to an entity ID, assigned in first-seen order.
+4. **Row-to-entity vector**: A `row_to_entity` vector of size `num_rows` is populated, mapping each row to its entity ID.
+
+### EntityMapping Struct
+
+The result is stored in an `EntityMapping` struct (defined in `solver_input.hpp`):
+- `num_entities`: The count of distinct entities found
+- `row_to_entity`: Vector mapping each row index to its entity ID
+
+This mapping is stored on the `SolverInput` and used by the model builder to determine variable indexing for entity-scoped variables.
+
 ## Output
 
 The evaluated data is packaged into a `SolverInput` struct:

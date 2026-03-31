@@ -157,7 +157,10 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
                     return DecideExpression::INVALID;
                 }
                 auto &colref = func.children.front()->Cast<ColumnRefExpression>();
-                auto it = variables.find(colref.GetColumnName());
+                string var_key = colref.IsQualified()
+                    ? (colref.GetTableName() + "." + colref.GetColumnName())
+                    : colref.GetColumnName();
+                auto it = variables.find(var_key);
                 if (it != variables.end() && it->second < var_types.size() &&
                     var_types[it->second] == LogicalType::DOUBLE) {
                     error_msg = StringUtil::Format(

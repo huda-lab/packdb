@@ -13,6 +13,26 @@
 
 namespace duckdb {
 
+//! Tracks entity-scope metadata for decision variables scoped to a base table.
+//! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
+//! row in table T, not per join result row.
+struct EntityScopeInfo {
+    //! Table alias or name used in the DECIDE declaration (e.g., "S" or "Sensors")
+    string table_alias;
+    //! DuckDB table index from the bind context (Binding::index)
+    idx_t source_table_index;
+    //! Column types for the entity key columns
+    vector<LogicalType> entity_key_column_types;
+    //! Physical column indices in the child's output data chunk.
+    //! These are resolved during physical plan creation (plan_decide.cpp)
+    //! from the logical column bindings by matching against the child's GetColumnBindings().
+    vector<idx_t> entity_key_physical_indices;
+    //! Logical column bindings (table_index, col_index) — used to resolve physical indices
+    vector<ColumnBinding> entity_key_bindings;
+    //! Which decide_variables indices are scoped to this table
+    vector<idx_t> scoped_variable_indices;
+};
+
 class LogicalDecide : public LogicalOperator {
 public:
     static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_DECIDE;
@@ -66,6 +86,16 @@ public:
     bool per_outer_is_easy = false;
     // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
     bool per_inner_was_avg = false;
+
+    // --- Table-scoped variable metadata ---
+
+    //! Entity scope info for each source table with table-scoped variables.
+    //! Empty if all variables are row-scoped (default behavior).
+    vector<EntityScopeInfo> entity_scopes;
+
+    //! Per-variable scope assignment: INVALID_INDEX = row-scoped (default),
+    //! otherwise index into entity_scopes.
+    vector<idx_t> variable_entity_scope;
 
 public:
     // --- Implement virtual functions ---

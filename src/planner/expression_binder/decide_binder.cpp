@@ -39,11 +39,14 @@ bool IsScalarValue(ParsedExpression &expr) {
 }
 
 bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-    if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF){
+    if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
         auto &colref = expr.Cast<ColumnRefExpression>();
-        if (!colref.IsQualified()) {
-            return variables.count(colref.GetColumnName()) > 0;
+        if (colref.IsQualified()) {
+            // Check qualified form: Table.var (for table-scoped variables)
+            string qualified = colref.GetTableName() + "." + colref.GetColumnName();
+            return variables.count(qualified) > 0;
         }
+        return variables.count(colref.GetColumnName()) > 0;
     }
     return false;
 }
@@ -55,7 +58,9 @@ static bool IsVariableExpressionConst(const ParsedExpression &expr, const case_i
 	}
 	const auto &colref = expr.Cast<const ColumnRefExpression>();
 	if (colref.IsQualified()) {
-		return false;
+		// Check qualified form: Table.var (for table-scoped variables)
+		string qualified = colref.GetTableName() + "." + colref.GetColumnName();
+		return variables.count(qualified) > 0;
 	}
 	return variables.count(colref.GetColumnName()) > 0;
 }

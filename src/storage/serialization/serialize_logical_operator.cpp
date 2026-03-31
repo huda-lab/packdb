@@ -384,6 +384,38 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(213, "per_inner_is_easy", per_inner_is_easy);
 	serializer.WritePropertyWithDefault<bool>(214, "per_outer_is_easy", per_outer_is_easy);
 	serializer.WritePropertyWithDefault<bool>(215, "per_inner_was_avg", per_inner_was_avg);
+	// Table-scoped variable metadata
+	serializer.WritePropertyWithDefault<vector<idx_t>>(216, "variable_entity_scope", variable_entity_scope);
+	// Flatten entity_scopes into parallel vectors for serialization
+	idx_t num_scopes = entity_scopes.size();
+	serializer.WritePropertyWithDefault<idx_t>(217, "num_entity_scopes", num_scopes);
+	vector<string> scope_aliases;
+	vector<idx_t> scope_table_indices;
+	vector<idx_t> scope_binding_counts; // how many bindings per scope
+	vector<idx_t> scope_binding_tables; // flattened table_index from each ColumnBinding
+	vector<idx_t> scope_binding_cols;   // flattened column_index from each ColumnBinding
+	vector<idx_t> scope_var_counts;     // how many scoped variables per scope
+	vector<idx_t> scope_var_indices;    // flattened scoped_variable_indices
+	for (auto &scope : entity_scopes) {
+		scope_aliases.push_back(scope.table_alias);
+		scope_table_indices.push_back(scope.source_table_index);
+		scope_binding_counts.push_back(scope.entity_key_bindings.size());
+		for (auto &b : scope.entity_key_bindings) {
+			scope_binding_tables.push_back(b.table_index);
+			scope_binding_cols.push_back(b.column_index);
+		}
+		scope_var_counts.push_back(scope.scoped_variable_indices.size());
+		for (auto &vi : scope.scoped_variable_indices) {
+			scope_var_indices.push_back(vi);
+		}
+	}
+	serializer.WritePropertyWithDefault<vector<string>>(218, "scope_aliases", scope_aliases);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(219, "scope_table_indices", scope_table_indices);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(220, "scope_binding_counts", scope_binding_counts);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(221, "scope_binding_tables", scope_binding_tables);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(222, "scope_binding_cols", scope_binding_cols);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(223, "scope_var_counts", scope_var_counts);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(224, "scope_var_indices", scope_var_indices);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -410,6 +442,47 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<bool>(213, "per_inner_is_easy", result->per_inner_is_easy);
 	deserializer.ReadPropertyWithDefault<bool>(214, "per_outer_is_easy", result->per_outer_is_easy);
 	deserializer.ReadPropertyWithDefault<bool>(215, "per_inner_was_avg", result->per_inner_was_avg);
+	// Table-scoped variable metadata
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(216, "variable_entity_scope", result->variable_entity_scope);
+	idx_t num_scopes = 0;
+	deserializer.ReadPropertyWithDefault<idx_t>(217, "num_entity_scopes", num_scopes);
+	if (num_scopes > 0) {
+		vector<string> scope_aliases;
+		vector<idx_t> scope_table_indices;
+		vector<idx_t> scope_binding_counts;
+		vector<idx_t> scope_binding_tables;
+		vector<idx_t> scope_binding_cols;
+		vector<idx_t> scope_var_counts;
+		vector<idx_t> scope_var_indices;
+		deserializer.ReadPropertyWithDefault<vector<string>>(218, "scope_aliases", scope_aliases);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(219, "scope_table_indices", scope_table_indices);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(220, "scope_binding_counts", scope_binding_counts);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(221, "scope_binding_tables", scope_binding_tables);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(222, "scope_binding_cols", scope_binding_cols);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(223, "scope_var_counts", scope_var_counts);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(224, "scope_var_indices", scope_var_indices);
+		// Reconstruct EntityScopeInfo objects
+		idx_t binding_offset = 0;
+		idx_t var_offset = 0;
+		for (idx_t s = 0; s < num_scopes; s++) {
+			EntityScopeInfo scope;
+			scope.table_alias = scope_aliases[s];
+			scope.source_table_index = scope_table_indices[s];
+			idx_t num_bindings = scope_binding_counts[s];
+			for (idx_t b = 0; b < num_bindings; b++) {
+				scope.entity_key_bindings.emplace_back(
+				    scope_binding_tables[binding_offset + b],
+				    scope_binding_cols[binding_offset + b]);
+			}
+			binding_offset += num_bindings;
+			idx_t num_vars = scope_var_counts[s];
+			for (idx_t v = 0; v < num_vars; v++) {
+				scope.scoped_variable_indices.push_back(scope_var_indices[var_offset + v]);
+			}
+			var_offset += num_vars;
+			result->entity_scopes.push_back(std::move(scope));
+		}
+	}
 	return std::move(result);
 }
 

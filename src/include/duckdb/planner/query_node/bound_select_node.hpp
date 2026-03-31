@@ -16,6 +16,7 @@
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -58,6 +59,9 @@ public:
     unique_ptr<Expression> decide_objective;
     //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
+    //! Table-scoped variable metadata (populated during binding, transferred to LogicalDecide)
+    vector<EntityScopeInfo> entity_scopes;
+    vector<idx_t> variable_entity_scope;
     //! MIN/MAX indicator links, objective type, and PER types are now populated by
     //! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
 	//! list of groups

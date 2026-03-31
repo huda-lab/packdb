@@ -38,6 +38,14 @@ struct EvaluatedConstraint {
     idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
 };
 
+//! Maps result rows to unique entities in a source table.
+//! Used for table-scoped decision variables where one variable value
+//! is shared across all result rows from the same base table entity.
+struct EntityMapping {
+    idx_t num_entities = 0;          //! Number of distinct entities in this table
+    vector<idx_t> row_to_entity;     //! [row_idx] -> entity_id (0..num_entities-1)
+};
+
 //! Input for the deterministic solver
 struct SolverInput {
     idx_t num_rows;
@@ -86,6 +94,15 @@ struct SolverInput {
         double rhs;
     };
     vector<RawConstraint> global_constraints;
+
+    // --- Table-scoped variable support ---
+
+    //! Entity mappings: one per EntityScopeInfo (source table with scoped vars)
+    vector<EntityMapping> entity_mappings;
+
+    //! Per-variable scope: INVALID_INDEX = row-scoped (default),
+    //! otherwise index into entity_mappings
+    vector<idx_t> variable_entity_scope;
 };
 
 } // namespace duckdb

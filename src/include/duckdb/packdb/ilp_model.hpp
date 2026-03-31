@@ -15,6 +15,65 @@
 
 namespace duckdb {
 
+//! Maps (decide_var_idx, row) pairs to flat solver variable indices.
+//! Supports mixed row-scoped and entity-scoped variables with a three-block layout:
+//!   Block 1: row-scoped vars  (num_rows * num_row_vars entries)
+//!   Block 2: entity-scoped vars (sum of num_entities per scope)
+//!   Block 3: global auxiliary vars
+struct VarIndexer {
+    idx_t num_rows = 0;
+    idx_t num_row_vars = 0;          //!< Count of row-scoped decide variables
+    idx_t entity_block_start = 0;    //!< First index of entity block
+    idx_t global_block_start = 0;    //!< First index of global block
+    idx_t total_vars = 0;
+
+    //! Per decide-variable: true if entity-scoped
+    vector<bool> is_entity_scoped;
+
+    //! For row-scoped vars: offset within the row block (var_idx → position in row)
+    vector<idx_t> row_var_offset;
+
+    //! For entity-scoped vars: base offset in entity block
+    vector<idx_t> entity_var_base;
+
+    //! For entity-scoped vars: index into entity_mappings source
+    vector<idx_t> var_entity_mapping_idx;
+
+    //! Pointer to entity mappings (not owned — caller ensures lifetime)
+    const vector<EntityMapping> *entity_mappings_ref = nullptr;
+    //! Owned copy of entity mappings (used when VarIndexer must outlive its source)
+    vector<EntityMapping> entity_mappings_owned;
+
+    //! Get the flat solver variable index for a given decide variable at a given row
+    inline idx_t Get(idx_t var_idx, idx_t row) const {
+        if (!is_entity_scoped[var_idx]) {
+            return row * num_row_vars + row_var_offset[var_idx];
+        }
+        auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
+        auto &mapping = mappings[var_entity_mapping_idx[var_idx]];
+        idx_t entity_id = mapping.row_to_entity[row];
+        return entity_var_base[var_idx] + entity_id;
+    }
+
+    //! Get the number of instances (copies) for a given decide variable
+    inline idx_t NumInstances(idx_t var_idx) const {
+        if (!is_entity_scoped[var_idx]) {
+            return num_rows;
+        }
+        auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
+        return mappings[var_entity_mapping_idx[var_idx]].num_entities;
+    }
+
+    //! Build a VarIndexer that OWNS a copy of entity_mappings.
+    //! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).
+    static VarIndexer Build(const SolverInput &input);
+
+    //! Build a VarIndexer that REFERENCES entity_mappings without copying.
+    //! Caller must ensure the SolverInput outlives this VarIndexer.
+    //! Used for temporary indexers (pre_indexer, model builder).
+    static VarIndexer BuildRef(const SolverInput &input);
+};
+
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
 struct ModelConstraint {
     vector<int> indices;       //!< Variable indices into the flattened variable array

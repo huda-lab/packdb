@@ -4,7 +4,7 @@
 
 ```sql
 SELECT ...
-DECIDE variable_name [IS type] [, variable_name2 [IS type2] ...]
+DECIDE [Table.]variable_name [IS type] [, [Table.]variable_name2 [IS type2] ...]
 SUCH THAT
     constraint_expression
     [AND constraint_expression2 ...]
@@ -29,6 +29,39 @@ DECIDE x                      -- same as x IS INTEGER (default)
 DECIDE x IS REAL              -- x is continuous, non-negative
 DECIDE x IS BOOLEAN, y IS INTEGER, z IS REAL  -- multiple typed variables
 ```
+
+### 2.1 Table-Scoped Variables
+
+By default, decision variables are **row-scoped**: the solver creates one variable per row in the input relation. When a query joins multiple tables, the input relation is the join result, and each result row gets its own independent variable.
+
+**Table-scoped** variables are declared with a table qualifier: `DECIDE Table.var IS TYPE`. A table-scoped variable has ONE value per unique entity in the named source table. All result rows originating from the same entity share the same variable value (entity consistency).
+
+- The table qualifier must match a table alias or table name in the `FROM` clause.
+- Entity identification uses all columns from the source table as a composite key.
+- Mixed queries can declare both row-scoped and table-scoped variables.
+- Reduces solver variable count from `num_rows` (join result size) to `num_entities` (distinct entities in the source table).
+
+**SUM/AVG semantics**: Aggregates follow SQL semantics and sum over result rows, not entities. If an entity appears in 3 result rows (because it joined with 3 rows from another table), its variable contributes 3 times to a SUM. This matches what a user would expect from the join result.
+
+**Example:**
+
+```sql
+-- Select nurses to keep, one decision per nurse even though each nurse
+-- appears once per shift they are assigned to.
+SELECT n.name, s.shift_date, keepN
+FROM nurses n
+JOIN shifts s ON n.id = s.nurse_id
+DECIDE n.keepN IS BOOLEAN
+SUCH THAT
+    SUM(keepN * s.hours) <= 100
+MAXIMIZE SUM(keepN * n.skill_score)
+```
+
+Here `n.keepN` is table-scoped to `nurses`: if nurse Alice appears in 5 shift rows, all 5 rows share a single `keepN` variable. Without the `n.` prefix, each of the 5 rows would get its own independent variable.
+
+**Limitations:**
+- The table qualifier must refer to a table or alias present in the `FROM` clause.
+- Entity keys are derived from all columns of the source table. There is no syntax to specify a custom key subset.
 
 ## 3. Constraints
 

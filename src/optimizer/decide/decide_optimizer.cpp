@@ -104,6 +104,9 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 			decide.decide_variables.push_back(std::move(ind_var));
 			decide.ne_indicator_indices.push_back(ind_idx);
 			decide.num_auxiliary_vars++;
+			if (!decide.variable_entity_scope.empty()) {
+				decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+			}
 			// Tag the comparison with the indicator index for direct matching
 			comp.alias = string(NE_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "__";
 		}
@@ -182,6 +185,9 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 						    ColumnBinding(decide.decide_index, indicator_idx));
 						decide.decide_variables.push_back(std::move(ind_var));
 						decide.num_auxiliary_vars++;
+						if (!decide.variable_entity_scope.empty()) {
+							decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+						}
 						count_indicator_map.emplace(var_name, indicator_idx);
 
 						// Record the indicator→original link (once per unique indicator)
@@ -433,6 +439,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
 		decide.decide_variables.push_back(std::move(ind_var));
 		decide.num_auxiliary_vars++;
+		if (!decide.variable_entity_scope.empty()) {
+			decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+		}
 		decide.minmax_indicator_links.emplace_back(fname, ind_idx);
 
 		// Replace MIN/MAX with SUM for the hard part, tagged with indicator index
@@ -462,6 +471,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
 		decide.decide_variables.push_back(std::move(ind_var));
 		decide.num_auxiliary_vars++;
+		if (!decide.variable_entity_scope.empty()) {
+			decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+		}
 		decide.minmax_indicator_links.emplace_back(fname, ind_idx);
 
 		// Rewrite: replace MIN/MAX with SUM, tagged with indicator index
@@ -658,6 +670,9 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				    ColumnBinding(decide.decide_index, aux_idx));
 				decide.decide_variables.push_back(std::move(aux_var));
 				decide.num_auxiliary_vars++;
+				if (!decide.variable_entity_scope.empty()) {
+					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+				}
 
 				// Stash the bound inner expression for constraint generation
 				abs_pairs.emplace_back(aux_idx, func.children[0]->Copy());

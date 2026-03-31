@@ -23,6 +23,32 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->per_inner_is_easy = op.per_inner_is_easy;
     decide_op->per_outer_is_easy = op.per_outer_is_easy;
     decide_op->per_inner_was_avg = op.per_inner_was_avg;
+
+    // Resolve entity key column bindings to physical data chunk positions.
+    // The child's GetColumnBindings() gives us the mapping from logical
+    // (table_index, col_index) to physical chunk position.
+    // Only include columns that survived DuckDB's column pruning.
+    if (!op.entity_scopes.empty()) {
+        auto child_bindings = op.children[0]->GetColumnBindings();
+        for (auto &scope : op.entity_scopes) {
+            scope.entity_key_physical_indices.clear();
+            vector<LogicalType> surviving_types;
+            for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
+                auto &target = scope.entity_key_bindings[k];
+                for (idx_t pos = 0; pos < child_bindings.size(); pos++) {
+                    if (child_bindings[pos].table_index == target.table_index &&
+                        child_bindings[pos].column_index == target.column_index) {
+                        scope.entity_key_physical_indices.push_back(pos);
+                        surviving_types.push_back(scope.entity_key_column_types[k]);
+                        break;
+                    }
+                }
+            }
+            scope.entity_key_column_types = std::move(surviving_types);
+        }
+    }
+    decide_op->entity_scopes = std::move(op.entity_scopes);
+    decide_op->variable_entity_scope = std::move(op.variable_entity_scope);
     return std::move(decide_op);
 }
 

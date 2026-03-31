@@ -118,23 +118,19 @@ static bool SymbolicContainsDecideVariable(const Symbolic &s, const case_insensi
 //===--------------------------------------------------------------------===//
 
 bool IsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-    // deb("IsDecideVariable: Checking expression:", expr.ToString());
-    
     if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-        // deb("  -> Not a column reference");
         return false;
     }
-    
+
     auto &colref = expr.Cast<ColumnRefExpression>();
     if (colref.IsQualified()) {
-        // deb("  -> Qualified column, not a DECIDE variable");
-        return false;
+        // Check qualified form: Table.var (for table-scoped variables)
+        string qualified = colref.GetTableName() + "." + colref.GetColumnName();
+        return variables.count(qualified) > 0;
     }
-    
+
     const auto &name = colref.GetColumnName();
-    bool is_decide_var = variables.count(name) > 0;
-    // deb("  -> Column name:", name, "Is DECIDE variable:", is_decide_var);
-    return is_decide_var;
+    return variables.count(name) > 0;
 }
 
 bool IsRowVarying(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &decide_variables) {

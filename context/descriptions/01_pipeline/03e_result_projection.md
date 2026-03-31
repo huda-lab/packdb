@@ -24,15 +24,17 @@ The output chunk already has columns allocated for both the original data column
 
 ## Solution Mapping
 
-The ILP solution is a flat `vector<double>` indexed as `row * total_decide_vars + var_idx`, where `total_decide_vars` includes both user-declared and auxiliary variables. For each output row and each DECIDE variable:
+The ILP solution is a flat `vector<double>` indexed by solver variable index. The `VarIndexer` maps each (DECIDE variable, row) pair to the correct solver variable index via `gstate.var_indexer.Get(var_idx, row)`. For each output row and each DECIDE variable:
 
 ```
 global_row = current_row_offset + row_in_chunk
-solution_idx = global_row * total_decide_vars + decide_var_idx
+solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row)
 solution_value = ilp_solution[solution_idx]
 ```
 
-A bounds check (`solution_idx < ilp_solution.size()`) provides a fallback of 0.0, though this should not trigger in normal operation.
+For **row-scoped variables**, each row has its own solver variable, so distinct rows generally have distinct solution values. For **entity-scoped variables**, all rows belonging to the same entity map to the same solver variable index and therefore receive the same solution value. This is the key semantic effect of table-scoped variables: if `drivers.assigned` is declared as entity-scoped, every row for driver 42 gets the same `assigned` value.
+
+A bounds check (`solution_idx < ilp_solution.size()`) provides a fallback of 0.0, though this should not trigger in normal operation. The `VarIndexer` used during readback is constructed via `VarIndexer::BuildRef()`, which reuses the same layout computed during model building.
 
 ## Type-Specific Projection
 

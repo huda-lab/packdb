@@ -12,7 +12,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, QCQP, SOCP |
-| [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, scope, linearity | *(no planned features)* |
+| [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, row-scoped/table-scoped, linearity | *(no planned features)* |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER | *(no planned features)* |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
@@ -30,6 +30,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `DECIDE x IS REAL` | Yes | — |
 | `DECIDE x` (default INTEGER) | Yes | — |
 | Multiple variables: `DECIDE x, y` | Yes | — |
+| `DECIDE Table.var` (table-scoped) | Yes (entity-keyed, mixed with row-scoped) | — |
 | `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=` | Yes | — |
 | `<>` (not-equal) | Yes (Big-M disjunction) | — |
 | `AND` constraint separator | Yes | — |
@@ -88,7 +89,7 @@ DECIQL extends SQL with constrained optimization. The key structure:
 SELECT select_list
 FROM table_expression
 [WHERE ...]
-DECIDE variable_name [IS type] [, ...]
+DECIDE [Table.]variable_name [IS type] [, ...]
 SUCH THAT
     constraint [AND constraint ...]
 [MAXIMIZE | MINIMIZE] objective_expression
