@@ -6,18 +6,18 @@ After data materialization (the Sink phase collects all input rows), the first a
 
 The goal of this phase is purely structural: determine *which* DECIDE variables appear in each constraint/objective and *what* coefficient expressions multiply them. The actual numeric evaluation of those coefficients happens later in Phase 2.
 
-**Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (lines ~260-506)
+**Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (AnalyzeConstraint/AnalyzeObjective methods in `DecideGlobalSinkState` constructor)
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 ## `AnalyzeConstraint()`
 
-Recursive traversal of the bound constraint expression tree. Called once per top-level constraint expression, it descends through wrapper layers and ultimately produces `LinearConstraint` structs.
+Recursive traversal of the bound constraint expression tree. Called once per top-level constraint expression, it descends through wrapper layers and ultimately produces `DecideConstraint` structs.
 
 ### Wrapper Detection
 
 Constraints may be wrapped in WHEN and/or PER layers (encoded as tagged `BoundConjunctionExpression` nodes):
 
-1. **PER wrapper**: A `BoundConjunctionExpression` with alias `PER_CONSTRAINT_TAG` and 2 children: `child[0]` is the constraint (possibly further WHEN-wrapped), `child[1]` is the PER column expression. The method extracts the per_column and recurses into `child[0]`.
+1. **PER wrapper**: A `BoundConjunctionExpression` with alias `PER_CONSTRAINT_TAG` and 2+ children: `child[0]` is the constraint (possibly further WHEN-wrapped), `child[1..N]` are the PER column expressions. The method extracts the per_columns and recurses into `child[0]`.
 
 2. **WHEN wrapper**: A `BoundConjunctionExpression` with alias `WHEN_CONSTRAINT_TAG` and 2 children: `child[0]` is the actual constraint, `child[1]` is the WHEN condition. The method extracts the when_condition and recurses into `child[0]`.
 
@@ -79,12 +79,15 @@ A single `coeff_expr * x_i` term. The coefficient is an unevaluated expression t
 ```
 struct DecideConstraint {
     vector<Term> lhs_terms;              // All additive terms from LHS
-    unique_ptr<Expression> rhs_expr;     // RHS expression (may be constant or row-varying)
-    ExpressionType comparison_type;       // <=, >=, =, etc.
-    bool lhs_is_aggregate = false;        // True if original LHS was SUM(...)
+    unique_ptr<Expression> rhs_expr;     // RHS expression (may contain aggregates)
+    ExpressionType comparison_type;       // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
+    bool lhs_is_aggregate = false;        // True if original LHS was an aggregate (e.g., SUM(...))
     bool was_avg_rewrite = false;         // True if originally AVG (RHS needs scaling)
+    idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
+    string minmax_agg_type;              // "min" or "max" (empty if not minmax)
+    idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal (<>)
     unique_ptr<Expression> when_condition; // Optional WHEN condition (nullptr = unconditional)
-    unique_ptr<Expression> per_column;     // Optional PER grouping column (nullptr = no grouping)
+    vector<unique_ptr<Expression>> per_columns; // Optional PER grouping columns (empty = no grouping)
 };
 ```
 
@@ -93,9 +96,10 @@ struct DecideConstraint {
 ```
 struct Objective {
     vector<Term> terms;                    // Linear objective terms
+    unique_ptr<Expression> when_condition; // Optional WHEN condition (nullptr = unconditional)
+    vector<unique_ptr<Expression>> per_columns; // Optional PER grouping columns (empty = no grouping)
     vector<Term> squared_terms;            // Inner linear terms for QP: SUM(POWER(expr, 2))
     bool has_quadratic = false;            // True if objective is quadratic
-    unique_ptr<Expression> when_condition; // Optional WHEN condition (nullptr = unconditional)
 };
 ```
 

@@ -5,6 +5,9 @@ Covers boundary conditions that other test files don't exercise:
   - Very loose constraint (all variables selected)
   - Constraint RHS = 0 (forces all decision vars to 0)
   - Negative objective coefficients
+  - Zero rows (empty result after WHERE) — returns empty result like SQL
+  - Feasibility problem (no MAXIMIZE/MINIMIZE) — xfail, grammar support pending
+  - NULL values in coefficient columns — error: NULLs rejected with COALESCE hint
 """
 
 import time
@@ -246,3 +249,67 @@ def test_negative_objective_coefficients(packdb_cli, duckdb_conn, oracle_solver,
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.edge_case
+def test_zero_rows_empty_input(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """DECIDE on empty result set should return empty results, like standard SQL."""
+    sql = """
+        SELECT l_orderkey, l_linenumber, x
+        FROM lineitem
+        WHERE l_orderkey < 0
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <= 5
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    result, cols = packdb_cli.execute(sql)
+    assert len(result) == 0
+
+
+@pytest.mark.edge_case
+@pytest.mark.xfail(reason="Grammar requires MAXIMIZE/MINIMIZE — feasibility-only not yet supported")
+def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Feasibility problem (no MAXIMIZE/MINIMIZE) — should find any feasible solution."""
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 10.0 AS val UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0 UNION ALL
+            SELECT 4, 40.0 UNION ALL
+            SELECT 5, 50.0
+        )
+        SELECT id, val, x
+        FROM data
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) = 2 AND SUM(x * val) <= 50
+    """
+    result, cols = packdb_cli.execute(sql)
+    assert len(result) == 5
+
+    x_idx = cols.index("x")
+    val_idx = cols.index("val")
+
+    total_x = sum(int(row[x_idx]) for row in result)
+    assert total_x == 2, f"SUM(x) = {total_x}, expected 2"
+
+    weighted_sum = sum(int(row[x_idx]) * float(row[val_idx]) for row in result)
+    assert weighted_sum <= 50 + 1e-4, f"SUM(x*val) = {weighted_sum} > 50"
+
+
+@pytest.mark.edge_case
+@pytest.mark.error
+def test_null_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """NULL values in coefficient columns — PackDB rejects with helpful COALESCE hint."""
+    packdb_cli.assert_error("""
+        WITH data AS (
+            SELECT 1 AS id, 10.0 AS weight, 5.0 AS value UNION ALL
+            SELECT 2, NULL, 3.0 UNION ALL
+            SELECT 3, 8.0, 7.0 UNION ALL
+            SELECT 4, 6.0, NULL
+        )
+        SELECT id, weight, value, x
+        FROM data
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * weight) <= 15
+        MAXIMIZE SUM(x * value)
+    """, match=r"NULL")

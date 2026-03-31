@@ -6,7 +6,7 @@ The model builder transforms the solver-agnostic `SolverInput` (evaluated constr
 
 The core logic lives in `SolverModel::Build()`, a static method that takes a `SolverInput` and returns a fully constructed `SolverModel`.
 
-**Key Source File**: `src/packdb/utility/ilp_model_builder.cpp` (~384 lines)
+**Key Source File**: `src/packdb/utility/ilp_model_builder.cpp`
 **Headers**: `src/include/duckdb/packdb/ilp_model.hpp`, `src/include/duckdb/packdb/solver_input.hpp`
 
 ## Variable Setup
@@ -32,8 +32,8 @@ The `VarIndexer` provides two key methods:
 - **`VarIndexer::NumInstances(var_idx)`**: Returns the number of solver variable instances for a given DECIDE variable — `num_rows` for row-scoped, `num_entities` for entity-scoped.
 
 The indexer is constructed via two static methods:
-- **`VarIndexer::Build()`**: Full construction from `SolverInput`, computing all offsets and bases.
-- **`VarIndexer::BuildRef()`**: Lightweight construction for readback that reuses the same layout without recomputing.
+- **`VarIndexer::Build()`**: Owning construction — copies entity mappings so the VarIndexer can outlive the `SolverInput`. Used for `gstate.var_indexer` which persists through solution readback in `GetData`.
+- **`VarIndexer::BuildRef()`**: Lightweight construction — stores a `const` pointer to the `SolverInput`'s entity mappings without copying. Used for temporary indexers during model building and MIN/MAX objective constraint generation, where the `SolverInput` is guaranteed to outlive the indexer.
 
 ### Per-Variable Type and Default Bounds
 

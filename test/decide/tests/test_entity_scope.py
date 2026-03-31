@@ -7,6 +7,11 @@ Covers:
   - Mixed row-scoped + entity-scoped variables (exercises VarIndexer three-block layout)
   - Entity-scoped with WHEN conditions
   - Error: scoping to nonexistent table
+  - Entity-scoped with PER grouping constraints
+  - Entity-scoped with COUNT rewrite
+  - Entity-scoped with MAX constraint (MIN/MAX linearization)
+  - Entity-scoped with AVG constraint (scaling)
+  - Triple interaction: entity-scoped + WHEN + PER
 """
 
 import pytest
@@ -270,3 +275,248 @@ def test_entity_scoped_nonexistent_table(packdb_cli, duckdb_conn, oracle_solver,
     """
     with pytest.raises(PackDBCliError, match="not found"):
         packdb_cli.execute(sql)
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Entity-scoped with PER grouping constraint
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.per_clause
+def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Entity-scoped variable with PER constraint on region.
+
+    Tests VarIndexer entity dedup + PER group partitioning interaction.
+    SUM(keepN) counts join rows, so each selected nation contributes its
+    customer count to the per-region total.
+    """
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, r.r_name, keepN
+        FROM customer c
+        JOIN nation n ON c.c_nationkey = n.n_nationkey
+        JOIN region r ON n.n_regionkey = r.r_regionkey
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT SUM(keepN) <= 100 PER r_name
+        MAXIMIZE SUM(keepN * c_acctbal)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    assert len(packdb_result) > 0
+
+    nkey_idx = packdb_cols.index("n_nationkey")
+    keep_idx = packdb_cols.index("keepN")
+    region_idx = packdb_cols.index("r_name")
+
+    # Verify entity consistency: same nation → same keepN
+    nation_values = {}
+    for row in packdb_result:
+        nkey = int(row[nkey_idx])
+        keep = int(row[keep_idx])
+        if nkey in nation_values:
+            assert nation_values[nkey] == keep, \
+                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+        else:
+            nation_values[nkey] = keep
+
+    # Verify PER constraint: SUM(keepN) <= 100 per region
+    region_sums = {}
+    for row in packdb_result:
+        region = str(row[region_idx])
+        keep = int(row[keep_idx])
+        region_sums[region] = region_sums.get(region, 0) + keep
+
+    for region, total in region_sums.items():
+        assert total <= 100, \
+            f"PER constraint violated: SUM(keepN) = {total} > 100 for region '{region}'"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Entity-scoped with COUNT rewrite
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.count_rewrite
+def test_entity_scoped_with_count(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Entity-scoped BOOLEAN variable with COUNT constraint.
+
+    COUNT(keepN) for BOOLEAN is rewritten to SUM(keepN). Tests the
+    COUNT→SUM rewrite path with entity-scoped variable indexing.
+    """
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT COUNT(keepN) >= 10
+        MAXIMIZE SUM(keepN * c.c_acctbal)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    assert len(packdb_result) > 0
+
+    # Verify entity consistency
+    nation_values = {}
+    for row in packdb_result:
+        nkey = int(row[1])
+        keep = int(row[2])
+        if nkey in nation_values:
+            assert nation_values[nkey] == keep, \
+                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+        else:
+            nation_values[nkey] = keep
+
+    # Verify COUNT constraint: total selected rows >= 10
+    total_selected = sum(int(row[2]) for row in packdb_result)
+    assert total_selected >= 10, \
+        f"COUNT constraint violated: COUNT(keepN) = {total_selected} < 10"
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Entity-scoped with MAX constraint (easy case)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.min_max
+def test_entity_scoped_with_max(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Entity-scoped variable with MAX(expr) <= K constraint (easy case).
+
+    MAX(keepN * c.c_acctbal) <= 8000 means every customer in a selected
+    nation must have acctbal <= 8000. Tests MIN/MAX linearization with
+    entity-scoped variable indexing.
+    """
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT MAX(keepN * c.c_acctbal) <= 8000
+        MAXIMIZE SUM(keepN)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    assert len(packdb_result) > 0
+
+    # Verify entity consistency
+    nation_values = {}
+    for row in packdb_result:
+        nkey = int(row[1])
+        keep = int(row[3])
+        if nkey in nation_values:
+            assert nation_values[nkey] == keep, \
+                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+        else:
+            nation_values[nkey] = keep
+
+    # Verify MAX constraint: for selected nations, all customer acctbal <= 8000
+    for row in packdb_result:
+        keep = int(row[3])
+        acctbal = float(row[2])
+        if keep == 1:
+            assert acctbal <= 8000 + 1e-4, \
+                f"MAX constraint violated: keepN=1 and c_acctbal={acctbal} > 8000"
+
+
+# ---------------------------------------------------------------------------
+# Test 10: Entity-scoped with AVG constraint
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.avg_rewrite
+def test_entity_scoped_with_avg(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Entity-scoped variable with AVG constraint.
+
+    AVG(keepN * c.c_acctbal) <= 3000 tests the AVG→SUM scaling
+    with entity-scoped variables where the row count (N) differs from
+    the entity count.
+    """
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT AVG(keepN * c.c_acctbal) <= 3000
+        MAXIMIZE SUM(keepN)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    assert len(packdb_result) > 0
+
+    # Verify entity consistency
+    nation_values = {}
+    for row in packdb_result:
+        nkey = int(row[1])
+        keep = int(row[2])
+        if nkey in nation_values:
+            assert nation_values[nkey] == keep, \
+                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+        else:
+            nation_values[nkey] = keep
+
+    # Verify AVG constraint: SUM(keepN * acctbal) / N <= 3000
+    data = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT),
+               CAST(c.c_acctbal AS DOUBLE)
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+    """).fetchall()
+
+    n_total = len(data)
+    weighted_sum = sum(
+        nation_values.get(int(row[0]), 0) * float(row[1])
+        for row in data
+    )
+    avg_val = weighted_sum / n_total
+    assert avg_val <= 3000 + 1e-4, \
+        f"AVG constraint violated: AVG(keepN * c_acctbal) = {avg_val:.2f} > 3000"
+
+
+# ---------------------------------------------------------------------------
+# Test 11: Triple interaction — entity_scope + WHEN + PER
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.per_clause
+@pytest.mark.when_constraint
+def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Triple interaction: entity-scoped variable + WHEN + PER.
+
+    SUM(keepN * c.c_acctbal) <= 50000 WHEN c.c_acctbal > 5000 PER r.r_name
+    means: for each region, the sum of keepN * acctbal over high-balance
+    customers only must be <= 50000.
+    """
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, r.r_name, c.c_acctbal, keepN
+        FROM customer c
+        JOIN nation n ON c.c_nationkey = n.n_nationkey
+        JOIN region r ON n.n_regionkey = r.r_regionkey
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT SUM(keepN * c_acctbal) <= 50000 WHEN c_acctbal > 5000 PER r_name
+        MAXIMIZE SUM(keepN * c_acctbal)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    assert len(packdb_result) > 0
+
+    nkey_idx = packdb_cols.index("n_nationkey")
+    keep_idx = packdb_cols.index("keepN")
+    region_idx = packdb_cols.index("r_name")
+    acctbal_idx = packdb_cols.index("c_acctbal")
+
+    # Verify entity consistency
+    nation_values = {}
+    for row in packdb_result:
+        nkey = int(row[nkey_idx])
+        keep = int(row[keep_idx])
+        if nkey in nation_values:
+            assert nation_values[nkey] == keep, \
+                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+        else:
+            nation_values[nkey] = keep
+
+    # Verify WHEN+PER constraint: per region, sum over high-balance customers <= 50000
+    region_sums = {}
+    for row in packdb_result:
+        acctbal = float(row[acctbal_idx])
+        if acctbal > 5000:  # WHEN filter
+            region = str(row[region_idx])
+            keep = int(row[keep_idx])
+            region_sums[region] = region_sums.get(region, 0.0) + keep * acctbal
+
+    for region, total in region_sums.items():
+        assert total <= 50000 + 1e-4, \
+            f"WHEN+PER constraint violated: region '{region}' sum={total:.2f} > 50000"

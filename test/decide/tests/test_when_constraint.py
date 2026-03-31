@@ -570,3 +570,49 @@ def test_when_constraint_ordering_invariance(packdb_cli):
                 assert rb[i] == ra[i], (
                     f"Ordering changed results: before={rb} vs after={ra}"
                 )
+
+
+@pytest.mark.when_constraint
+@pytest.mark.edge_case
+def test_when_null_condition_column(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """WHEN condition on column with NULL values — NULLs treated as false.
+
+    Rows where the WHEN condition evaluates to NULL should be excluded from
+    the constraint (same as non-matching rows).
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 10.0 AS val, 'R' AS flag UNION ALL
+            SELECT 2, 5.0, NULL UNION ALL
+            SELECT 3, 8.0, 'N' UNION ALL
+            SELECT 4, 15.0, 'R' UNION ALL
+            SELECT 5, 20.0, NULL
+        )
+        SELECT id, val, flag, x
+        FROM data
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) <= 20 WHEN flag = 'R'
+        MAXIMIZE SUM(x * val)
+    """
+    result, cols = packdb_cli.execute(sql)
+    assert len(result) > 0
+
+    id_idx = cols.index("id")
+    val_idx = cols.index("val")
+    flag_idx = cols.index("flag")
+    x_idx = cols.index("x")
+
+    # Verify WHEN constraint: only flag='R' rows contribute
+    when_sum = 0.0
+    for row in result:
+        flag = row[flag_idx]
+        if flag == 'R':
+            when_sum += int(row[x_idx]) * float(row[val_idx])
+
+    assert when_sum <= 20 + 1e-4, \
+        f"WHEN constraint violated: SUM(x*val) WHEN flag='R' = {when_sum} > 20"
+
+    # Verify NULL rows still appear in result (not dropped entirely)
+    null_rows = [row for row in result if row[flag_idx] is None]
+    assert len(null_rows) == 2, \
+        f"Expected 2 NULL-flag rows in result, got {len(null_rows)}"

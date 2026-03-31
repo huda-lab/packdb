@@ -4,7 +4,7 @@
 
 After the ILP solver returns a solution vector, `PhysicalDecide` switches from sink mode to source mode. The `GetData()` method streams results by re-scanning the materialized input data and appending decision variable values from the ILP solution.
 
-**Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (`GetData` method and `DecideGlobalSourceState`, lines ~1221-1357)
+**Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (`GetData` method and `DecideGlobalSourceState`)
 
 ## Source State
 
@@ -34,7 +34,7 @@ solution_value = ilp_solution[solution_idx]
 
 For **row-scoped variables**, each row has its own solver variable, so distinct rows generally have distinct solution values. For **entity-scoped variables**, all rows belonging to the same entity map to the same solver variable index and therefore receive the same solution value. This is the key semantic effect of table-scoped variables: if `drivers.assigned` is declared as entity-scoped, every row for driver 42 gets the same `assigned` value.
 
-A bounds check (`solution_idx < ilp_solution.size()`) provides a fallback of 0.0, though this should not trigger in normal operation. The `VarIndexer` used during readback is constructed via `VarIndexer::BuildRef()`, which reuses the same layout computed during model building.
+A bounds check (`solution_idx < ilp_solution.size()`) provides a fallback of 0.0, though this should not trigger in normal operation. The `VarIndexer` used during readback is constructed via `VarIndexer::Build()` (the owning version), which copies entity mappings so it outlives the `SolverInput`.
 
 ## Type-Specific Projection
 

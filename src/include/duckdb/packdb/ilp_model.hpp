@@ -85,7 +85,7 @@ struct ModelConstraint {
 //! Solver-agnostic optimization model, ready for any backend to consume.
 //! Supports linear objectives (LP/MILP) and convex quadratic objectives (QP/MIQP).
 struct SolverModel {
-    idx_t num_vars;            //!< Total number of variables (num_rows * num_decide_vars)
+    idx_t num_vars;            //!< Total number of variables across all three blocks (row-scoped + entity-scoped + global auxiliary)
 
     //! Per-variable configuration (size = num_vars)
     vector<double> col_lower;  //!< Lower bounds

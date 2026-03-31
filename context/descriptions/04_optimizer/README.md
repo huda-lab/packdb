@@ -34,15 +34,15 @@ This folder documents the optimization strategies for Constrained Optimization P
 | Optimization | Status | Location |
 |---|---|---|
 | WHERE-clause filtering | **Implemented** | Inherited from DuckDB (no DECIDE-specific code) |
-| WHEN-condition coefficient zeroing | **Implemented** | `existing_optimizations/done.md` §2 |
-| Solver selection (Gurobi/HiGHS fallback) | **Implemented** | `existing_optimizations/done.md` §3 |
-| COUNT → SUM rewrite | **Implemented** | `existing_optimizations/done.md` §4 |
-| AVG → SUM rewrite | **Implemented** | `existing_optimizations/done.md` §4 |
-| ABS linearization | **Implemented** | `existing_optimizations/done.md` §4 |
-| MIN/MAX linearization (easy + hard) | **Implemented** | `existing_optimizations/done.md` §4 |
-| `<>` disjunction rewrite | **Implemented** | `existing_optimizations/done.md` §4 |
-| IN on decision variables | **Implemented** | `existing_optimizations/done.md` §4 |
-| DecideOptimizer pass | **Implemented** | `existing_optimizations/done.md` §5 |
+| WHEN-condition coefficient zeroing | **Implemented** | `../01_pipeline/03b_coefficient_evaluation.md` |
+| Solver selection (Gurobi/HiGHS fallback) | **Implemented** | `../01_pipeline/03d_solver_backends.md` |
+| COUNT → SUM rewrite | **Implemented** | `rewrite_passes/done.md` |
+| AVG → SUM rewrite | **Implemented** | `rewrite_passes/done.md` |
+| ABS linearization | **Implemented** | `rewrite_passes/done.md` |
+| MIN/MAX linearization (easy + hard) | **Implemented** | `rewrite_passes/done.md` |
+| `<>` disjunction rewrite | **Implemented** | `rewrite_passes/done.md` |
+| IN on decision variables | **Implemented** | `rewrite_passes/done.md` |
+| DecideOptimizer pass | **Implemented** | `rewrite_passes/done.md` |
 | Constraint-to-bound conversion | **Planned** | `matrix_efficiency/todo.md` |
 | Solver time limit | **Planned** | `matrix_efficiency/todo.md` |
 | Partition-solve (PER decomposition) | **Planned** (foundation ready) | `partition_solve/todo.md` |

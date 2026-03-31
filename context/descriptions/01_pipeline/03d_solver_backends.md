@@ -15,9 +15,9 @@ vector<double> SolveModel(const SolverInput &input) {
 ```
 
 **Key Source Files**:
-- `src/packdb/utility/ilp_solver.cpp` (~17 lines)
-- `src/packdb/gurobi/gurobi_solver.cpp` (~199 lines)
-- `src/packdb/naive/deterministic_naive.cpp` (~189 lines)
+- `src/packdb/utility/ilp_solver.cpp` — solver facade (dispatch logic)
+- `src/packdb/gurobi/gurobi_solver.cpp` — Gurobi backend (C API)
+- `src/packdb/naive/deterministic_naive.cpp` — HiGHS backend (C++ API)
 
 ## Solver Selection
 

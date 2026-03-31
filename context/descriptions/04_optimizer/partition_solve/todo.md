@@ -23,7 +23,7 @@ Check in `physical_decide.cpp` Finalize:
 
 ```cpp
 // Detection
-Check all LinearConstraints have per_column
+Check all DecideConstraints have per_column
 All per_columns reference same column binding
 Objective per_column matches or absent
 

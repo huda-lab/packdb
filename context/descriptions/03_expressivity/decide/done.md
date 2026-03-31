@@ -170,11 +170,12 @@ DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
   - REAL → `LogicalType::DOUBLE`, BOOLEAN/INTEGER → `LogicalType::INTEGER`
   - Boolean type detected via `type_marker == "bool_variable"`
 
-- **ILP model builder** (continuous variable handling):
+- **ILP model builder** (variable type handling):
   `src/packdb/utility/ilp_model_builder.cpp`
   - DOUBLE/FLOAT → `is_integer = false`, bounds `[0, 1e30]`
-  - BOOLEAN → `is_binary = true`, bounds `[0, 1]`
+  - LogicalType::BOOLEAN → `is_binary = true`, bounds `[0, 1]` (only used by optimizer-created auxiliary variables: COUNT/NE indicators)
   - INTEGER → `is_integer = true`, bounds `[0, 1e30]`
+  - Note: User-declared `IS BOOLEAN` variables are mapped to `LogicalType::INTEGER` by the binder (not `LogicalType::BOOLEAN`), with explicit `[0,1]` bounds constraints generated in `bind_select_node.cpp`. The solver result is equivalent, but the mechanism differs from optimizer-created binary auxiliaries.
 
 - **Solver backends** (already supported continuous vars before IS REAL was enabled):
   - HiGHS: `!is_integer → HighsVarType::kContinuous` (`deterministic_naive.cpp`)
@@ -184,6 +185,6 @@ DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
 
 - **Table-scoped variables**:
   - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/logical_decide.hpp` — stores the table alias and entity column indices for each scoped variable
-  - `VarIndexer`: `src/include/duckdb/packdb/utility/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
+  - `VarIndexer`: `src/include/duckdb/packdb/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
   - Entity mapping (Phase 1.5): `src/execution/operator/decide/physical_decide.cpp` — scans result rows, extracts source-table columns, builds entity-to-variable mappings
   - Physical index resolution: `src/execution/operator/decide/plan_decide.cpp` — resolves table-scoped column references to physical indices in the execution plan

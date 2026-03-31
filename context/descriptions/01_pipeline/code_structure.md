@@ -8,7 +8,7 @@ The PackDB extension is integrated across several layers of the DuckDB engine.
 
 ### 1.1 Include Headers (`src/include/duckdb/`)
 -   **Common Enums**:
-    -   `common/enums/decide.hpp`: Defines `DecideSense` (MAX/MIN), `DecideExpressionType`, and other shared enums.
+    -   `common/enums/decide.hpp`: Defines `DecideSense` (MAX/MIN), `DecideExpression`, and other shared enums.
 -   **Binder API**:
     -   `planner/expression_binder/decide_binder.hpp`: Base class for decision binders.
     -   `planner/expression_binder/decide_constraints_binder.hpp`: Specialized binder for `SUCH THAT`.
@@ -21,8 +21,8 @@ The PackDB extension is integrated across several layers of the DuckDB engine.
     -   `packdb/symbolic/decide_symbolic.hpp`: Interface to SymbolicC++.
 -   **Solver & Model Headers**:
     -   `packdb/solver_input.hpp`: `SolverInput`, `EvaluatedConstraint` structs — bridge between execution and solver.
-    -   `packdb/ilp_model.hpp`: `ILPModel`, `ILPConstraint` structs — solver-agnostic model representation.
-    -   `packdb/ilp_solver.hpp`: `SolveILP()` facade declaration.
+    -   `packdb/ilp_model.hpp`: `SolverModel`, `ModelConstraint` structs — solver-agnostic model representation.
+    -   `packdb/ilp_solver.hpp`: `SolveModel()` facade declaration.
     -   `packdb/gurobi/gurobi_solver.hpp`: `GurobiSolver` class declaration.
     -   `packdb/naive/deterministic_naive.hpp`: `DeterministicNaive` class declaration.
 
@@ -39,7 +39,7 @@ The PackDB extension is integrated across several layers of the DuckDB engine.
 -   **Execution Logic**:
     -   `execution/operator/decide/physical_decide.cpp`: The core execution engine and HiGHS integration.
 -   **Solver & Model Layer**:
-    -   `packdb/utility/ilp_model_builder.cpp`: Transforms `SolverInput` → `ILPModel` (variable setup, constraint building, sanity checks).
+    -   `packdb/utility/ilp_model_builder.cpp`: Transforms `SolverInput` → `SolverModel` (variable setup, constraint building, sanity checks).
     -   `packdb/utility/ilp_solver.cpp`: Solver facade — dispatches to Gurobi or HiGHS.
     -   `packdb/gurobi/gurobi_solver.cpp`: Gurobi backend using C API, COO format constraints.
     -   `packdb/naive/deterministic_naive.cpp`: HiGHS backend using C++ API, COO→CSR conversion.
@@ -55,20 +55,31 @@ classDiagram
         +BindExpression()
     }
     class DecideBinder {
-        +ValidateSumArgument()
-        +DetermineIsBoolean()
+        +BindExpression()
+        +BindAggregate()
+        +BindFunction()
+        +GetExpressionType()
     }
     class DecideConstraintsBinder {
-        +BindAndValidate()
+        +BindExpression()
+        +BindComparison()
+        +BindBetween()
+        +BindOperator()
+        +BindConjunction()
+        +BindWhenConstraint()
+        +BindPerConstraint()
     }
     class DecideObjectiveBinder {
-        +BindAndValidate()
+        +BindExpression()
+        +GetExpressionType()
     }
-    
+
     ExpressionBinder <|-- DecideBinder
     DecideBinder <|-- DecideConstraintsBinder
     DecideBinder <|-- DecideObjectiveBinder
 ```
+
+Note: `ValidateSumArgument()` is a free function declared in `decide_binder.hpp`, not a method on any class. It validates that an expression is a linear (or optionally quadratic) combination of decision variables.
 
 ### 2.2 Operator Hierarchy
 Detailed view of how the new operators fit into the query plan.
@@ -104,40 +115,41 @@ classDiagram
         +constraints
         +objective_coefficients
     }
-    class ILPModel {
+    class SolverModel {
         +num_vars
         +col_lower / col_upper
         +constraints
         +Build(SolverInput)
     }
     class GurobiSolver {
-        +Solve(ILPModel)$
+        +Solve(SolverModel)$
         +IsAvailable()$
     }
     class DeterministicNaive {
-        +Solve(ILPModel)$
+        +Solve(SolverModel)$
     }
 
     LogicalOperator <|-- LogicalDecide
     PhysicalOperator <|-- PhysicalDecide
     PhysicalDecide ..> SolverInput : builds
-    SolverInput ..> ILPModel : Build()
-    ILPModel ..> GurobiSolver : dispatched to
-    ILPModel ..> DeterministicNaive : fallback
+    SolverInput ..> SolverModel : Build()
+    SolverModel ..> GurobiSolver : dispatched to
+    SolverModel ..> DeterministicNaive : fallback
 ```
 
 ## 3. Key Methods & Responsibilities
 
 ### `src/packdb/symbolic/decide_symbolic.cpp`
 -   **`ToSymbolicRecursive(ParsedExpression)`**: Walks a DuckDB AST and converts it to a `Symbolic` object.
--   **`NormalizeConstraints(Symbolic)`**: Rearranges terms to isolate decision variables on LHS.
+-   **`NormalizeDecideConstraints(ParsedExpression)`**: Rearranges terms to isolate decision variables on LHS. Takes and returns a `ParsedExpression` (calls `NormalizeConstraintsRecursive` internally).
+-   **`NormalizeDecideObjective(ParsedExpression)`**: Same normalization for the objective expression.
 
 ### `src/planner/expression_binder/decide_binder.cpp`
--   **`ValidateSumArgument`**: Recursively checks that an expression is a linear combination of decision variables. Throws "Non-linear term detected" error.
+-   **`ValidateSumArgument()`** (free function): Recursively checks that an expression is a linear combination of decision variables (or optionally quadratic when `allow_quadratic` is true). Throws "Non-linear term detected" error. Called by both `DecideConstraintsBinder` and `DecideObjectiveBinder`.
 
 ### `src/execution/operator/decide/physical_decide.cpp`
 -   **`Sink(GlobalSinkState, LocalSinkState, DataChunk)`**: Materializes input rows into the `DecideGlobalSinkState`.
--   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds WHEN+PER group mappings, generates Big-M linking constraints for COUNT indicators, constructs `SolverInput`, calls `SolveILP()`, and stores the solution vector.
+-   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds WHEN+PER group mappings, generates Big-M linking constraints for COUNT indicators, constructs `SolverInput`, calls `SolveModel()`, and stores the solution vector.
 -   **`GetData(ExecutionContext, DataChunk)`**: Streaming output. Re-scans the materialized data, projects solution values with type-specific casting (BOOLEAN/INTEGER/DOUBLE rounding), and filters out auxiliary variables.
 
 ### EXPLAIN Support (Logical & Physical)
@@ -145,17 +157,17 @@ classDiagram
 -   **`LogicalDecide::ParamsToString()`** / **`PhysicalDecide::ParamsToString()`**: Build an `InsertionOrderPreservingMap` with `Variables`, `Objective`, and `Constraints` entries. Constraints are extracted by recursively splitting the AND-tree via `CollectConstraintStrings`, unwrapping WHEN/PER wrappers into display suffixes.
 
 ### `src/packdb/utility/ilp_model_builder.cpp`
--   **`ILPModel::Build(const SolverInput &input)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row) and applies AVG→SUM RHS scaling.
+-   **`SolverModel::Build(const SolverInput &input)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row) and applies AVG→SUM RHS scaling.
 
 ### `src/packdb/utility/ilp_solver.cpp`
--   **`SolveILP(const SolverInput &input)`**: Facade that builds the ILPModel and dispatches to GurobiSolver (if available) or DeterministicNaive (HiGHS fallback).
+-   **`SolveModel(const SolverInput &input)`**: Facade that builds the SolverModel and dispatches to GurobiSolver (if available) or DeterministicNaive (HiGHS fallback).
 
 ### `src/packdb/gurobi/gurobi_solver.cpp`
 -   **`GurobiSolver::IsAvailable()`**: One-time lazy check for Gurobi license.
--   **`GurobiSolver::Solve(const ILPModel &)`**: Builds Gurobi model via C API, solves, returns solution vector.
+-   **`GurobiSolver::Solve(const SolverModel &)`**: Builds Gurobi model via C API, solves, returns solution vector.
 
 ### `src/packdb/naive/deterministic_naive.cpp`
--   **`DeterministicNaive::Solve(const ILPModel &)`**: Converts ILPModel to HiGHS format (COO→CSR), solves, returns solution vector.
+-   **`DeterministicNaive::Solve(const SolverModel &)`**: Converts SolverModel to HiGHS format (COO→CSR), solves, returns solution vector.
 
 ## 4. Table-Scoped Variable Support
 
@@ -163,7 +175,7 @@ classDiagram
 
 -   **`EntityScopeInfo`** (`src/include/duckdb/planner/operator/logical_decide.hpp`): Carries table-scoped variable metadata through the plan. Contains `table_alias`, `source_table_index`, `entity_key_bindings` (logical column bindings), `entity_key_physical_indices` (physical chunk positions, resolved during plan creation in `plan_decide.cpp`), and `scoped_variable_indices`.
 -   **`EntityMapping`** (`src/include/duckdb/packdb/solver_input.hpp`): Execution-time mapping from rows to entity IDs. Contains `num_entities` and `row_to_entity` vector. Built during Phase 1.5 in `physical_decide.cpp`.
--   **`VarIndexer`** (`src/include/duckdb/packdb/ilp_model.hpp`): Computes and encapsulates the three-block variable layout (row-scoped, entity-scoped, global auxiliary). Provides `Get(var_idx, row)` for index lookup and `NumInstances(var_idx)` for instance count. Built via `Build()` in `ilp_model_builder.cpp`, with a lightweight `BuildRef()` variant for readback.
+-   **`VarIndexer`** (`src/include/duckdb/packdb/ilp_model.hpp`): Computes and encapsulates the three-block variable layout (row-scoped, entity-scoped, global auxiliary). Provides `Get(var_idx, row)` for index lookup and `NumInstances(var_idx)` for instance count. Built via `Build()` (owning, for readback in `GetData`) or `BuildRef()` (non-owning, for temporary use during model building).
 
 ### Key Code Paths
 

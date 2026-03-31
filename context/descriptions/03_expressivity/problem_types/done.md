@@ -79,6 +79,8 @@ MINIMIZE SUM(POWER(repaired - measured, 2))
 
 ### Feasibility Problems (No Objective)
 
+> **Not yet implemented.** The grammar currently requires `MAXIMIZE` or `MINIMIZE`. This section describes the planned behavior — see `problem_types/todo.md` for status.
+
 Any combination of variable types, with constraints but **no** `MAXIMIZE`/`MINIMIZE` clause. The solver finds any feasible assignment satisfying all constraints.
 
 ```sql
@@ -87,7 +89,7 @@ DECIDE assigned IS BOOLEAN
 SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
 ```
 
-Supported by both Gurobi and HiGHS.
+Both Gurobi and HiGHS support feasibility problems natively.
 
 ---
 

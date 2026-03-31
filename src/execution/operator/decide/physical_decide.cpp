@@ -874,12 +874,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         model_timer.Start();
     }
 
-    // Validate input data
+    // Empty input → return empty result (mirrors standard SQL behavior)
     if (num_rows == 0) {
-        throw InvalidInputException(
-            "DECIDE optimization requires at least one input row. "
-            "The query before DECIDE returned no data. "
-            "Ensure the FROM/WHERE clauses return rows to optimize over.");
+        return SinkFinalizeType::READY;
     }
 
     idx_t num_decide_vars = decide_variables.size();

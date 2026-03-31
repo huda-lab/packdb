@@ -23,7 +23,7 @@ This makes it trivial to determine what exists vs. what needs building.
 | `00_project_overview/` | What PackDB is, the theory behind it, and the DECIDE syntax reference                                              | You are new to the project or need to understand what queries are valid       |
 | `01_pipeline/`         | The query processing pipeline: architecture, each stage in order, source-code map, and a concrete end-to-end trace | You are working on or debugging any part of the DECIDE query path             |
 | `02_operations/`       | Testing methodology, release workflow, benchmarking, and known limitations                                         | You need to run tests, cut a release, benchmark performance, or check whether a feature is supported |
-| `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md                                        | You want to know if a construct is valid, or are implementing a new keyword   |
+| `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md. Also includes `problem_types/` for LP/ILP/QP classification. | You want to know if a construct is valid, or are implementing a new keyword   |
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
 
 ---
@@ -51,12 +51,13 @@ are about to modify source code and need to know where things live on disk.
 | Parser / Symbolic      | Normalizes algebraic expressions into canonical linear form               | `01_pipeline/01_parser.md`    | `src/packdb/symbolic/decide_symbolic.cpp`                                          |
 | Binder                 | Validates linearity, binds decision variables, recognizes DECIDE aggregates | `01_pipeline/02_binder.md`    | `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `bind_select_node.cpp` |
 | Execution (overview)   | Pipeline overview with pointers to sub-phases                             | `01_pipeline/03_execution.md` | `src/execution/operator/decide/physical_decide.cpp`                                |
-| — Expression Analysis  | Extracts `LinearConstraint`/`LinearObjective` from bound expressions      | `01_pipeline/03a_expression_analysis.md` | `physical_decide.cpp` (DecideGlobalSinkState constructor)                 |
+| — Expression Analysis  | Extracts `DecideConstraint`/`Objective` from bound expressions      | `01_pipeline/03a_expression_analysis.md` | `physical_decide.cpp` (DecideGlobalSinkState constructor)                 |
 | — Coefficient Eval     | Evaluates coefficient expressions row-by-row, builds WHEN+PER groupings  | `01_pipeline/03b_coefficient_evaluation.md` | `physical_decide.cpp` (Finalize)                                       |
-| — Model Building       | Transforms `SolverInput` → `ILPModel`                                    | `01_pipeline/03c_model_building.md` | `src/packdb/utility/ilp_model_builder.cpp`                                   |
+| — Model Building       | Transforms `SolverInput` → `SolverModel`                                    | `01_pipeline/03c_model_building.md` | `src/packdb/utility/ilp_model_builder.cpp`                                   |
 | — Solver Backends      | Gurobi (preferred) / HiGHS (fallback) dispatch                           | `01_pipeline/03d_solver_backends.md` | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp`            |
 | — Result Projection    | Projects solution values onto rows with type-specific casting             | `01_pipeline/03e_result_projection.md` | `physical_decide.cpp` (GetData)                                           |
 | EXPLAIN                | EXPLAIN / EXPLAIN ANALYZE / FORMAT JSON output for DECIDE operator        | `01_pipeline/04_explain.md`            | `logical_decide.cpp`, `physical_decide.cpp`, `serialize_logical_operator.cpp` |
+| Code Structure         | File organization, class hierarchy, key methods map                       | `01_pipeline/code_structure.md`        | All PackDB source files                                                            |
 
 > **Note**: Algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
 
@@ -71,3 +72,6 @@ A few topics appear in more than one file. Authoritative sources:
   `02_binder.md` explains what the binder does with that declaration internally.
 - **Linearity constraint** — appears in theory, parser, binder, and syntax docs, each
   scoped to that stage. The user-facing spec is in `syntax_reference.md`.
+- **Table-scoped variables** — `syntax_reference.md` defines the user syntax (`table.var IS type`).
+  `code_structure.md` Section 4 covers the key structs and code paths. `03b_coefficient_evaluation.md`
+  describes the entity mapping construction (Phase 1.5). `03c_model_building.md` covers VarIndexer.

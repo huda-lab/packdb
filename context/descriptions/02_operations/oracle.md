@@ -169,7 +169,7 @@ bash run_tests.sh -m "not large_scale"    # Skip perf tests
 | `error_parser` | Parser-level syntax errors |
 | `error_binder` | Binder-level semantic errors |
 | `error_infeasible` | Infeasible models |
-| `per_clause` | PER keyword (xfail, not implemented) |
+| `per_clause` | PER keyword |
 | `large_scale` | Performance / scale tests |
 | `correctness` | Meta: all oracle comparison tests |
 | `error` | Meta: all error tests |

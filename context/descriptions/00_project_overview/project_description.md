@@ -34,9 +34,9 @@ SUCH THAT constraint_list
 ### 3.1 Key Components
 
 - **Decision Variables**: `DECIDE x IS INTEGER, y IS BOOLEAN` defines variables with their types representing the quantity or selection status of rows.
-- **Variable Types**: Specified in the DECIDE clause. `IS INTEGER` (default) or `IS BOOLEAN` enforces the domain.
-- **Constraints**: `SUM(x * cost) <= Budget` or `x <= 1` defines the bounds.
-- **Objective**: `MAXIMIZE SUM(x * utility)` defines the goal.
+- **Variable Types**: Specified in the DECIDE clause. `IS INTEGER` (default), `IS BOOLEAN` (0/1), or `IS REAL` (continuous, non-negative) enforces the domain.
+- **Constraints**: `SUM(x * cost) <= Budget` or `x <= 1` defines the bounds. Constraints must be linear.
+- **Objective**: `MAXIMIZE SUM(x * utility)` defines the goal. Supports linear objectives and convex quadratic objectives (`MINIMIZE SUM(POWER(expr, 2))`).
 
 ## 4. System Overview
 

@@ -2,6 +2,23 @@
 
 ---
 
+## Feasibility Problems (No Objective)
+
+**Priority: Medium**
+
+The grammar currently requires `MAXIMIZE` or `MINIMIZE` — omitting the objective clause produces a parse error. Both solver backends (Gurobi and HiGHS) support feasibility problems natively; the only gap is the grammar.
+
+```sql
+-- NOT YET SUPPORTED (parser rejects)
+SELECT * FROM shifts
+DECIDE assigned IS BOOLEAN
+SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
+```
+
+**Design note**: Requires making the objective clause optional in `third_party/libpg_query/grammar/statements/select.y`. The solver dispatch in `physical_decide.cpp` already handles a zero-objective model — the grammar is the only blocker.
+
+---
+
 ## Negative Variable Domains (Unrestricted Variables)
 
 **Priority: Medium**

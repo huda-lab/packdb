@@ -20,13 +20,13 @@ See also: materialization is standard DuckDB pipeline behavior.
 For table-scoped (entity-scoped) decision variables, this phase runs after data materialization but before coefficient evaluation. It evaluates entity key columns per row and builds a mapping from rows to entity IDs. This determines which rows share the same solver variable instance. See `03b_coefficient_evaluation.md` for implementation details.
 
 ### 2.2 Phase 2: Expression Analysis
-Extracts the structure of constraints and objectives into `LinearConstraint` and `LinearObjective` structs. See `03a_expression_analysis.md`.
+Extracts the structure of constraints and objectives into `DecideConstraint` and `Objective` structs. See `03a_expression_analysis.md`.
 
 ### 2.3 Phase 3: Coefficient Evaluation
 Evaluates coefficient expressions against materialized data. Computes WHEN+PER groupings. See `03b_coefficient_evaluation.md`.
 
 ### 2.4 Phase 4: Model Building & Solving
-Transforms evaluated constraints into a solver-agnostic `ILPModel` via `ILPModel::Build()`, then dispatches to Gurobi or HiGHS. See `03c_model_building.md` and `03d_solver_backends.md`.
+Transforms evaluated constraints into a solver-agnostic `SolverModel` via `SolverModel::Build()`, then dispatches to Gurobi or HiGHS. See `03c_model_building.md` and `03d_solver_backends.md`.
 
 ### 2.5 Phase 5: Result Projection (Source)
 Projects solution values back onto original rows with type-specific casting. See `03e_result_projection.md`.

@@ -35,7 +35,7 @@ Currently, the entire dataset is materialized. Future work could explore "Intera
 Implemented. See `context/descriptions/03_expressivity/when/done.md`.
 
 ### ~~3.2 Gurobi Solver Integration~~
-Implemented. See `context/descriptions/04_optimizer/existing_optimizations/done.md` §3.
+Implemented. See `context/descriptions/01_pipeline/03d_solver_backends.md`.
 
 ### ~~3.3 Correlated Subquery Unnesting~~
 Implemented. Correlated subqueries in `SUCH THAT` constraints are unnested into joins before the DECIDE clause. See `test/decide/tests/test_cons_correlated_subquery.py`.

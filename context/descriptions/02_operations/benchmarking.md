@@ -56,7 +56,7 @@ When `PACKDB_BENCH=1` is set (automatically by `make decide-bench`), the DECIDE 
 ```
 PACKDB_BENCH: optimizer_ms=0.01        # DecideOptimizer rewrite passes
 PACKDB_BENCH: model_construction_ms=32  # ILP model building (constraint generation, WHEN/PER eval)
-PACKDB_BENCH: solver_ms=1448            # SolveILP() call (Gurobi or HiGHS)
+PACKDB_BENCH: solver_ms=1448            # SolveModel() call (Gurobi or HiGHS)
 PACKDB_BENCH: total_variables=9965      # num_rows * num_decide_vars
 PACKDB_BENCH: total_constraints=5       # per-row + global constraints
 PACKDB_BENCH: num_rows=9965

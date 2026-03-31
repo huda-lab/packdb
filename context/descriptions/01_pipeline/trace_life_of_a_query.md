@@ -88,9 +88,9 @@ The operator evaluates the constraint expressions for each buffered row.
 
 - Coeffs: $100 \cdot x_0, 60 \cdot x_1, 120 \cdot x_2$.
 
-### Step C: Solver Model (ILPModel)
+### Step C: Solver Model (SolverModel)
 
-The operator builds a `SolverInput`, which `ILPModel::Build()` transforms into the following ILP model (conceptually):
+The operator builds a `SolverInput`, which `SolverModel::Build()` transforms into the following ILP model (conceptually):
 
 ```
 Maximize
@@ -108,7 +108,7 @@ End
 
 ### Step D: Solving
 
-The solver facade (`SolveILP()`) dispatches to Gurobi (preferred) or HiGHS (fallback) to solve the model.
+The solver facade (`SolveModel()`) dispatches to Gurobi (preferred) or HiGHS (fallback) to solve the model.
 
 - **Solution**: $x_0 = 1, x_1 = 0, x_2 = 1$.
 - **Check**: Weight $20(1) + 10(0) + 30(1) = 50 \leq 50$. (Valid)

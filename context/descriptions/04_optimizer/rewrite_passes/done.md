@@ -21,4 +21,4 @@ The binder recognizes COUNT, AVG, ABS, MIN, and MAX as valid DECIDE aggregates/f
 
 This separation keeps semantic validation in the binder and algebraic transformation in the optimizer.
 
-**Cross-reference**: See `existing_optimizations/done.md` for detailed descriptions of each rewrite, including easy/hard case classification for MIN/MAX.
+**Cross-reference**: See `../../03_expressivity/sql_functions/done.md` for detailed descriptions of each rewrite, including easy/hard case classification for MIN/MAX.

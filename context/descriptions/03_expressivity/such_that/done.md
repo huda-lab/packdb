@@ -167,13 +167,14 @@ SUCH THAT
 
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
   - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=`, `<>` (all operators on both per-row and aggregate)
-  - `BindBetween()` (lines 216-232) — desugars to two comparison constraints
-  - `BindOperator()` (lines 198-210) — handles IN clause
-  - `BindWhenConstraint()` (lines 258-302) — handles WHEN modifier
+  - `BindBetween()` — desugars to two comparison constraints
+  - `BindOperator()` — handles IN clause
+  - `BindWhenConstraint()` — handles WHEN modifier
+  - `BindPerConstraint()` — handles PER modifier
   - Validates that only SUM, AVG, MIN, and MAX are used as aggregate functions
 
 - **Subquery handling**: `src/planner/expression_binder/decide_binder.cpp`
-  - `DecideBinder::BindExpression()` (lines 233-259) — validates scalar-only, no DECIDE variable references, then delegates to `ExpressionBinder::BindExpression` for both uncorrelated and correlated subqueries
-  - Correlated subquery RHS validation at execution: `src/packdb/utility/ilp_model_builder.cpp` (lines 153-163) — checks that aggregate constraint RHS is scalar
+  - `DecideBinder::BindExpression()` — validates scalar-only, no DECIDE variable references, then delegates to `ExpressionBinder::BindExpression` for both uncorrelated and correlated subqueries
+  - Correlated subquery RHS validation at execution: `src/packdb/utility/ilp_model_builder.cpp`, `SolverModel::Build()` — checks that aggregate constraint RHS is scalar
 
 - **Execution** (constraint matrix construction): `src/execution/operator/decide/physical_decide.cpp`

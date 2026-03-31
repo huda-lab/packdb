@@ -6,7 +6,7 @@ After expression analysis extracts the *structure* of constraints and objectives
 
 The input to this phase is a set of `DecideConstraint` and `Objective` structs (from Phase 1) containing unevaluated expression trees. The output is `EvaluatedConstraint` structs and objective coefficient arrays containing concrete `double` values for every (term, row) pair.
 
-**Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (`Finalize()` method, lines ~564-1219)
+**Key Source File**: `src/execution/operator/decide/physical_decide.cpp` (`Finalize()` method)
 
 ## Expression Transformation
 

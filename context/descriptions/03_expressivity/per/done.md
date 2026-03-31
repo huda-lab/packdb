@@ -127,7 +127,7 @@ idx_t num_groups = 0;           // 0 = ungrouped, >0 = number of groups
 | PER only | 0..K-1 | K | K (one per group) |
 | WHEN + PER | 0..K-1 or INVALID_INDEX | K | K (filtered, grouped) |
 
-`ILPModel::Build` uses a group→rows index for O(N)-total constraint generation across all groups.
+`SolverModel::Build` uses a group→rows index for O(N)-total constraint generation across all groups.
 
 ---
 
@@ -136,8 +136,9 @@ idx_t num_groups = 0;           // 0 = ungrouped, >0 = number of groups
 ### Per-Employee / Per-Group Resource Limits (Repair)
 
 ```sql
-SELECT * DECIDE new_hours IS INTEGER
+SELECT *
 FROM Employees E JOIN WeeklyPlan P ON E.empID = P.empID
+DECIDE new_hours IS INTEGER
 SUCH THAT
     SUM(new_hours) <= 40 PER P.empID AND
     SUM(new_hours) <= 30 WHEN E.title = 'Director' PER P.empID
@@ -147,7 +148,8 @@ MINIMIZE SUM(ABS(new_hours - hours)) PER projectID
 ### Per-Label Coverage (Active Learning / Selection)
 
 ```sql
-SELECT * DECIDE keep IS BOOLEAN FROM Reviews
+SELECT * FROM Reviews
+DECIDE keep IS BOOLEAN
 SUCH THAT
     SUM(keep * weak_label) >= 50 PER weak_label AND
     SUM(keep) BETWEEN 200 AND 400
@@ -173,7 +175,7 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 ## Files Modified
 
 - `src/include/duckdb/common/enums/decide.hpp` — `PER_CONSTRAINT_TAG`
-- `src/include/duckdb/execution/operator/decide/physical_decide.hpp` — `LinearConstraint::per_columns`
+- `src/include/duckdb/execution/operator/decide/physical_decide.hpp` — `DecideConstraint::per_columns`
 - `src/include/duckdb/packdb/solver_input.hpp` — `row_group_ids` replaces `row_mask`
 - `third_party/libpg_query/` — grammar rules, keyword, enum
 - `src/parser/transform/expression/transform_operator.cpp` — transformer

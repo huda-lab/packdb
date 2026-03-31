@@ -92,14 +92,14 @@ DECIDE does not override `EstimateCardinality`. The default behavior propagates 
 
 ### Logical Layer
 
-- **`GetName()` / `ParamsToString()`**: `src/planner/operator/logical_decide.cpp` (lines 47–128)
-- **`CollectConstraintStrings()`**: `src/planner/operator/logical_decide.cpp` (lines 51–89)
-- **Declaration**: `src/include/duckdb/planner/operator/logical_decide.hpp` (lines 77–78, 90)
+- **`GetName()` / `ParamsToString()`**: `src/planner/operator/logical_decide.cpp`
+- **`CollectConstraintStrings()`**: `src/planner/operator/logical_decide.cpp` — recursive AND-tree walker that produces one string per constraint with WHEN/PER suffixes
+- **Declaration**: `src/include/duckdb/planner/operator/logical_decide.hpp`
 
 ### Physical Layer
 
-- **`GetName()` / `ParamsToString()`**: `src/execution/operator/decide/physical_decide.cpp` (lines 245–320)
-- **`CollectConstraintStringsPhysical()`**: `src/execution/operator/decide/physical_decide.cpp` (lines 249–282)
+- **`GetName()` / `ParamsToString()`**: `src/execution/operator/decide/physical_decide.cpp`
+- **`CollectConstraintStringsPhysical()`**: `src/execution/operator/decide/physical_decide.cpp` — physical-layer variant using `BoundExpression` types
 - **Declaration**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 ### Tests

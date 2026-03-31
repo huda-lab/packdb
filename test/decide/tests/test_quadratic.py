@@ -167,6 +167,67 @@ class TestQuadraticBasic:
             x_val = float(row[x_col])
             assert abs(x_val) < 0.01, f"Expected x=0, got x={x_val}"
 
+    def test_qp_with_when(self, packdb_cli):
+        """QP with WHEN filter — only matching rows contribute to objective."""
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 10.0 AS target, 'A' AS grp UNION ALL
+                SELECT 2, 20.0, 'B' UNION ALL
+                SELECT 3, 30.0, 'A' UNION ALL
+                SELECT 4, 40.0, 'B'
+            )
+            SELECT id, target, grp, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 100
+            MINIMIZE SUM(POWER(x - target, 2)) WHEN grp = 'A'
+        """
+        result, cols = packdb_cli.execute(sql)
+        x_col = cols.index("x")
+        id_col = cols.index("id")
+        grp_col = cols.index("grp")
+        target_col = cols.index("target")
+
+        # Rows matching WHEN (grp='A') should track their target
+        for row in result:
+            grp = str(row[grp_col])
+            x_val = float(row[x_col])
+            target = float(row[target_col])
+            if grp == 'A':
+                assert abs(x_val - target) < 0.01, \
+                    f"Row {row[id_col]} (grp=A): expected x≈{target}, got x={x_val}"
+
+    def test_qp_multiple_variables(self, packdb_cli):
+        """QP with two REAL decision variables — both in constraints, one in QP objective.
+
+        Tests that multiple variables coexist correctly when the QP objective
+        references only one variable. x should track targets; y is constrained
+        independently via a per-row upper bound.
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 10.0 AS target, 50.0 AS cap UNION ALL
+                SELECT 2, 20.0, 50.0 UNION ALL
+                SELECT 3, 30.0, 50.0
+            )
+            SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
+            FROM data
+            DECIDE x IS REAL, y IS REAL
+            SUCH THAT x >= 0 AND x <= 100
+                AND y >= 0 AND y <= cap
+            MINIMIZE SUM(POWER(x - target, 2))
+        """
+        result, cols = packdb_cli.execute(sql)
+        x_col = cols.index("x")
+        id_col = cols.index("id")
+
+        expected_x = {1: 10.0, 2: 20.0, 3: 30.0}
+        for row in result:
+            rid = int(row[id_col])
+            x_val = float(row[x_col])
+            assert abs(x_val - expected_x[rid]) < 0.01, \
+                f"Row {rid}: expected x={expected_x[rid]}, got x={x_val}"
+
 
 # ===================================================================
 # Error tests

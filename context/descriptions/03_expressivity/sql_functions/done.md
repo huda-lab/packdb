@@ -65,7 +65,7 @@ SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
 MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 ```
 
-**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. At execution time (`physical_decide.cpp`), `BoundAggregateExpression::function.name == "avg"` sets `LinearConstraint::was_avg_rewrite`, propagated to `EvaluatedConstraint::was_avg_rewrite`. RHS scaling applied in `ilp_model_builder.cpp` at model build time.
+**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the constraint with `AVG_REWRITE_TAG` in the aggregate's alias. At execution time (`physical_decide.cpp`), the code checks `agg.alias == AVG_REWRITE_TAG` to set `DecideConstraint::was_avg_rewrite`, propagated to `EvaluatedConstraint::was_avg_rewrite`. RHS scaling applied in `ilp_model_builder.cpp` at model build time.
 
 **Tests**: `test/decide/tests/test_avg.py` — 9 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, and no-decide-var passthrough.
 
@@ -122,7 +122,7 @@ SUCH THAT MAX(x * cost) <= 50 WHEN category = 'electronics'
 MINIMIZE MAX(x * deviation) WHEN active = 1
 ```
 
-**Code**: The rewrite begins in `bind_select_node.cpp` where `RewriteMinMaxConstraints()` and `RewriteMinMaxInExpression()` detect MIN/MAX aggregates and insert `__MIN__`/`__MAX__` marker tags into the symbolic representation. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX alongside SUM and AVG. The symbolic layer (`decide_symbolic.cpp`) recognizes the `__MIN__`/`__MAX__` markers. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by `solver_input.hpp` and `ilp_model_builder.cpp`.
+**Code**: The rewrite is performed by `DecideOptimizer::RewriteMinMaxConstraints` and `DecideOptimizer::RewriteMinMaxInConstraint` in `decide_optimizer.cpp`, which detect MIN/MAX aggregates and insert `__MIN__`/`__MAX__` marker tags into the symbolic representation. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX alongside SUM and AVG. The symbolic layer (`decide_symbolic.cpp`) recognizes the `__MIN__`/`__MAX__` markers. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by `solver_input.hpp` and `ilp_model_builder.cpp`.
 
 ---
 

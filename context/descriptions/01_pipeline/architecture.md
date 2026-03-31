@@ -8,7 +8,8 @@ PackDB is implemented as an extension to DuckDB. It leverages DuckDB's extensibl
 
 *   **DuckDB Core**: Responsible for storage, transaction management, and executing the standard relational parts of the query (scans, joins, filters).
 *   **Symbolic Layer (Parser)**: Uses `SymbolicC++` to parse and normalize algebraic expressions within the `DECIDE` and `SUCH THAT` clauses. It converts user-friendly SQL expressions into a canonical form.
-*   **Binder & Rewrite Passes**: Validates the mathematical properties of the optimization problem (e.g., linearity checks) and applies algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization) that prepare expressions for the solver.
+*   **Binder**: Validates the mathematical properties of the optimization problem (e.g., linearity checks) and applies IN domain rewrites (`RewriteInDomain` in `bind_select_node.cpp`).
+*   **DecideOptimizer** (separate optimizer pass after binding): Applies algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicator creation) that prepare expressions for the solver.
 *   **Execution Runtime**: A dedicated physical operator (`PhysicalDecide`) that acts as a bridge between the relational engine and the linear solver.
 *   **Solvers**: PackDB uses **Gurobi** as its primary ILP solver — empirical benchmarking showed it to be significantly faster than HiGHS for PackDB workloads. **HiGHS** (open-source, bundled) is retained as a fallback for environments without a Gurobi license, but is substantially slower in practice.
 
@@ -29,7 +30,7 @@ graph TD
     subgraph PackDB Execution
         Exec --> Data[Materialize Candidates]
         Data --> Matrix[Build Solver Matrix]
-        Matrix --> Model[ILPModel Builder]
+        Matrix --> Model[SolverModel Builder]
         Model --> Solver[Solver: Gurobi (primary) / HiGHS (slow fallback)]
         Solver --> Result[Map Solution to Rows]
     end
@@ -53,7 +54,7 @@ The `PhysicalDecide` operator works in a "stop-and-go" fashion (pipeline breaker
 1.  **Sink Phase**: It consumes all input tuples from its child operator (the candidate items). These tuples are buffered in memory.
 2.  **Entity Mapping (Phase 1.5)**: For table-scoped (entity-scoped) variables, the operator evaluates entity key columns per row and builds a row-to-entity mapping. This determines which rows share the same solver variable instance.
 3.  **Model Building**: It iterates over the buffered tuples to compute the coefficients for the objective function and constraints. The `VarIndexer` computes a three-block variable layout: row-scoped variables (one per row), entity-scoped variables (one per unique entity), and global auxiliary variables. The indexer replaces the previous flat `row * num_vars + var_idx` formula with scope-aware indexing.
-4.  **Solve Phase**: The constructed model is passed to `ILPModel::Build()` which creates a solver-agnostic representation, then `SolveILP()` dispatches to Gurobi (primary, significantly faster in practice) or HiGHS (slow fallback if Gurobi is unavailable).
+4.  **Solve Phase**: The constructed model is passed to `SolverModel::Build()` which creates a solver-agnostic representation, then `SolveModel()` dispatches to Gurobi (primary, significantly faster in practice) or HiGHS (slow fallback if Gurobi is unavailable).
 5.  **Source Phase**: Once the solver returns, the operator augments the buffered tuples with the solution values (e.g., `x=1` or `x=0`) and streams them to the next operator (e.g., `SELECT` list projection). For entity-scoped variables, all rows belonging to the same entity receive the same solution value via `VarIndexer::Get(var_idx, row)`.
 
 > **Note**: The execution phase is documented in detail across five sub-documents: expression analysis (03a), coefficient evaluation (03b), model building (03c), solver backends (03d), and result projection (03e). See each for implementation details.
