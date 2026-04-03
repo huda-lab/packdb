@@ -72,6 +72,23 @@ Deferred due to:
 
 If implemented, the same syntax-enforced convexity approach should apply: only `SUM(POWER(linear_expr, 2)) <= positive_constant` should be accepted, guaranteeing the feasible region is convex (intersection of ellipsoids).
 
+## Products of Decision Variables (Bilinear Terms)
+
+**Priority: Low**
+
+Currently `x * y` where both are DECIDE variables is rejected. Supporting bilinear terms would enable non-convex QP in both objectives and constraints:
+
+```sql
+-- NOT YET SUPPORTED
+MINIMIZE SUM(x * y)                             -- bilinear objective
+SUCH THAT SUM(x * y) <= 100                     -- bilinear constraint
+```
+
+Deferred due to:
+- Bilinear terms are non-convex — requires Gurobi NonConvex=2, HiGHS cannot handle them
+- Special case: boolean × continuous can be linearized via Big-M without solver extension
+- Requires changes to both binder validation and Q matrix construction
+
 ---
 
 ## SOCP (Second-Order Cone Programming)

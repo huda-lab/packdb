@@ -64,12 +64,14 @@ struct SolverInput {
     vector<idx_t> objective_variable_indices;      // [term_idx]
     DecideSense sense;
 
-    // Quadratic objective: inner linear expression of SUM(POWER(expr, 2)).
-    // When has_quadratic_objective is true, the objective includes a convex
-    // quadratic component. The inner expression coefficients are stored per-term
-    // and per-row, just like the linear objective. The model builder expands
-    // these into the Q matrix via outer products (Q = A^T A, always PSD).
+    // Quadratic objective: inner linear expression of SUM(sign * POWER(expr, 2)).
+    // When has_quadratic_objective is true, the objective includes a quadratic
+    // component. The inner expression coefficients are stored per-term and per-row,
+    // just like the linear objective. The model builder expands these into the
+    // Q matrix via outer products: Q = sign * A^T A.
+    // sign = +1.0 → PSD Q (convex), sign = -1.0 → NSD Q (concave).
     bool has_quadratic_objective = false;
+    double quadratic_sign = 1.0;
     vector<vector<double>> quadratic_inner_coefficients; // [term_idx][row_idx]
     vector<idx_t> quadratic_inner_variable_indices;      // [term_idx]
 

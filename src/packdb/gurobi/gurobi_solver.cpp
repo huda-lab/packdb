@@ -59,6 +59,10 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 error);
     }
     api.setintparam(guard.env, "OutputFlag", 0);
+    // Enable non-convex QP solving via spatial branching when needed
+    if (ilp.nonconvex_quadratic) {
+        api.setintparam(guard.env, "NonConvex", 2);
+    }
     error = api.startenv(guard.env);
     if (error) {
         throw InternalException("Failed to start Gurobi environment (error %d). "

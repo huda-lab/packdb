@@ -114,6 +114,14 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
     //===--------------------------------------------------------------------===//
 
     if (model.has_quadratic_obj && !model.q_vals.empty()) {
+        // HiGHS does not support non-convex QP
+        if (model.nonconvex_quadratic) {
+            throw InvalidInputException(
+                "Non-convex quadratic objectives require Gurobi. "
+                "HiGHS only supports convex quadratic programs "
+                "(MINIMIZE with positive-semidefinite Q, or MAXIMIZE with negative-semidefinite Q). "
+                "Either install Gurobi, or reformulate the objective.");
+        }
         // HiGHS does not support MIQP — reject if any variable is integer
         for (idx_t i = 0; i < total_vars; i++) {
             if (model.is_integer[i]) {

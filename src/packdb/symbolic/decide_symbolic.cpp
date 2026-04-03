@@ -1044,8 +1044,8 @@ static bool ExprContainsDecideVar(const ParsedExpression &expr, const case_insen
     return found;
 }
 
-static bool SumInnerIsQuadratic(const ParsedExpression &inner,
-                                const case_insensitive_map_t<idx_t> &decide_variables) {
+static bool SumInnerIsQuadraticCore(const ParsedExpression &inner,
+                                    const case_insensitive_map_t<idx_t> &decide_variables) {
     if (inner.GetExpressionClass() != ExpressionClass::FUNCTION) return false;
     auto &func = inner.Cast<FunctionExpression>();
     string name_lower = StringUtil::Lower(func.function_name);
@@ -1082,6 +1082,34 @@ static bool SumInnerIsQuadratic(const ParsedExpression &inner,
         }
     }
 
+    return false;
+}
+
+static bool SumInnerIsQuadratic(const ParsedExpression &inner,
+                                const case_insensitive_map_t<idx_t> &decide_variables) {
+    // Direct quadratic pattern
+    if (SumInnerIsQuadraticCore(inner, decide_variables)) {
+        return true;
+    }
+    // Negated quadratic: -(POWER(expr, 2)) or (-1) * POWER(expr, 2)
+    if (inner.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = inner.Cast<FunctionExpression>();
+        // Unary negation: -(quadratic)
+        if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
+            return SumInnerIsQuadraticCore(*func.children[0], decide_variables);
+        }
+        // Multiplication by negative constant: (-1) * quadratic or quadratic * (-1)
+        if (func.is_operator && func.function_name == "*" && func.children.size() == 2) {
+            for (idx_t i = 0; i < 2; i++) {
+                if (func.children[i]->GetExpressionClass() == ExpressionClass::CONSTANT) {
+                    double val;
+                    if (IsNumericConstant(*func.children[i], val) && val < 0.0) {
+                        return SumInnerIsQuadraticCore(*func.children[1 - i], decide_variables);
+                    }
+                }
+            }
+        }
+    }
     return false;
 }
 

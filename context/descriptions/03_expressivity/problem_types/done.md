@@ -51,22 +51,39 @@ Supported by both Gurobi and HiGHS.
 
 ### QP (Quadratic Programming)
 
-All variables declared `IS REAL` (continuous), with a **convex quadratic objective** and linear constraints.
+All variables declared `IS REAL` (continuous), with a quadratic objective and linear constraints.
 
 Standard form: minimize (1/2) x^T Q x + c^T x, subject to Ax <= b, x >= 0
 
+**Convex QP** (MINIMIZE with PSD Q, or MAXIMIZE with NSD Q): Supported by both Gurobi and HiGHS.
+
 ```sql
+-- MINIMIZE convex: Q is PSD (standard)
 SELECT id, ROUND(x, 2) FROM data
 DECIDE x IS REAL
-SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 500
+SUCH THAT x >= 0 AND x <= 100
 MINIMIZE SUM(POWER(x - target, 2))
+
+-- MAXIMIZE concave (negated quadratic): Q is NSD, both solvers handle natively
+SELECT id, ROUND(x, 2) FROM data
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MAXIMIZE SUM(-POWER(x - target, 2))
 ```
 
-Supported by both Gurobi and HiGHS.
+**Non-convex QP** (MAXIMIZE with PSD Q): **Gurobi only** — requires spatial branching (NonConvex=2). HiGHS rejects with an error. NP-hard even for continuous variables.
+
+```sql
+-- MAXIMIZE convex: push x to boundary (maximum squared deviation)
+SELECT id, ROUND(x, 2) FROM data
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 10
+MAXIMIZE SUM(POWER(x - 5, 2))
+```
 
 ### MIQP (Mixed-Integer Quadratic Programming)
 
-Mix of `IS REAL` + `IS INTEGER`/`IS BOOLEAN` variables, with a convex quadratic objective and linear constraints. Arises when combining selection (BOOLEAN) with least-squares fitting (REAL).
+Mix of `IS REAL` + `IS INTEGER`/`IS BOOLEAN` variables, with a quadratic objective and linear constraints. Arises when combining selection (BOOLEAN) with least-squares fitting (REAL).
 
 **Gurobi only** — HiGHS rejects MIQP with an error directing the user to either install Gurobi or use `IS REAL` variables.
 
@@ -102,11 +119,12 @@ The user does not declare a problem class. PackDB infers it from the variable ty
 | All BOOLEAN/INTEGER | Linear or none | ILP |
 | All REAL | Linear or none | LP |
 | Mix of REAL + INTEGER/BOOLEAN | Linear or none | MILP |
-| All REAL | Quadratic (`MINIMIZE SUM(POWER)`) | QP |
+| All REAL | Convex quadratic | QP |
+| All REAL | Non-convex quadratic (`MAXIMIZE SUM(POWER)`) | Non-convex QP (Gurobi only) |
 | Mix of REAL + INTEGER/BOOLEAN | Quadratic | MIQP (Gurobi only) |
 | Any | None (feasibility) | Feasibility |
 
-The model builder sets `is_integer`, `is_binary`, and `has_quadratic_objective` flags accordingly, and the solver backend handles the appropriate formulation.
+The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and `nonconvex_quadratic` flags accordingly, and the solver backend handles the appropriate formulation.
 
 ---
 
@@ -117,7 +135,8 @@ The model builder sets `is_integer`, `is_binary`, and `has_quadratic_objective` 
 | LP | Yes | Yes |
 | ILP | Yes | Yes |
 | MILP | Yes | Yes |
-| QP | Yes | Yes |
+| QP (convex) | Yes | Yes |
+| QP (non-convex) | Yes (NonConvex=2) | **No** (error) |
 | MIQP | Yes | **No** (error) |
 | Feasibility | Yes | Yes |
 
@@ -129,15 +148,20 @@ The model builder sets `is_integer`, `is_binary`, and `has_quadratic_objective` 
 
 All `SUCH THAT` constraints are linear by design. Products of two decision variables (`x * y`) are rejected at bind time. This means the feasible region is always a convex polytope (or the integer points within one), regardless of problem class.
 
-### Quadratic Objectives Are Syntax-Enforced Convex
+### Quadratic Objectives — Convexity and Sign
 
-The only supported quadratic form is `MINIMIZE SUM(POWER(linear_expr, 2))`. This guarantees Q = A^T A (positive semidefinite) without runtime checks. The following are rejected:
+Supported quadratic forms:
 
-- `MAXIMIZE SUM(POWER(x, 2))` — maximizing a sum of squares is non-convex
+- `MINIMIZE SUM(POWER(linear_expr, 2))` — convex QP (Q = A^T A, PSD). Both solvers.
+- `MAXIMIZE SUM(-POWER(linear_expr, 2))` — concave MAXIMIZE (Q = -A^T A, NSD). Both solvers handle natively (HiGHS internally flips sign+sense).
+- `MAXIMIZE SUM(POWER(linear_expr, 2))` — non-convex (Gurobi only, via NonConvex=2). NP-hard.
+
+The following are rejected:
+
 - `MINIMIZE SUM(POWER(x, 3))` — only exponent 2 is supported
 - `MINIMIZE SUM(x * y)` — product of different DECIDE variables is not allowed
 
-**Syntax forms** (all equivalent):
+**Syntax forms** (all equivalent for positive quadratic):
 
 ```sql
 MINIMIZE SUM(POWER(x - target, 2))         -- POWER function
@@ -145,9 +169,17 @@ MINIMIZE SUM((x - target) ** 2)             -- ** operator
 MINIMIZE SUM((x - target) * (x - target))   -- explicit self-multiplication
 ```
 
-**Mathematical formulation**: The objective `MINIMIZE SUM(POWER(a1*x + a2*y + c, 2))` is expanded into the standard QP form `(1/2) x^T Q x + c^T x` where:
-- Q is built from the outer product of the inner linear expression's coefficients (Q[i,j] = 2*a_i*a_j summed over rows; factor of 2 on all entries due to the (1/2) x^T Q x convention)
-- Linear terms arise from constant parts of the inner expression (cross terms: 2*c*a_i)
+**Negated syntax forms** (all equivalent for negative quadratic):
+
+```sql
+MAXIMIZE SUM(-POWER(x - target, 2))        -- negation outside POWER
+MAXIMIZE SUM(-1 * POWER(x - target, 2))    -- explicit -1 multiplication
+```
+
+**Mathematical formulation**: The objective `SUM(sign * POWER(a1*x + a2*y + c, 2))` is expanded into the standard QP form `(1/2) x^T Q x + c^T x` where:
+- Q is built from the outer product of the inner linear expression's coefficients: Q[i,j] = sign * 2*a_i*a_j summed over rows (factor of 2 due to the (1/2) x^T Q x convention)
+- Linear terms arise from constant parts of the inner expression (cross terms: sign * 2*c*a_i)
+- sign = +1.0 for positive quadratic, sign = -1.0 for negated quadratic
 - The Q matrix is stored in COO (Coordinate) format in `SolverModel`, then converted to CSC for HiGHS
 
 ### All Variables Are Non-Negative
@@ -183,20 +215,18 @@ Several constructs (`<>`, `IN` on decision variables, `COUNT` on INTEGER, hard `
   - These flags determine whether the solver treats the problem as LP, ILP, or MILP
 
 - **Quadratic objective detection**: `src/execution/operator/decide/physical_decide.cpp`
-  - Detects `POWER(expr, 2)` and `(expr) * (expr)` patterns in bound expressions
-  - Enforces MINIMIZE-only for quadratic objectives
-  - Extracts inner linear expression terms into `Objective::squared_terms`
+  - Detects `POWER(expr, 2)`, `(expr) * (expr)`, and negated forms (`-POWER(expr, 2)`, `(-1) * POWER(expr, 2)`) in bound expressions
+  - Extracts inner linear expression terms into `Objective::squared_terms` with `quadratic_sign` (+1.0 or -1.0)
 
 - **Q matrix construction**: `src/packdb/utility/ilp_model_builder.cpp`
-  - Builds Q from outer products of per-row inner expression coefficients (guarantees PSD)
-  - Handles constant-term cross-contributions to linear objective
+  - Builds Q from outer products of per-row inner expression coefficients: Q = sign * A^T A
+  - sign = +1.0 produces PSD Q (convex), sign = -1.0 produces NSD Q (concave)
+  - Sets `nonconvex_quadratic` flag based on sign+sense combination
+  - Handles constant-term cross-contributions to linear objective (also sign-adjusted)
 
-- **Gurobi QP**: `src/packdb/gurobi/gurobi_solver.cpp` — calls `GRBaddqpterms` for Q matrix; handles both QP and MIQP natively
+- **Gurobi QP**: `src/packdb/gurobi/gurobi_solver.cpp` — calls `GRBaddqpterms` for Q matrix; sets `NonConvex=2` when `nonconvex_quadratic` is true
 
-- **HiGHS QP**: `src/packdb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion; rejects MIQP with error
-
-- **MIQP rejection (HiGHS)**: `src/packdb/naive/deterministic_naive.cpp`
-  - Checks if any variable is integer/boolean when `has_quadratic_obj` is true; throws `InvalidInputException`
+- **HiGHS QP**: `src/packdb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion; rejects non-convex QP and MIQP with errors
 
 - **Solver dispatch**: `src/packdb/utility/ilp_solver.cpp`
   - `SolverModel::Build()` constructs the formulation; `SolveModel()` dispatches to Gurobi (if available) or HiGHS

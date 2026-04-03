@@ -104,6 +104,10 @@ struct SolverModel {
     vector<int> q_cols;        //!< Column indices into Q
     vector<double> q_vals;     //!< Values in Q
     bool has_quadratic_obj = false;
+    //! True when the quadratic objective + sense combination is non-convex.
+    //! Non-convex when: MAXIMIZE + PSD Q, or MINIMIZE + NSD Q.
+    //! Gurobi handles this with NonConvex=2; HiGHS cannot solve it.
+    bool nonconvex_quadratic = false;
 
     //! Constraints (linear)
     vector<ModelConstraint> constraints;

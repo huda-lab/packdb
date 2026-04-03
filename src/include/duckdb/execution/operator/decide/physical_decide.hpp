@@ -48,11 +48,11 @@ struct Objective {
     vector<unique_ptr<Expression>> per_columns; // PackDB: optional PER grouping columns (empty = no grouping)
 
     //! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
-    //! When non-empty, the objective includes a quadratic component: SUM((inner_expr)^2).
-    //! Convexity is guaranteed by syntax: only squared linear expressions are accepted,
-    //! producing Q = A^T A which is always positive semidefinite.
+    //! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
+    //! sign = +1.0 for SUM(POWER(expr, 2)), sign = -1.0 for SUM(-POWER(expr, 2)).
     vector<Term> squared_terms;
     bool has_quadratic = false;
+    double quadratic_sign = 1.0;
 
     Objective() = default;
 };

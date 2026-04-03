@@ -642,6 +642,7 @@ public:
             objective = make_uniq<Objective>();
 
             // Check if the SUM argument is a quadratic pattern: POWER(expr, 2) or expr * expr
+            // Also detect negated quadratic: -(POWER(expr, 2)) or (-1) * POWER(expr, 2)
             auto *sum_arg = agg.children[0].get();
             // Unwrap casts
             while (sum_arg->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -650,14 +651,15 @@ public:
 
             bool is_quadratic = false;
             const Expression *inner_linear_expr = nullptr;
+            double quadratic_sign = 1.0;
 
-            if (sum_arg->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                auto &func = sum_arg->Cast<BoundFunctionExpression>();
+            // Lambda to detect core quadratic patterns (POWER/POW/**/identical multiplication)
+            auto TryDetectQuadratic = [&](const Expression *expr) -> bool {
+                if (expr->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
+                auto &func = expr->Cast<BoundFunctionExpression>();
                 string fname = StringUtil::Lower(func.function.name);
 
                 if (fname == "power" || fname == "pow" || fname == "**") {
-                    // POWER(linear_expr, 2) — unwrap casts around the exponent
-                    // DuckDB's binder may wrap the integer literal 2 in a BoundCastExpression
                     if (func.children.size() == 2) {
                         const Expression *exp_expr = func.children[1].get();
                         while (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -667,32 +669,65 @@ public:
                             auto &exp_val = exp_expr->Cast<BoundConstantExpression>();
                             double exponent = exp_val.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
                             if (exponent == 2.0) {
-                                is_quadratic = true;
                                 inner_linear_expr = func.children[0].get();
+                                return true;
                             }
                         }
                     }
                 } else if (fname == "*" && func.children.size() == 2) {
-                    // (expr) * (expr) — check if both sides are identical
                     if (func.children[0]->ToString() == func.children[1]->ToString()) {
-                        // Verify the inner expression contains a DECIDE variable
                         if (op.FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
-                            is_quadratic = true;
                             inner_linear_expr = func.children[0].get();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            // Try direct quadratic pattern
+            is_quadratic = TryDetectQuadratic(sum_arg);
+
+            // Try negated quadratic: -(quadratic) or (-1) * quadratic
+            if (!is_quadratic && sum_arg->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+                auto &outer_func = sum_arg->Cast<BoundFunctionExpression>();
+                string outer_name = StringUtil::Lower(outer_func.function.name);
+
+                // Unary negation: -(POWER(expr, 2))
+                if (outer_name == "-" && outer_func.children.size() == 1) {
+                    const Expression *child = outer_func.children[0].get();
+                    while (child->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                        child = child->Cast<BoundCastExpression>().child.get();
+                    }
+                    if (TryDetectQuadratic(child)) {
+                        quadratic_sign = -1.0;
+                        is_quadratic = true;
+                    }
+                }
+
+                // Multiplication by negative constant: (-1) * quadratic or quadratic * (-1)
+                if (!is_quadratic && outer_name == "*" && outer_func.children.size() == 2) {
+                    for (idx_t i = 0; i < 2; i++) {
+                        const Expression *maybe_const = outer_func.children[i].get();
+                        while (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                            maybe_const = maybe_const->Cast<BoundCastExpression>().child.get();
+                        }
+                        if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                            double cval = maybe_const->Cast<BoundConstantExpression>()
+                                              .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                            if (cval < 0.0 && TryDetectQuadratic(outer_func.children[1 - i].get())) {
+                                quadratic_sign = -1.0;
+                                is_quadratic = true;
+                                break;
+                            }
                         }
                     }
                 }
             }
 
             if (is_quadratic && inner_linear_expr) {
-                // Quadratic objective: SUM(POWER(linear_expr, 2))
-                // Enforce MINIMIZE-only for convex QP
-                if (op.decide_sense == DecideSense::MAXIMIZE) {
-                    throw InvalidInputException(
-                        "MAXIMIZE is not supported with quadratic objectives (POWER(..., 2)). "
-                        "Maximizing a sum of squares is non-convex. Use MINIMIZE instead.");
-                }
                 objective->has_quadratic = true;
+                objective->quadratic_sign = quadratic_sign;
                 // Unwrap casts from inner expression
                 while (inner_linear_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
                     inner_linear_expr = inner_linear_expr->Cast<BoundCastExpression>().child.get();
@@ -820,6 +855,7 @@ public:
     vector<vector<double>> evaluated_quadratic_coefficients;  // [term_idx][row_idx]
     vector<idx_t> quadratic_variable_indices;
     bool has_quadratic_objective = false;
+    double quadratic_sign = 1.0;
 
     vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
@@ -1253,6 +1289,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         if (gstate.objective->has_quadratic) {
             gstate.has_quadratic_objective = true;
+            gstate.quadratic_sign = gstate.objective->quadratic_sign;
         }
 
         // Build transformed expressions
@@ -1585,6 +1622,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Quadratic objective (if present)
     if (gstate.has_quadratic_objective) {
         solver_input.has_quadratic_objective = true;
+        solver_input.quadratic_sign = gstate.quadratic_sign;
         solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
         solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
         for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {

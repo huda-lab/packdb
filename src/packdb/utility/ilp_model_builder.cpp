@@ -188,6 +188,12 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
     if (input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty()) {
         model.has_quadratic_obj = true;
+        double q_sign = input.quadratic_sign;  // +1.0 or -1.0
+
+        // Determine convexity: non-convex when sign and sense conflict
+        // MAXIMIZE + PSD (sign>0) or MINIMIZE + NSD (sign<0) → non-convex
+        bool is_maximize = (input.sense == DecideSense::MAXIMIZE);
+        model.nonconvex_quadratic = (q_sign > 0.0) == is_maximize;
 
         idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
 
@@ -222,7 +228,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     int rj = row_terms[j].flat_idx;
                     int q_row = std::max(ri, rj);
                     int q_col = std::min(ri, rj);
-                    double val = 2.0 * row_terms[i].coeff * row_terms[j].coeff;
+                    double val = q_sign * 2.0 * row_terms[i].coeff * row_terms[j].coeff;
                     q_map[{q_row, q_col}] += val;
                 }
             }
@@ -238,7 +244,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             }
             if (c_row != 0.0) {
                 for (auto &vt : row_terms) {
-                    model.obj_coeffs[vt.flat_idx] += 2.0 * c_row * vt.coeff;
+                    model.obj_coeffs[vt.flat_idx] += q_sign * 2.0 * c_row * vt.coeff;
                 }
             }
         }

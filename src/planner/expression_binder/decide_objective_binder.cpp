@@ -173,13 +173,6 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
-            // Reject MAXIMIZE with quadratic objectives at bind time (non-convex)
-            if (decide_sense == DecideSense::MAXIMIZE &&
-                ContainsQuadraticPattern(*func.children.front(), variables)) {
-                error_msg = "MAXIMIZE is not supported with quadratic objectives (POWER(..., 2)). "
-                            "Maximizing a sum of squares is non-convex. Use MINIMIZE instead.";
-                return DecideExpression::INVALID;
-            }
             return DecideExpression::SUM;
 		} else {
             error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.", func.function_name);
