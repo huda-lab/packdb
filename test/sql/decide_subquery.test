@@ -40,7 +40,7 @@ More than one row returned by a subquery used as an expression
 statement error
 SELECT sum(x) FROM items DECIDE x IS BOOLEAN SUCH THAT sum(x * (SELECT weight FROM items WHERE id = x)) <= 50 MAXIMIZE sum(x * value);
 ----
-Subqueries in DECIDE clauses cannot reference DECIDE variables.
+Subquery in DECIDE SUM expression cannot contain DECIDE variables
 
 # ------------------------------------------------------------------
 # Correlated subquery tests

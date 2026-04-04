@@ -95,7 +95,7 @@ MINIMIZE SUM((x - target) * (x - target));
 5	55.0
 
 # =================================================================
-# Error: MAXIMIZE with squared objective (non-convex)
+# Error: MAXIMIZE with squared objective (non-convex) — HiGHS rejects
 # =================================================================
 
 statement error
@@ -105,10 +105,10 @@ DECIDE x IS REAL
 SUCH THAT x >= 0 AND x <= 100
 MAXIMIZE SUM(POWER(x - target, 2));
 ----
-MAXIMIZE is not supported with quadratic objectives (POWER(..., 2)).
+Non-convex quadratic objectives require Gurobi
 
 # =================================================================
-# Error: POWER with exponent != 2
+# Error: POWER with exponent != 2 (cubic — expanded to x*x*x)
 # =================================================================
 
 statement error
@@ -118,10 +118,11 @@ DECIDE x IS REAL
 SUCH THAT x >= 0 AND x <= 100
 MINIMIZE SUM(POWER(x - target, 3));
 ----
-Product of different DECIDE variable expressions is not supported.
+Triple or higher-order products of DECIDE variables are not supported
 
 # =================================================================
-# Error: product of different decision variables (non-convex)
+# Bilinear objective: product of different decision variables
+# HiGHS rejects non-convex; Gurobi handles it.
 # =================================================================
 
 statement error
@@ -131,4 +132,4 @@ DECIDE x IS REAL, y IS REAL
 SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
 MINIMIZE SUM(x * y);
 ----
-Product of different DECIDE variable expressions is not supported.
+Non-convex quadratic objectives require Gurobi
