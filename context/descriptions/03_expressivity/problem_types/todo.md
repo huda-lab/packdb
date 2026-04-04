@@ -57,37 +57,23 @@ DECIDE y IS REAL IN [-10, 10]
 
 **Priority: Low**
 
-Allowing quadratic expressions in `SUCH THAT` constraints would enable QCQP:
+Allowing `POWER(linear_expr, 2)` in `SUCH THAT` constraints would enable QCQP:
 
 ```sql
 -- NOT YET SUPPORTED
 SUCH THAT SUM(POWER(new_val - old_val, 2)) <= 1000
 ```
 
+**Note**: Bilinear constraints (`x * y` in `SUCH THAT`) are now supported — see [bilinear/done.md](../bilinear/done.md). The remaining gap is `POWER(expr, 2)` in constraints (sum-of-squares form). The `GRBaddqconstr` infrastructure is already in place from the bilinear constraint implementation, so adding QCQP constraints would primarily require binder and extraction changes.
+
 Deferred due to:
-- Significantly increased architectural complexity (constraint matrices need Q matrices too)
 - HiGHS does not support quadratic constraints at all
 - Requires strict syntax enforcement for convexity: only `<=` with positive RHS, only sum-of-squares form
-- Gurobi supports QCQP but with different API (`GRBaddqconstr`)
+- Lower demand than bilinear terms (which are now done)
 
-If implemented, the same syntax-enforced convexity approach should apply: only `SUM(POWER(linear_expr, 2)) <= positive_constant` should be accepted, guaranteeing the feasible region is convex (intersection of ellipsoids).
+## ~~Products of Decision Variables (Bilinear Terms)~~
 
-## Products of Decision Variables (Bilinear Terms)
-
-**Priority: Low**
-
-Currently `x * y` where both are DECIDE variables is rejected. Supporting bilinear terms would enable non-convex QP in both objectives and constraints:
-
-```sql
--- NOT YET SUPPORTED
-MINIMIZE SUM(x * y)                             -- bilinear objective
-SUCH THAT SUM(x * y) <= 100                     -- bilinear constraint
-```
-
-Deferred due to:
-- Bilinear terms are non-convex — requires Gurobi NonConvex=2, HiGHS cannot handle them
-- Special case: boolean × continuous can be linearized via Big-M without solver extension
-- Requires changes to both binder validation and Q matrix construction
+**Done** — see [bilinear/done.md](../bilinear/done.md). Bilinear terms (`x * y`) are supported in both objectives and constraints. Boolean × anything is linearized via McCormick envelopes (both solvers). General non-convex bilinear uses Q matrix / `GRBaddqconstr` (Gurobi only).
 
 ---
 

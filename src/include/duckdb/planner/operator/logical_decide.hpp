@@ -62,6 +62,11 @@ public:
     // Number of auxiliary variables at the end of decide_variables (created by binder and optimizer)
     idx_t num_auxiliary_vars = 0;
 
+    // Per-variable boolean flag: true if the variable was declared IS BOOLEAN.
+    // Indexed by position in decide_variables. Auxiliary variables appended later
+    // should also push_back their boolean status.
+    vector<bool> is_boolean_var;
+
     // Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
     vector<pair<idx_t, idx_t>> count_indicator_links;
 
@@ -70,6 +75,15 @@ public:
 
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<pair<string, idx_t>> minmax_indicator_links;
+
+    // Links from bilinear McCormick auxiliary variables: w = b * x
+    // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
+    struct BilinearLink {
+        idx_t aux_idx;        // Index of auxiliary variable w
+        idx_t bool_var_idx;   // Index of the Boolean variable b
+        idx_t other_var_idx;  // Index of the non-Boolean variable x
+    };
+    vector<BilinearLink> bilinear_links;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 

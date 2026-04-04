@@ -51,6 +51,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	}
 
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
+	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
 	RewriteNotEqual(decide);
 	RewriteCountToSum(decide);
@@ -104,6 +105,7 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 			decide.decide_variables.push_back(std::move(ind_var));
 			decide.ne_indicator_indices.push_back(ind_idx);
 			decide.num_auxiliary_vars++;
+			decide.is_boolean_var.push_back(true);
 			if (!decide.variable_entity_scope.empty()) {
 				decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 			}
@@ -185,6 +187,7 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 						    ColumnBinding(decide.decide_index, indicator_idx));
 						decide.decide_variables.push_back(std::move(ind_var));
 						decide.num_auxiliary_vars++;
+						decide.is_boolean_var.push_back(true);
 						if (!decide.variable_entity_scope.empty()) {
 							decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 						}
@@ -439,6 +442,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
 		decide.decide_variables.push_back(std::move(ind_var));
 		decide.num_auxiliary_vars++;
+		decide.is_boolean_var.push_back(true);
 		if (!decide.variable_entity_scope.empty()) {
 			decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 		}
@@ -471,6 +475,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
 		decide.decide_variables.push_back(std::move(ind_var));
 		decide.num_auxiliary_vars++;
+		decide.is_boolean_var.push_back(true);
 		if (!decide.variable_entity_scope.empty()) {
 			decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 		}
@@ -670,6 +675,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				    ColumnBinding(decide.decide_index, aux_idx));
 				decide.decide_variables.push_back(std::move(aux_var));
 				decide.num_auxiliary_vars++;
+				decide.is_boolean_var.push_back(false);
 				if (!decide.variable_entity_scope.empty()) {
 					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 				}
@@ -689,6 +695,229 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
 		FindAndReplaceAbs(child, decide, abs_pairs);
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Bilinear McCormick linearization (Boolean × anything)
+// ---------------------------------------------------------------------------
+
+void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
+	vector<LogicalDecide::BilinearLink> links;
+	if (decide.decide_objective) {
+		FindAndReplaceBilinear(decide.decide_objective, decide, links);
+	}
+	if (decide.decide_constraints) {
+		FindAndReplaceBilinear(decide.decide_constraints, decide, links);
+	}
+	decide.bilinear_links = std::move(links);
+}
+
+//! Identify whether a bound expression is a single DECIDE variable reference
+//! and return its index. Unwraps CAST nodes (DuckDB inserts implicit casts
+//! when operand types differ, e.g. INTEGER * DOUBLE).
+//! Returns INVALID_INDEX if not a single variable.
+static idx_t GetSingleDecideVarIdx(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		if (colref.binding.table_index == decide_index) {
+			return colref.binding.column_index;
+		}
+	}
+	// Unwrap CAST nodes
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		return GetSingleDecideVarIdx(*cast.child, decide_index);
+	}
+	return DConstants::INVALID_INDEX;
+}
+
+//! Recursively find all DECIDE variable indices referenced in an expression
+static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, vector<idx_t> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		if (colref.binding.table_index == decide_index) {
+			out.push_back(colref.binding.column_index);
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		CollectDecideVarIndices(child, decide_index, out);
+	});
+}
+
+void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
+                                              vector<LogicalDecide::BilinearLink> &links) {
+	if (!expr) return;
+
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr->Cast<BoundFunctionExpression>();
+		string fname = StringUtil::Lower(func.function.name);
+
+		if (fname == "*" && func.children.size() == 2) {
+			// Check if this is a bilinear product of two different decide variable expressions
+			vector<idx_t> left_vars, right_vars;
+			CollectDecideVarIndices(*func.children[0], decide.decide_index, left_vars);
+			CollectDecideVarIndices(*func.children[1], decide.decide_index, right_vars);
+
+			if (!left_vars.empty() && !right_vars.empty()) {
+				// Both sides contain decide variables — this is bilinear (or identical QP)
+				// Skip the identical-expression case (QP, not bilinear)
+				if (func.children[0]->ToString() == func.children[1]->ToString()) {
+					return; // Handled by existing QP pipeline
+				}
+
+				// Determine which variables are involved and their types.
+				// For McCormick, we need exactly one Boolean factor.
+				// First try GetSingleDecideVarIdx (bare var or CAST-wrapped),
+				// then fall back to CollectDecideVarIndices for complex expressions
+				// like (data_col * bool_var) where the decide var is buried in a multiply.
+				idx_t left_single = GetSingleDecideVarIdx(*func.children[0], decide.decide_index);
+				idx_t right_single = GetSingleDecideVarIdx(*func.children[1], decide.decide_index);
+
+				// Fallback: if one side is a complex expression with exactly one decide var,
+				// use that var's index. This handles cases like (profit * b) * x.
+				if (left_single == DConstants::INVALID_INDEX && left_vars.size() == 1) {
+					left_single = left_vars[0];
+				}
+				if (right_single == DConstants::INVALID_INDEX && right_vars.size() == 1) {
+					right_single = right_vars[0];
+				}
+
+				bool left_is_bool = false, right_is_bool = false;
+				if (left_single != DConstants::INVALID_INDEX && left_single < decide.is_boolean_var.size()) {
+					left_is_bool = decide.is_boolean_var[left_single];
+				}
+				if (right_single != DConstants::INVALID_INDEX && right_single < decide.is_boolean_var.size()) {
+					right_is_bool = decide.is_boolean_var[right_single];
+				}
+
+				// Only linearize if at least one side is a single Boolean variable
+				if (!left_is_bool && !right_is_bool) {
+					// Non-Boolean × Non-Boolean: leave for Q matrix (Phase 2)
+					// Still recurse into children for nested bilinear
+					ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+						FindAndReplaceBilinear(child, decide, links);
+					});
+					return;
+				}
+
+				// Decide which side is the Boolean (b) and which is the other (x)
+				idx_t bool_var_idx, other_var_idx;
+				Expression *other_expr;
+				if (left_is_bool) {
+					bool_var_idx = left_single;
+					other_var_idx = right_single; // may be INVALID_INDEX if right is complex
+					other_expr = func.children[1].get();
+				} else {
+					bool_var_idx = right_single;
+					other_var_idx = left_single; // may be INVALID_INDEX if left is complex
+					other_expr = func.children[0].get();
+				}
+
+				// For Bool×Bool: special AND-linearization (simpler, no Big-M)
+				bool both_bool = left_is_bool && right_is_bool;
+
+				// Create auxiliary variable
+				idx_t aux_idx = decide.decide_variables.size();
+				string aux_name = "__bilinear_aux_" + to_string(aux_idx) + "__";
+				// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
+				// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
+				// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.
+				LogicalType aux_type = both_bool ? LogicalType::INTEGER : LogicalType::DOUBLE;
+				auto aux_var = make_uniq<BoundColumnRefExpression>(
+				    aux_name, aux_type, ColumnBinding(decide.decide_index, aux_idx));
+				decide.decide_variables.push_back(std::move(aux_var));
+				decide.num_auxiliary_vars++;
+				decide.is_boolean_var.push_back(both_bool);
+				if (!decide.variable_entity_scope.empty()) {
+					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX); // row-scoped
+				}
+
+				if (both_bool) {
+					// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1
+					auto &b1_ref = decide.decide_variables[bool_var_idx]->Cast<BoundColumnRefExpression>();
+					auto &b2_ref = decide.decide_variables[other_var_idx]->Cast<BoundColumnRefExpression>();
+					auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
+
+					// w <= b1
+					auto c1 = make_uniq<BoundComparisonExpression>(
+					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
+					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
+					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding));
+					AppendConstraint(decide, std::move(c1));
+
+					// w <= b2
+					auto c2 = make_uniq<BoundComparisonExpression>(
+					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
+					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
+					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
+					AppendConstraint(decide, std::move(c2));
+
+					// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
+					auto b1_plus_b2 = optimizer.BindScalarFunction(
+					    "+",
+					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding),
+					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
+					auto b1_plus_b2_minus_w = optimizer.BindScalarFunction(
+					    "-",
+					    std::move(b1_plus_b2),
+					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding));
+					auto c3 = make_uniq<BoundComparisonExpression>(
+					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
+					    std::move(b1_plus_b2_minus_w),
+					    make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
+					AppendConstraint(decide, std::move(c3));
+				} else {
+					// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
+					// w <= U*b and w >= x - U*(1-b) generated at execution time via BilinearLink
+					auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
+
+					// w <= x  (structural constraint, no Big-M needed)
+					auto c_struct = make_uniq<BoundComparisonExpression>(
+					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
+					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
+					    other_expr->Copy());
+					AppendConstraint(decide, std::move(c_struct));
+
+					// Record link for execution-time Big-M generation
+					// other_var_idx might be INVALID_INDEX if other_expr is a complex expression.
+					// In that case, we need the single variable index from the other side.
+					if (other_var_idx == DConstants::INVALID_INDEX) {
+						// Complex expression on the other side — get the first decide var
+						// For now, only support simple variable references for McCormick
+						vector<idx_t> other_vars;
+						CollectDecideVarIndices(*other_expr, decide.decide_index, other_vars);
+						if (other_vars.size() == 1) {
+							other_var_idx = other_vars[0];
+						} else {
+							// Multi-variable expression × Boolean — can't do simple McCormick
+							// Leave it for Q matrix path (the auxiliary variable is already created,
+							// but we need to undo this — for now, throw)
+							throw BinderException(
+							    "Bilinear product of a Boolean variable with a multi-variable expression "
+							    "is not yet supported. Use a simple variable reference (e.g., b * x, not b * (x + y)).");
+						}
+					}
+
+					LogicalDecide::BilinearLink link;
+					link.aux_idx = aux_idx;
+					link.bool_var_idx = bool_var_idx;
+					link.other_var_idx = other_var_idx;
+					links.push_back(link);
+				}
+
+				// Replace the bilinear product with the auxiliary variable reference
+				auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
+				expr = make_uniq<BoundColumnRefExpression>(
+				    w_ref.alias, w_ref.return_type, w_ref.binding);
+				return;
+			}
+		}
+	}
+
+	// Recurse into children
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		FindAndReplaceBilinear(child, decide, links);
 	});
 }
 

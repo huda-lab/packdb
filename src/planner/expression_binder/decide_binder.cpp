@@ -9,6 +9,7 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include <unordered_set>
 
 #include "duckdb/packdb/utility/debug.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -95,9 +96,29 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
 }
 
+//! Collect the set of DECIDE variable indices referenced by an expression.
+static void CollectDecideVariableIndices(const ParsedExpression &expr,
+                                         const case_insensitive_map_t<idx_t> &variables,
+                                         unordered_set<idx_t> &out) {
+	if (IsVariableExpressionConst(expr, variables)) {
+		const auto &colref = expr.Cast<const ColumnRefExpression>();
+		string key = colref.IsQualified()
+		    ? (colref.GetTableName() + "." + colref.GetColumnName())
+		    : colref.GetColumnName();
+		auto it = variables.find(key);
+		if (it != variables.end()) {
+			out.insert(it->second);
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		CollectDecideVariableIndices(child, variables, out);
+	});
+}
+
 // Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                        bool &has_decide_variable, string &error_msg, bool allow_quadratic);
+                                        bool &has_decide_variable, string &error_msg, bool allow_quadratic = false,
+                                        bool allow_bilinear = false);
 
 // Shared validation for POWER(expr, 2) and expr ** 2 patterns.
 // Returns true if the pattern is a valid quadratic form; sets has_decide_variable.
@@ -144,7 +165,7 @@ static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &childre
 
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                         bool &has_decide_variable, string &error_msg,
-                                        bool allow_quadratic = false) {
+                                        bool allow_quadratic, bool allow_bilinear) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
         if (IsVariableExpression(expr, variables)) {
@@ -202,7 +223,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		}
 		if (func_name_lower == "-") {
 			for (auto &child : func.children) {
-				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic)) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear)) {
 					return false;
 				}
 			}
@@ -210,27 +231,53 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		}
 		if (func_name_lower == "*" || func_name_lower == "+") {
 			for (auto &child : func.children) {
-				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic)) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear)) {
 					return false;
 				}
 			}
 			if (func_name_lower == "*") {
 				idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
+				if (decide_count > 2) {
+					error_msg = "Triple or higher-order products of DECIDE variables are not supported";
+					return false;
+				}
 				if (decide_count > 1) {
-					if (allow_quadratic && func.children.size() == 2 &&
-					    func.children[0]->ToString() == func.children[1]->ToString()) {
-						// (expr) * (expr) — QP pattern equivalent to POWER(expr, 2)
-						has_decide_variable = true;
-						return true;
+					if (func.children.size() == 2) {
+						// Classify: quadratic (same vars in both factors) vs bilinear (disjoint vars)
+						unordered_set<idx_t> vars_left, vars_right;
+						CollectDecideVariableIndices(*func.children[0], variables, vars_left);
+						CollectDecideVariableIndices(*func.children[1], variables, vars_right);
+						bool has_common_var = false;
+						for (auto idx : vars_left) {
+							if (vars_right.count(idx)) {
+								has_common_var = true;
+								break;
+							}
+						}
+						if (has_common_var) {
+							// Quadratic: same DECIDE variable appears in both factors
+							// (e.g., x*x, (a+x)*x) — only allowed in objectives
+							if (!allow_quadratic) {
+								error_msg = "SUM expression must remain linear in DECIDE variables — "
+								            "quadratic terms (same variable in both factors) are only allowed in objectives, not constraints";
+								return false;
+							}
+							has_decide_variable = true;
+							return true;
+						} else {
+							// Bilinear: different DECIDE variables in each factor
+							// (e.g., x*y) — allowed in constraints with bilinear support
+							if (!allow_bilinear && !allow_quadratic) {
+								error_msg = "SUM expression must remain linear in DECIDE variables — "
+								            "products of different DECIDE variables are only allowed in objectives and bilinear constraints";
+								return false;
+							}
+							has_decide_variable = true;
+							return true;
+						}
 					}
-					if (allow_quadratic) {
-						error_msg = StringUtil::Format(
-						    "Product of different DECIDE variable expressions is not supported. "
-						    "For quadratic objectives, use POWER(expr, 2) or (expr) * (expr) "
-						    "where both sides are the same linear expression. Found '%s'", expr.ToString());
-					} else {
-						error_msg = "SUM expression must remain linear in DECIDE variables";
-					}
+					error_msg = "SUM expression must remain linear in DECIDE variables — "
+					            "products of different DECIDE variables are only allowed in objectives and bilinear constraints";
 					return false;
 				}
 			}
@@ -245,7 +292,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 	}
 	case ExpressionClass::CAST: {
 		auto &cast = expr.Cast<CastExpression>();
-		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic);
+		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear);
 	}
     case ExpressionClass::SUBQUERY: {
         auto &subquery = expr.Cast<SubqueryExpression>();
@@ -288,7 +335,8 @@ bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map
 	}
 	if (fname == "*" && func.children.size() == 2) {
 		idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
-		if (decide_count > 1 && func.children[0]->ToString() == func.children[1]->ToString()) {
+		if (decide_count > 1) {
+			// Both identical multiplication (QP) and bilinear products (x*y) are non-linear
 			return true;
 		}
 	}
@@ -302,9 +350,9 @@ bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map
 }
 
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
-                         bool allow_quadratic) {
+                         bool allow_quadratic, bool allow_bilinear) {
 	bool has_decide_variable = false;
-	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg, allow_quadratic)) {
+	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear)) {
 		return false;
 	}
 	if (!has_decide_variable) {

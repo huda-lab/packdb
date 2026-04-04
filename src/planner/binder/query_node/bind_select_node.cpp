@@ -824,6 +824,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             result->decide_variables.push_back(std::move(bound_col_ref));
         }
         result->num_auxiliary_vars = num_auxiliary_vars;
+        result->is_boolean_var = is_boolean_var;
 
         // Store table-scoped variable metadata
         result->entity_scopes = std::move(entity_scopes);

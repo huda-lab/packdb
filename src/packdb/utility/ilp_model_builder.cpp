@@ -171,6 +171,13 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
             idx_t decide_var_idx = input.objective_variable_indices[term_idx];
 
+            // Skip constant terms (data columns without decide variables).
+            // These don't affect the optimal solution — they add a constant offset
+            // that doesn't change which assignment is optimal.
+            if (decide_var_idx == DConstants::INVALID_INDEX) {
+                continue;
+            }
+
             for (idx_t row = 0; row < num_rows; row++) {
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
                 if (term_idx < input.objective_coefficients.size() &&
@@ -186,65 +193,92 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     // 2b. Build quadratic objective (Q matrix) if present
     //===--------------------------------------------------------------------===//
 
-    if (input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty()) {
-        model.has_quadratic_obj = true;
-        double q_sign = input.quadratic_sign;  // +1.0 or -1.0
+    bool has_power_quadratic = input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty();
+    bool has_bilinear = !input.bilinear_objective_terms.empty();
 
-        // Determine convexity: non-convex when sign and sense conflict
-        // MAXIMIZE + PSD (sign>0) or MINIMIZE + NSD (sign<0) → non-convex
-        bool is_maximize = (input.sense == DecideSense::MAXIMIZE);
-        model.nonconvex_quadratic = (q_sign > 0.0) == is_maximize;
-
-        idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
-
+    if (has_power_quadratic || has_bilinear) {
         // Accumulate Q in a map: (var_i, var_j) -> value (lower triangle only, var_i >= var_j)
         std::map<std::pair<int,int>, double> q_map;
 
-        for (idx_t row = 0; row < num_rows; row++) {
-            // Collect per-row coefficients for variable terms
-            struct VarCoeff { int flat_idx; double coeff; };
-            vector<VarCoeff> row_terms;
+        // POWER(expr, 2) contributions: outer product A^T A
+        if (has_power_quadratic) {
+            model.has_quadratic_obj = true;
+            double q_sign = input.quadratic_sign;  // +1.0 or -1.0
 
-            for (idx_t t = 0; t < num_q_terms; t++) {
-                if (t >= input.quadratic_inner_coefficients.size() ||
-                    row >= input.quadratic_inner_coefficients[t].size()) {
-                    continue;
+            // Determine convexity: non-convex when sign and sense conflict
+            // MAXIMIZE + PSD (sign>0) or MINIMIZE + NSD (sign<0) → non-convex
+            bool is_maximize = (input.sense == DecideSense::MAXIMIZE);
+            model.nonconvex_quadratic = (q_sign > 0.0) == is_maximize;
+
+            idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
+
+            for (idx_t row = 0; row < num_rows; row++) {
+                // Collect per-row coefficients for variable terms
+                struct VarCoeff { int flat_idx; double coeff; };
+                vector<VarCoeff> row_terms;
+
+                for (idx_t t = 0; t < num_q_terms; t++) {
+                    if (t >= input.quadratic_inner_coefficients.size() ||
+                        row >= input.quadratic_inner_coefficients[t].size()) {
+                        continue;
+                    }
+                    idx_t decide_var_idx = input.quadratic_inner_variable_indices[t];
+                    double a = input.quadratic_inner_coefficients[t][row];
+                    if (a == 0.0) continue;
+
+                    if (decide_var_idx == DConstants::INVALID_INDEX) {
+                        continue;
+                    }
+
+                    int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                    row_terms.push_back({flat_idx, a});
                 }
-                idx_t decide_var_idx = input.quadratic_inner_variable_indices[t];
-                double a = input.quadratic_inner_coefficients[t][row];
-                if (a == 0.0) continue;
 
-                if (decide_var_idx == DConstants::INVALID_INDEX) {
-                    continue;
+                for (idx_t i = 0; i < row_terms.size(); i++) {
+                    for (idx_t j = 0; j <= i; j++) {
+                        int ri = row_terms[i].flat_idx;
+                        int rj = row_terms[j].flat_idx;
+                        int q_row = std::max(ri, rj);
+                        int q_col = std::min(ri, rj);
+                        double val = q_sign * 2.0 * row_terms[i].coeff * row_terms[j].coeff;
+                        q_map[{q_row, q_col}] += val;
+                    }
                 }
 
-                int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                row_terms.push_back({flat_idx, a});
+                // Handle constant term contributions to linear objective
+                double c_row = 0.0;
+                for (idx_t t = 0; t < num_q_terms; t++) {
+                    if (t < input.quadratic_inner_coefficients.size() &&
+                        row < input.quadratic_inner_coefficients[t].size() &&
+                        input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
+                        c_row += input.quadratic_inner_coefficients[t][row];
+                    }
+                }
+                if (c_row != 0.0) {
+                    for (auto &vt : row_terms) {
+                        model.obj_coeffs[vt.flat_idx] += q_sign * 2.0 * c_row * vt.coeff;
+                    }
+                }
             }
+        }
 
-            for (idx_t i = 0; i < row_terms.size(); i++) {
-                for (idx_t j = 0; j <= i; j++) {
-                    int ri = row_terms[i].flat_idx;
-                    int rj = row_terms[j].flat_idx;
-                    int q_row = std::max(ri, rj);
-                    int q_col = std::min(ri, rj);
-                    double val = q_sign * 2.0 * row_terms[i].coeff * row_terms[j].coeff;
-                    q_map[{q_row, q_col}] += val;
-                }
-            }
+        // Bilinear objective terms: off-diagonal Q entries for x_a * x_b
+        // Gurobi convention: objective is c^Tx + x^TQx (no 1/2 factor for off-diagonal)
+        // So for SUM(c * x_a * x_b): Q[a,b] += c (lower triangle: Q[max,min])
+        if (has_bilinear) {
+            model.has_quadratic_obj = true;
+            model.nonconvex_quadratic = true; // Bilinear → always indefinite
 
-            // Handle constant term contributions to linear objective
-            double c_row = 0.0;
-            for (idx_t t = 0; t < num_q_terms; t++) {
-                if (t < input.quadratic_inner_coefficients.size() &&
-                    row < input.quadratic_inner_coefficients[t].size() &&
-                    input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
-                    c_row += input.quadratic_inner_coefficients[t][row];
-                }
-            }
-            if (c_row != 0.0) {
-                for (auto &vt : row_terms) {
-                    model.obj_coeffs[vt.flat_idx] += q_sign * 2.0 * c_row * vt.coeff;
+            for (auto &bt : input.bilinear_objective_terms) {
+                for (idx_t row = 0; row < num_rows; row++) {
+                    double coeff = bt.row_coefficients[row];
+                    if (coeff == 0.0) continue;
+
+                    int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
+                    int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
+                    int q_row = std::max(flat_a, flat_b);
+                    int q_col = std::min(flat_a, flat_b);
+                    q_map[{q_row, q_col}] += coeff;
                 }
             }
         }
@@ -415,6 +449,85 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
     }
 
+    // Build quadratic constraints from bilinear terms in evaluated constraints.
+    // Re-scan constraints: if any have bilinear terms, we need to convert the
+    // corresponding ModelConstraint into a QuadraticConstraint.
+    // Since we already built linear ModelConstraints above, we rebuild for constraints
+    // that have bilinear terms. The approach: build quadratic constraints separately
+    // from input.constraints that have bilinear_terms.
+    {
+        // Track which constraints have bilinear terms and need quadratic handling
+        idx_t model_constr_idx = 0;
+        for (auto &eval_const : input.constraints) {
+            if (eval_const.bilinear_terms.empty()) {
+                // Skip — already handled as linear above
+                continue;
+            }
+
+            bool is_aggregate = eval_const.lhs_is_aggregate;
+
+            if (is_aggregate) {
+                // Build a single QuadraticConstraint for this aggregate
+                SolverModel::QuadraticConstraint qc;
+
+                // Linear part: accumulate coefficients
+                std::unordered_map<int, double> linear_accum;
+                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+                    if (decide_var_idx != DConstants::INVALID_INDEX) {
+                        for (idx_t row = 0; row < num_rows; row++) {
+                            double coeff = eval_const.row_coefficients[term_idx][row];
+                            int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                            linear_accum[var_idx] += coeff;
+                        }
+                    }
+                }
+                for (auto &pair : linear_accum) {
+                    if (pair.second != 0.0) {
+                        qc.linear_indices.push_back(pair.first);
+                        qc.linear_coefficients.push_back(pair.second);
+                    }
+                }
+
+                // Quadratic part: bilinear terms
+                std::map<std::pair<int,int>, double> q_accum;
+                for (auto &bt : eval_const.bilinear_terms) {
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        double coeff = bt.row_coefficients[row];
+                        if (coeff == 0.0) continue;
+                        int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
+                        int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
+                        int q_row = std::max(flat_a, flat_b);
+                        int q_col = std::min(flat_a, flat_b);
+                        q_accum[{q_row, q_col}] += coeff;
+                    }
+                }
+                for (auto &entry : q_accum) {
+                    if (entry.second != 0.0) {
+                        qc.q_rows.push_back(entry.first.first);
+                        qc.q_cols.push_back(entry.first.second);
+                        qc.q_coefficients.push_back(entry.second);
+                    }
+                }
+
+                // RHS and sense
+                double rhs = eval_const.rhs_values.empty() ? 0.0 : eval_const.rhs_values[0];
+                if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+                    qc.sense = '<';
+                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+                    qc.sense = '>';
+                } else {
+                    qc.sense = '=';
+                }
+                qc.rhs = rhs;
+
+                model.quadratic_constraints.push_back(std::move(qc));
+            }
+            // Per-row bilinear constraints would each become a separate QuadraticConstraint
+            // (not yet implemented — aggregate case is the primary use case)
+        }
+    }
+
     // Append raw global constraints (for MIN/MAX objective linking, etc.)
     for (auto &raw : input.global_constraints) {
         ModelConstraint constr;
@@ -430,10 +543,15 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     //===--------------------------------------------------------------------===//
 
     for (idx_t i = 0; i < total_vars; i++) {
-        if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i]) ||
-            model.col_lower[i] > model.col_upper[i]) {
+        if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i])) {
             throw InternalException("Column bounds invalid at col %llu: [%f, %f]",
                                     i, model.col_lower[i], model.col_upper[i]);
+        }
+        if (model.col_lower[i] > model.col_upper[i]) {
+            throw InvalidInputException(
+                "DECIDE optimization is infeasible: contradictory bounds on variable %llu "
+                "(lower=%f > upper=%f). Check your SUCH THAT constraints for conflicting bounds.",
+                i, model.col_lower[i], model.col_upper[i]);
         }
         if (!std::isfinite(model.obj_coeffs[i])) {
             throw InternalException("Objective coefficient not finite at col %llu: %f",

@@ -30,6 +30,14 @@ struct EvaluatedConstraint {
     string minmax_agg_type;                    // "min" or "max" (empty if not minmax)
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
 
+    //! Bilinear terms in this constraint (var_a * var_b with per-row coefficients)
+    struct BilinearTerm {
+        idx_t var_a;
+        idx_t var_b;
+        vector<double> row_coefficients;  // [row_idx]
+    };
+    vector<BilinearTerm> bilinear_terms;
+
     //! Unified WHEN+PER row→group mapping
     //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
     //! DConstants::INVALID_INDEX = row excluded (WHEN filter or NULL PER value)
@@ -74,6 +82,15 @@ struct SolverInput {
     double quadratic_sign = 1.0;
     vector<vector<double>> quadratic_inner_coefficients; // [term_idx][row_idx]
     vector<idx_t> quadratic_inner_variable_indices;      // [term_idx]
+
+    // Bilinear objective terms: products of two different DECIDE variables.
+    // Only used for non-Boolean pairs (Boolean×anything is McCormick-linearized).
+    struct BilinearObjectiveTerm {
+        idx_t var_a;                    // First DECIDE variable index
+        idx_t var_b;                    // Second DECIDE variable index
+        vector<double> row_coefficients; // [row_idx] = data coefficient
+    };
+    vector<BilinearObjectiveTerm> bilinear_objective_terms;
 
     // Objective PER grouping (mirrors constraint row_group_ids pattern)
     vector<idx_t> objective_row_group_ids;  // per-row group assignment

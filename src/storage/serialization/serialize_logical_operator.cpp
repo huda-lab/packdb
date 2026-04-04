@@ -377,6 +377,19 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<pair<idx_t, idx_t>>>(206, "count_indicator_links", count_indicator_links);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(207, "ne_indicator_indices", ne_indicator_indices);
 	serializer.WritePropertyWithDefault<vector<pair<string, idx_t>>>(208, "minmax_indicator_links", minmax_indicator_links);
+	// Serialize bilinear_links as three parallel vectors (aux_idx, bool_var_idx, other_var_idx)
+	{
+		vector<idx_t> bl_aux, bl_bool, bl_other;
+		for (auto &link : bilinear_links) {
+			bl_aux.push_back(link.aux_idx);
+			bl_bool.push_back(link.bool_var_idx);
+			bl_other.push_back(link.other_var_idx);
+		}
+		serializer.WritePropertyWithDefault<vector<idx_t>>(225, "bilinear_link_aux", bl_aux);
+		serializer.WritePropertyWithDefault<vector<idx_t>>(226, "bilinear_link_bool", bl_bool);
+		serializer.WritePropertyWithDefault<vector<idx_t>>(227, "bilinear_link_other", bl_other);
+	}
+	serializer.WritePropertyWithDefault<vector<bool>>(228, "is_boolean_var", is_boolean_var);
 	serializer.WritePropertyWithDefault<uint8_t>(209, "flat_objective_agg", static_cast<uint8_t>(flat_objective_agg));
 	serializer.WritePropertyWithDefault<bool>(210, "flat_objective_is_easy", flat_objective_is_easy);
 	serializer.WritePropertyWithDefault<uint8_t>(211, "per_inner_agg", static_cast<uint8_t>(per_inner_agg));
@@ -429,6 +442,21 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<pair<idx_t, idx_t>>>(206, "count_indicator_links", result->count_indicator_links);
 	deserializer.ReadPropertyWithDefault<vector<idx_t>>(207, "ne_indicator_indices", result->ne_indicator_indices);
 	deserializer.ReadPropertyWithDefault<vector<pair<string, idx_t>>>(208, "minmax_indicator_links", result->minmax_indicator_links);
+	// Deserialize bilinear_links from three parallel vectors
+	{
+		vector<idx_t> bl_aux, bl_bool, bl_other;
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(225, "bilinear_link_aux", bl_aux);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(226, "bilinear_link_bool", bl_bool);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(227, "bilinear_link_other", bl_other);
+		for (idx_t i = 0; i < bl_aux.size(); i++) {
+			LogicalDecide::BilinearLink link;
+			link.aux_idx = bl_aux[i];
+			link.bool_var_idx = bl_bool[i];
+			link.other_var_idx = bl_other[i];
+			result->bilinear_links.push_back(link);
+		}
+	}
+	deserializer.ReadPropertyWithDefault<vector<bool>>(228, "is_boolean_var", result->is_boolean_var);
 	uint8_t flat_agg_val = 0;
 	deserializer.ReadPropertyWithDefault<uint8_t>(209, "flat_objective_agg", flat_agg_val);
 	result->flat_objective_agg = static_cast<ObjectiveAggregateType>(flat_agg_val);

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 
 namespace duckdb {
@@ -96,6 +97,18 @@ private:
 	//! replace ABS nodes with aux var references, and generate linearization constraints.
 	//! For each ABS(inner): aux >= inner AND aux >= -inner.
 	void RewriteAbs(LogicalDecide &decide);
+
+	//! Rewrite bilinear products (x * y) where at least one factor is Boolean.
+	//! Boolean × Boolean: w = b1 * b2, AND-linearization (w <= b1, w <= b2, w >= b1+b2-1).
+	//! Boolean × Other: w = b * x, partial McCormick (w <= x at plan time,
+	//!   w <= U*b and w >= x-U*(1-b) at execution time via BilinearLink).
+	//! Non-Boolean × Non-Boolean: left in place for Q matrix handling in physical operator.
+	void RewriteBilinear(LogicalDecide &decide);
+
+	//! Helper: recursively find bilinear products in expression tree, replace Boolean cases
+	//! with auxiliary variable references, and collect metadata.
+	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
+	                            vector<LogicalDecide::BilinearLink> &links);
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect (aux_idx, inner_expr) pairs.

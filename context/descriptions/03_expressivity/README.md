@@ -11,13 +11,14 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
-| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, QCQP, SOCP |
+| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, QCQP, SOCP |
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, row-scoped/table-scoped, linearity | *(no planned features)* |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER | *(no planned features)* |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, COUNT (BOOLEAN/INTEGER), AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | COUNT (REAL), division |
+| [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
 
 ---
 
@@ -41,7 +42,8 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Correlated scalar subqueries | Yes (per-row constraints; aggregate requires scalar RHS) | — |
 | Linear constraints | Yes | — |
 | Quadratic objective: `MINIMIZE SUM(POWER(expr, 2))` | Yes (convex QP, syntax-enforced) | — |
-| Non-linear constraints (`x * y`) | Not supported (by design) | — |
+| Bilinear objectives (`b * x`, `x * y`) | Yes (McCormick / Q matrix) | — |
+| Bilinear constraints (`b * x`, `x * y`) | Yes (McCormick / `GRBaddqconstr`) | — |
 | `WHEN` on constraints | Yes | — |
 | `WHEN` on objective | Yes | — |
 | `PER` on constraints | Yes | — |

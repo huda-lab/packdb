@@ -94,6 +94,47 @@ SUCH THAT repaired >= 0 AND repaired <= 100 AND SUM(keep) >= 10
 MINIMIZE SUM(POWER(repaired - measured, 2))
 ```
 
+### Bilinear Programming (Boolean × Anything — McCormick Linearization)
+
+When one factor in a product of two different DECIDE variables is declared `IS BOOLEAN`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
+
+**Requires**: A finite upper bound on the non-Boolean variable (`x <= K`). Bool×Bool uses simpler AND-linearization (no Big-M needed).
+
+```sql
+-- Boolean x Real objective (both solvers)
+SELECT * FROM items
+DECIDE b IS BOOLEAN, x IS REAL
+SUCH THAT x <= 100 AND SUM(b) <= 5
+MAXIMIZE SUM(b * x)
+
+-- Boolean x Boolean objective (both solvers)
+SELECT * FROM tasks
+DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+SUCH THAT SUM(b1) <= 3 AND SUM(b2) <= 3
+MAXIMIZE SUM(b1 * b2)
+
+-- With data coefficient
+MAXIMIZE SUM(profit * b * x)
+```
+
+### Non-Convex Bilinear Programming (Q Matrix, Gurobi Only)
+
+When neither factor is Boolean (`Real×Real`, `Int×Int`, `Int×Real`), the product produces off-diagonal entries in the Q matrix. This is always indefinite (non-convex).
+
+- **Objectives**: Gurobi only (via `NonConvex=2`). HiGHS rejects with a clear error.
+- **Constraints**: Gurobi only (via `GRBaddqconstr`). HiGHS rejects with a clear error.
+
+```sql
+-- Real x Real objective (Gurobi only)
+SELECT * FROM data
+DECIDE x IS REAL, y IS REAL
+SUCH THAT x <= 10 AND y <= 10
+MINIMIZE SUM(x * y)
+
+-- Bilinear in constraints (Gurobi only)
+SUCH THAT SUM(x * y) <= 100
+```
+
 ### Feasibility Problems (No Objective)
 
 > **Not yet implemented.** The grammar currently requires `MAXIMIZE` or `MINIMIZE`. This section describes the planned behavior — see `problem_types/todo.md` for status.
@@ -122,6 +163,8 @@ The user does not declare a problem class. PackDB infers it from the variable ty
 | All REAL | Convex quadratic | QP |
 | All REAL | Non-convex quadratic (`MAXIMIZE SUM(POWER)`) | Non-convex QP (Gurobi only) |
 | Mix of REAL + INTEGER/BOOLEAN | Quadratic | MIQP (Gurobi only) |
+| Any (one factor BOOLEAN) | Bilinear (`b * x`) | MILP (McCormick, both solvers) |
+| Any (no BOOLEAN factor) | Bilinear (`x * y`) | Non-convex QP (Gurobi only) |
 | Any | None (feasibility) | Feasibility |
 
 The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and `nonconvex_quadratic` flags accordingly, and the solver backend handles the appropriate formulation.
@@ -138,15 +181,21 @@ The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and
 | QP (convex) | Yes | Yes |
 | QP (non-convex) | Yes (NonConvex=2) | **No** (error) |
 | MIQP | Yes | **No** (error) |
+| Bilinear (Bool × anything) | Yes (McCormick → MILP) | Yes (McCormick → MILP) |
+| Bilinear (non-convex) | Yes (Q matrix, NonConvex=2) | **No** (error) |
+| Bilinear constraints | Yes (`GRBaddqconstr`) | **No** (error) |
 | Feasibility | Yes | Yes |
 
 ---
 
 ## Key Structural Properties
 
-### Constraints Are Always Linear
+### Constraints
 
-All `SUCH THAT` constraints are linear by design. Products of two decision variables (`x * y`) are rejected at bind time. This means the feasible region is always a convex polytope (or the integer points within one), regardless of problem class.
+Constraints are primarily linear. Products of two decision variables (`x * y`) are also supported:
+
+- **Boolean × anything**: Exactly linearized via McCormick envelopes (both solvers). The bilinear product is replaced with auxiliary variables and linear constraints at optimizer time, so the feasible region remains a convex polytope.
+- **General non-convex** (`Real×Real`, `Int×Int`, `Int×Real`): Gurobi only, via `GRBaddqconstr`. HiGHS rejects with a clear error.
 
 ### Quadratic Objectives — Convexity and Sign
 
@@ -159,7 +208,14 @@ Supported quadratic forms:
 The following are rejected:
 
 - `MINIMIZE SUM(POWER(x, 3))` — only exponent 2 is supported
-- `MINIMIZE SUM(x * y)` — product of different DECIDE variables is not allowed
+
+### Bilinear Objectives
+
+Products of two different DECIDE variables in objectives:
+
+- **Boolean × anything** (`SUM(b * x)`): McCormick linearization produces an equivalent MILP. Both solvers. Requires a finite upper bound on the non-Boolean variable. Bool×Bool uses simpler AND-linearization (no Big-M).
+- **General non-convex** (`SUM(x * y)` where neither is Boolean): Off-diagonal Q matrix entries (always indefinite). Gurobi only (NonConvex=2). HiGHS rejects.
+- **Mixed objectives**: Linear + bilinear (`SUM(cost + b*x)`), bilinear + quadratic (`SUM(POWER(x-t,2) + b*x)`), and data coefficients (`SUM(profit * b * x)`) are all supported.
 
 **Syntax forms** (all equivalent for positive quadratic):
 
@@ -203,6 +259,7 @@ Several constructs (`<>`, `IN` on decision variables, `COUNT` on INTEGER, hard `
 - Objective forms (linear): [maximize_minimize/done.md](../maximize_minimize/done.md)
 - Constraint forms: [such_that/done.md](../such_that/done.md)
 - SQL functions and linearization: [sql_functions/done.md](../sql_functions/done.md)
+- Bilinear terms (`x * y`): [bilinear/done.md](../bilinear/done.md)
 - Solver backends and dispatch: [01_pipeline/03d_solver_backends.md](../../01_pipeline/03d_solver_backends.md)
 - Model building (variable type -> solver flags): [01_pipeline/03c_model_building.md](../../01_pipeline/03c_model_building.md)
 
@@ -234,6 +291,13 @@ Several constructs (`<>`, `IN` on decision variables, `COUNT` on INTEGER, hard `
 - **Solver input (Q matrix storage)**: `src/include/duckdb/packdb/solver_input.hpp`
   - `quadratic_inner_coefficients`, `quadratic_inner_variable_indices`, `has_quadratic_objective`
 
-- **SUM argument validation (QP syntax)**: `src/planner/expression_binder/decide_binder.cpp`
-  - `ValidateSumArgumentInternal` accepts `POWER(linear_expr, 2)`, `POW(linear_expr, 2)`, and `(expr) * (expr)` where both sides are identical
-  - Rejects `POWER(expr, N)` for N != 2, products of different DECIDE variables, non-constant exponents
+- **SUM argument validation (QP + bilinear syntax)**: `src/planner/expression_binder/decide_binder.cpp`
+  - `ValidateSumArgumentInternal` accepts `POWER(linear_expr, 2)`, `POW(linear_expr, 2)`, `(expr) * (expr)` where both sides are identical, and products of two different DECIDE variables (`x * y`) when `allow_bilinear` is true
+  - Rejects `POWER(expr, N)` for N != 2, triple or higher products, non-constant exponents
+
+- **Bilinear implementation**: See [bilinear/done.md](../bilinear/done.md) for full implementation details including:
+  - McCormick rewrite pass in optimizer (`RewriteBilinear`)
+  - Boolean type tracking (`is_boolean_var` vector)
+  - McCormick Big-M generation at execution time
+  - Q matrix off-diagonal entries for non-Boolean bilinear
+  - Quadratic constraints via `GRBaddqconstr`

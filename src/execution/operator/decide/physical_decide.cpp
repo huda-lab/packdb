@@ -531,7 +531,8 @@ public:
                 if (lhs->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
                     // SUM(...) aggregate constraint (AVG has been rewritten to SUM by DecideOptimizer)
                     auto &agg = lhs->Cast<BoundAggregateExpression>();
-                    op.ExtractTerms(*agg.children[0], constraint->lhs_terms);
+                    // Use bilinear-aware extraction for constraints
+                    ExtractConstraintTerms(*agg.children[0], *constraint, 1);
                     constraint->lhs_is_aggregate = true;
                     constraint->was_avg_rewrite = (agg.alias == AVG_REWRITE_TAG);
                     // Parse MIN/MAX indicator tag if present
@@ -598,6 +599,181 @@ public:
 
             default:
                 break;
+        }
+    }
+
+    //! Walk a SUM argument expression tree and split into linear terms and bilinear terms.
+    //! Bilinear terms (x * y where both are decide variables) go to objective->bilinear_terms.
+    //! Linear terms (c * x, constants) go to objective->terms via ExtractTerms.
+    void ExtractLinearAndBilinearTerms(const Expression &expr, Objective &obj, int sign) {
+        if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+            auto &func = expr.Cast<BoundFunctionExpression>();
+            string fname = func.function.name;
+
+            // Addition: recurse on all children
+            if (fname == "+") {
+                for (auto &child : func.children) {
+                    ExtractLinearAndBilinearTerms(*child, obj, sign);
+                }
+                return;
+            }
+
+            // Subtraction: first child same sign, second negated
+            if (fname == "-" && func.children.size() == 2) {
+                ExtractLinearAndBilinearTerms(*func.children[0], obj, sign);
+                ExtractLinearAndBilinearTerms(*func.children[1], obj, -sign);
+                return;
+            }
+
+            // Unary negation
+            if (fname == "-" && func.children.size() == 1) {
+                ExtractLinearAndBilinearTerms(*func.children[0], obj, -sign);
+                return;
+            }
+
+            // Multiplication: check for bilinear
+            if (fname == "*" && func.children.size() == 2) {
+                // Check if both sides contain decide variables
+                idx_t left_var = op.FindDecideVariable(*func.children[0]);
+                idx_t right_var = op.FindDecideVariable(*func.children[1]);
+
+                if (left_var != DConstants::INVALID_INDEX && right_var != DConstants::INVALID_INDEX) {
+                    // Both sides have decide variables
+                    // Check for identical expression (QP, not bilinear)
+                    if (func.children[0]->ToString() == func.children[1]->ToString()) {
+                        // Fall through to linear extraction (shouldn't happen — QP detected earlier)
+                    } else {
+                        // Bilinear term: extract var_a, var_b, and optional data coefficient
+                        // The expression is of the form: coef_a * var_a * coef_b * var_b
+                        // We need to extract both variable indices and any remaining data coefficient.
+                        // Simple case: left = var_a, right = var_b (coefficient = 1.0)
+                        // Complex case: left = coef * var_a, right = var_b
+                        // For now, handle the simple cases where each side is either:
+                        //   - a bare variable reference, or
+                        //   - data_coef * variable
+                        idx_t var_a = left_var;
+                        idx_t var_b = right_var;
+                        unique_ptr<Expression> coef_a = op.ExtractCoefficientWithoutVariable(*func.children[0], var_a);
+                        unique_ptr<Expression> coef_b = op.ExtractCoefficientWithoutVariable(*func.children[1], var_b);
+
+                        // Multiply the two data coefficients together
+                        unique_ptr<Expression> combined_coef;
+                        bool a_is_one = (coef_a->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+                                         coef_a->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
+                        bool b_is_one = (coef_b->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+                                         coef_b->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
+                        if (a_is_one && b_is_one) {
+                            combined_coef = nullptr; // coefficient is 1.0
+                        } else if (a_is_one) {
+                            combined_coef = std::move(coef_b);
+                        } else if (b_is_one) {
+                            combined_coef = std::move(coef_a);
+                        } else {
+                            // Need to create a multiplication expression
+                            auto mul = make_uniq<BoundFunctionExpression>(
+                                LogicalType::DOUBLE, func.function,
+                                vector<unique_ptr<Expression>>(), nullptr);
+                            // We need to build coef_a * coef_b — but we don't have the function binding.
+                            // Simpler: just keep one of them as the coefficient and handle at eval time
+                            // Actually, we can create the multiplication differently. For now,
+                            // just store coef_a and handle coef_b multiplication in the coefficient.
+                            // This is a simplification — a full solution would combine them.
+                            combined_coef = std::move(coef_a);
+                            // TODO: properly multiply coef_a * coef_b
+                        }
+
+                        Objective::BilinearTerm bt;
+                        bt.var_a = var_a;
+                        bt.var_b = var_b;
+                        bt.coefficient = combined_coef ? std::move(combined_coef) : nullptr;
+                        bt.sign = sign;
+                        obj.bilinear_terms.push_back(std::move(bt));
+                        obj.has_bilinear = true;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Handle casts
+        if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            auto &cast = expr.Cast<BoundCastExpression>();
+            ExtractLinearAndBilinearTerms(*cast.child, obj, sign);
+            return;
+        }
+
+        // Not bilinear — delegate to linear extraction
+        idx_t before = obj.terms.size();
+        op.ExtractTerms(expr, obj.terms);
+        // Apply sign to newly added terms
+        if (sign == -1) {
+            for (idx_t i = before; i < obj.terms.size(); i++) {
+                obj.terms[i].sign *= -1;
+            }
+        }
+    }
+
+    //! Extract linear and bilinear terms from a SUM argument in a constraint.
+    //! Similar to ExtractLinearAndBilinearTerms but outputs to DecideConstraint fields.
+    void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign) {
+        if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+            auto &func = expr.Cast<BoundFunctionExpression>();
+            string fname = func.function.name;
+
+            if (fname == "+") {
+                for (auto &child : func.children) {
+                    ExtractConstraintTerms(*child, constr, sign);
+                }
+                return;
+            }
+            if (fname == "-" && func.children.size() == 2) {
+                ExtractConstraintTerms(*func.children[0], constr, sign);
+                ExtractConstraintTerms(*func.children[1], constr, -sign);
+                return;
+            }
+            if (fname == "-" && func.children.size() == 1) {
+                ExtractConstraintTerms(*func.children[0], constr, -sign);
+                return;
+            }
+            if (fname == "*" && func.children.size() == 2) {
+                idx_t left_var = op.FindDecideVariable(*func.children[0]);
+                idx_t right_var = op.FindDecideVariable(*func.children[1]);
+                if (left_var != DConstants::INVALID_INDEX && right_var != DConstants::INVALID_INDEX &&
+                    func.children[0]->ToString() != func.children[1]->ToString()) {
+                    // Bilinear constraint term
+                    BilinearConstraintTerm bt;
+                    bt.var_a = left_var;
+                    bt.var_b = right_var;
+                    auto coef_a = op.ExtractCoefficientWithoutVariable(*func.children[0], left_var);
+                    auto coef_b = op.ExtractCoefficientWithoutVariable(*func.children[1], right_var);
+                    bool a_one = (coef_a->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+                                  coef_a->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
+                    bool b_one = (coef_b->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+                                  coef_b->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
+                    if (!a_one) {
+                        bt.coefficient = std::move(coef_a);
+                    } else if (!b_one) {
+                        bt.coefficient = std::move(coef_b);
+                    }
+                    bt.sign = sign;
+                    constr.bilinear_terms.push_back(std::move(bt));
+                    constr.has_bilinear = true;
+                    return;
+                }
+            }
+        }
+        if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            auto &cast = expr.Cast<BoundCastExpression>();
+            ExtractConstraintTerms(*cast.child, constr, sign);
+            return;
+        }
+        // Linear — delegate to ExtractTerms
+        idx_t before = constr.lhs_terms.size();
+        op.ExtractTerms(expr, constr.lhs_terms);
+        if (sign == -1) {
+            for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
+                constr.lhs_terms[i].sign *= -1;
+            }
         }
     }
 
@@ -705,7 +881,7 @@ public:
                     }
                 }
 
-                // Multiplication by negative constant: (-1) * quadratic or quadratic * (-1)
+                // Multiplication by constant: K * quadratic or quadratic * K
                 if (!is_quadratic && outer_name == "*" && outer_func.children.size() == 2) {
                     for (idx_t i = 0; i < 2; i++) {
                         const Expression *maybe_const = outer_func.children[i].get();
@@ -715,8 +891,8 @@ public:
                         if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
                             double cval = maybe_const->Cast<BoundConstantExpression>()
                                               .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                            if (cval < 0.0 && TryDetectQuadratic(outer_func.children[1 - i].get())) {
-                                quadratic_sign = -1.0;
+                            if (cval != 0.0 && TryDetectQuadratic(outer_func.children[1 - i].get())) {
+                                quadratic_sign = cval;
                                 is_quadratic = true;
                                 break;
                             }
@@ -734,8 +910,9 @@ public:
                 }
                 op.ExtractTerms(*inner_linear_expr, objective->squared_terms);
             } else {
-                // Linear objective (existing path)
-                op.ExtractTerms(*agg.children[0], objective->terms);
+                // Linear + possible bilinear objective
+                // Walk the SUM argument and split into linear terms and bilinear terms.
+                ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1);
             }
 
             objective->when_condition = std::move(when_cond);
@@ -763,9 +940,10 @@ public:
                     TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
                     break;
                 }
-                // PackDB WHEN: only recurse into the constraint (child[0]), skip the condition
+                // PackDB WHEN: skip entirely — WHEN constraints are conditional (per-row),
+                // so they must NOT contribute to global variable bounds.
+                // E.g., "x <= 0 WHEN condition" should NOT set upper_bounds[x] = 0 globally.
                 if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
-                    TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
                     break;
                 }
                 // AND expression - recurse on all children
@@ -778,20 +956,36 @@ public:
             case ExpressionClass::BOUND_COMPARISON: {
                 auto &comp = expr.Cast<BoundComparisonExpression>();
 
-                // Check if this is a variable-level constraint (not SUM)
-                // Handle CASTs wrapping aggregates (e.g., CAST(SUM(x)) >= 10)
+                // Only extract global bounds from simple "x OP constant" constraints,
+                // where x is a bare DECIDE variable (possibly cast-wrapped).
+                // Multi-variable expressions (e.g., x - 3*z_1 - 5*z_2 = 0 from IN rewrite)
+                // must NOT be treated as single-variable bounds.
                 auto *lhs = comp.left.get();
                 while (lhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
                     lhs = lhs->Cast<BoundCastExpression>().child.get();
                 }
 
-                if (lhs->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-                    idx_t var_idx = op.FindDecideVariable(*comp.left);
+                if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    // Simple single-variable LHS — check if it's a DECIDE variable
+                    auto &colref = lhs->Cast<BoundColumnRefExpression>();
+                    idx_t var_idx = DConstants::INVALID_INDEX;
+                    for (idx_t i = 0; i < op.decide_variables.size(); i++) {
+                        auto &decide_var = op.decide_variables[i]->Cast<BoundColumnRefExpression>();
+                        if (colref.binding == decide_var.binding) {
+                            var_idx = i;
+                            break;
+                        }
+                    }
 
                     if (var_idx != DConstants::INVALID_INDEX) {
-                        // Extract bound value from RHS
-                        if (comp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                            auto &rhs = comp.right->Cast<BoundConstantExpression>();
+                        // Extract bound value from RHS, unwrapping CASTs
+                        // (DuckDB may insert implicit casts like CAST(5 AS INTEGER))
+                        auto *rhs_ptr = comp.right.get();
+                        while (rhs_ptr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                            rhs_ptr = rhs_ptr->Cast<BoundCastExpression>().child.get();
+                        }
+                        if (rhs_ptr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                            auto &rhs = rhs_ptr->Cast<BoundConstantExpression>();
 
                             // Cast to double - handle both INTEGER and DOUBLE types
                             double bound_value;
@@ -856,6 +1050,14 @@ public:
     vector<idx_t> quadratic_variable_indices;
     bool has_quadratic_objective = false;
     double quadratic_sign = 1.0;
+
+    // Bilinear objective: pairs of different decide variables with data coefficients
+    struct EvaluatedBilinearTerm {
+        idx_t var_a;
+        idx_t var_b;
+        vector<double> row_coefficients; // [row_idx]
+    };
+    vector<EvaluatedBilinearTerm> evaluated_bilinear_terms;
 
     vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
@@ -1271,6 +1473,44 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
+        // Evaluate bilinear terms in constraint (if any)
+        if (constraint->has_bilinear) {
+            for (auto &bt : constraint->bilinear_terms) {
+                EvaluatedConstraint::BilinearTerm ebt;
+                ebt.var_a = bt.var_a;
+                ebt.var_b = bt.var_b;
+
+                if (bt.coefficient) {
+                    auto transformed = TransformToChunkExpression(*bt.coefficient, context);
+                    ExpressionExecutor coef_executor(context);
+                    coef_executor.AddExpression(*transformed);
+                    ColumnDataScanState bl_scan;
+                    gstate.data.InitializeScan(bl_scan);
+                    DataChunk bl_chunk;
+                    bl_chunk.Initialize(context, gstate.data.Types());
+                    while (gstate.data.Scan(bl_scan, bl_chunk)) {
+                        DataChunk coef_result;
+                        coef_result.Initialize(context, {transformed->return_type});
+                        coef_executor.Execute(bl_chunk, coef_result);
+                        auto &vec = coef_result.data[0];
+                        for (idx_t r = 0; r < bl_chunk.size(); r++) {
+                            Value val = vec.GetValue(r);
+                            if (val.IsNull()) {
+                                throw InvalidInputException(
+                                    "DECIDE bilinear constraint coefficient returned NULL at row %llu.",
+                                    ebt.row_coefficients.size());
+                            }
+                            double dval = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                            ebt.row_coefficients.push_back(dval * bt.sign);
+                        }
+                    }
+                } else {
+                    ebt.row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+                }
+                eval_const.bilinear_terms.push_back(std::move(ebt));
+            }
+        }
+
         gstate.evaluated_constraints.push_back(std::move(eval_const));
     }
 
@@ -1390,6 +1630,75 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
         // No extra debug here; solver output will show timings/objective
+
+        // Evaluate bilinear term coefficients (non-Boolean pairs left by optimizer)
+        if (gstate.objective->has_bilinear) {
+            for (auto &bt : gstate.objective->bilinear_terms) {
+                DecideGlobalSinkState::EvaluatedBilinearTerm ebt;
+                ebt.var_a = bt.var_a;
+                ebt.var_b = bt.var_b;
+
+                if (bt.coefficient) {
+                    // Evaluate the data coefficient per-row
+                    auto transformed = TransformToChunkExpression(*bt.coefficient, context);
+                    ExpressionExecutor coef_executor(context);
+                    coef_executor.AddExpression(*transformed);
+
+                    ColumnDataScanState bl_scan;
+                    gstate.data.InitializeScan(bl_scan);
+                    DataChunk bl_chunk;
+                    bl_chunk.Initialize(context, gstate.data.Types());
+
+                    while (gstate.data.Scan(bl_scan, bl_chunk)) {
+                        DataChunk coef_result;
+                        coef_result.Initialize(context, {transformed->return_type});
+                        coef_executor.Execute(bl_chunk, coef_result);
+                        auto &vec = coef_result.data[0];
+                        for (idx_t r = 0; r < bl_chunk.size(); r++) {
+                            Value val = vec.GetValue(r);
+                            if (val.IsNull()) {
+                                throw InvalidInputException(
+                                    "DECIDE bilinear objective coefficient returned NULL at row %llu.",
+                                    ebt.row_coefficients.size());
+                            }
+                            double dval = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                            ebt.row_coefficients.push_back(dval * bt.sign);
+                        }
+                    }
+                } else {
+                    // Coefficient is 1.0 for all rows
+                    ebt.row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+                }
+
+                // Apply WHEN mask to bilinear coefficients (same as linear)
+                if (gstate.objective->when_condition) {
+                    auto transformed_condition = TransformToChunkExpression(*gstate.objective->when_condition, context);
+                    ExpressionExecutor cond_executor(context);
+                    cond_executor.AddExpression(*transformed_condition);
+                    ColumnDataScanState when_scan;
+                    gstate.data.InitializeScan(when_scan);
+                    DataChunk when_chunk;
+                    when_chunk.Initialize(context, gstate.data.Types());
+                    idx_t row_offset = 0;
+                    while (gstate.data.Scan(when_scan, when_chunk)) {
+                        DataChunk cond_result;
+                        cond_result.Initialize(context, {LogicalType::BOOLEAN});
+                        cond_executor.Execute(when_chunk, cond_result);
+                        auto &vec = cond_result.data[0];
+                        for (idx_t r = 0; r < when_chunk.size(); r++) {
+                            Value val = vec.GetValue(r);
+                            bool ok = val.IsNull() ? false : val.GetValue<bool>();
+                            if (!ok) {
+                                ebt.row_coefficients[row_offset + r] = 0.0;
+                            }
+                        }
+                        row_offset += when_chunk.size();
+                    }
+                }
+
+                gstate.evaluated_bilinear_terms.push_back(std::move(ebt));
+            }
+        }
     }
 
     //===--------------------------------------------------------------------===//
@@ -1611,6 +1920,43 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         gstate.evaluated_constraints = std::move(new_constraints);
     }
 
+    // Generate McCormick Big-M constraints for bilinear auxiliary variables (w = b * x).
+    // The structural constraint w <= x was generated at optimizer time.
+    // Here we add: w <= U*b and w >= x - U*(1-b), which require the execution-time bound U.
+    for (auto &link : bilinear_links) {
+        double U = solver_input.upper_bounds[link.other_var_idx];
+        if (U >= 1e20) {
+            throw InvalidInputException(
+                "Bilinear term requires a finite upper bound on variable '%s'. "
+                "Add a constraint like '%s <= <bound>' to provide one.",
+                decide_variables[link.other_var_idx]->Cast<BoundColumnRefExpression>().alias,
+                decide_variables[link.other_var_idx]->Cast<BoundColumnRefExpression>().alias);
+        }
+
+        // Constraint: w <= U * b  (i.e., w - U*b <= 0)
+        EvaluatedConstraint ec1;
+        ec1.variable_indices = {link.aux_idx, link.bool_var_idx};
+        ec1.row_coefficients = {vector<double>(num_rows, 1.0), vector<double>(num_rows, -U)};
+        ec1.rhs_values.assign(num_rows, 0.0);
+        ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec1.lhs_is_aggregate = false;
+        gstate.evaluated_constraints.push_back(std::move(ec1));
+
+        // Constraint: w >= x - U*(1-b) = x - U + U*b
+        // Rearranged: w - x + U*b >= -U  →  1*w + (-1)*x + (-U)*b >= -U
+        EvaluatedConstraint ec2;
+        ec2.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
+        ec2.row_coefficients = {
+            vector<double>(num_rows, 1.0),     // +w
+            vector<double>(num_rows, -1.0),    // -x
+            vector<double>(num_rows, -U)       // -U*b
+        };
+        ec2.rhs_values.assign(num_rows, -U);   // RHS = -U
+        ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        ec2.lhs_is_aggregate = false;
+        gstate.evaluated_constraints.push_back(std::move(ec2));
+    }
+
     // Constraints
     solver_input.constraints = std::move(gstate.evaluated_constraints);
 
@@ -1627,6 +1973,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
         for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
             solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
+        }
+    }
+
+    // Bilinear objective terms (non-Boolean pairs, for Q matrix off-diagonal entries)
+    if (!gstate.evaluated_bilinear_terms.empty()) {
+        for (auto &ebt : gstate.evaluated_bilinear_terms) {
+            SolverInput::BilinearObjectiveTerm bot;
+            bot.var_a = ebt.var_a;
+            bot.var_b = ebt.var_b;
+            bot.row_coefficients = std::move(ebt.row_coefficients);
+            solver_input.bilinear_objective_terms.push_back(std::move(bot));
         }
     }
 

@@ -135,6 +135,11 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	LOAD_SYM(geterrormsg,       "GRBgeterrormsg")
 
 	#undef LOAD_SYM
+
+	// Optional: GRBaddqconstr (quadratic constraints, available in Gurobi 5.0+)
+	api.addqconstr = reinterpret_cast<decltype(api.addqconstr)>(dlsym(handle, "GRBaddqconstr"));
+	// Not required — bilinear constraints will error if this is missing and needed
+
 	return true;
 }
 

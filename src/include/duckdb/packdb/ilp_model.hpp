@@ -112,6 +112,19 @@ struct SolverModel {
     //! Constraints (linear)
     vector<ModelConstraint> constraints;
 
+    //! Quadratic constraints: sum(linear) + sum(q * x_i * x_j) <sense> rhs
+    //! Used for bilinear terms in constraints (QCQP). Gurobi only.
+    struct QuadraticConstraint {
+        vector<int> linear_indices;
+        vector<double> linear_coefficients;
+        vector<int> q_rows;
+        vector<int> q_cols;
+        vector<double> q_coefficients;
+        char sense;
+        double rhs;
+    };
+    vector<QuadraticConstraint> quadratic_constraints;
+
     //! Build a SolverModel from a SolverInput (the shared model-building logic)
     static SolverModel Build(const SolverInput &input);
 };

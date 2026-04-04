@@ -18,7 +18,7 @@ The objective expression must be a single aggregate expression using one of the 
 ## Requirements
 
 1. Must use a supported aggregate: `SUM()`, `COUNT()`, `AVG()`, `MIN()`, or `MAX()`. See [sql_functions/done.md](../sql_functions/done.md) for details on each.
-2. Must be **linear** in the decision variables (or convex quadratic — see [problem_types/done.md](../problem_types/done.md)).
+2. Must be **linear**, **quadratic** (`POWER(expr, 2)`), or **bilinear** (`x * y`) in the decision variables — see [problem_types/done.md](../problem_types/done.md) and [bilinear/done.md](../bilinear/done.md).
 3. Must involve at least one decision variable.
 
 ---

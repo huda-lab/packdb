@@ -44,6 +44,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         );
 
         decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
+        decide_op->is_boolean_var = std::move(statement.is_boolean_var);
         decide_op->entity_scopes = std::move(statement.entity_scopes);
         decide_op->variable_entity_scope = std::move(statement.variable_entity_scope);
         // count_indicator_links, ne_indicator_indices, ABS aux vars, and MIN/MAX

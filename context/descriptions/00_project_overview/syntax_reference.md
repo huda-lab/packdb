@@ -87,9 +87,15 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
   - `POWER(expr, 2)` / `POW(expr, 2)` — function call
   - `expr ** 2` — exponentiation operator
   - `(expr) * (expr)` — identical multiplication (both sides must be the same expression)
-  - Only `MINIMIZE` is allowed (maximizing a sum of squares is non-convex).
+  - Negated forms: `-POWER(expr, 2)`, `(-1) * POWER(expr, 2)` for concave QP (both solvers).
+  - `MAXIMIZE SUM(POWER(expr, 2))` is non-convex (Gurobi only, via NonConvex=2).
   - Gurobi supports both continuous QP and mixed-integer QP (MIQP). HiGHS supports continuous QP only — integer/boolean variables with quadratic objectives require Gurobi.
-  - Quadratic constraints (QCQP) are not yet supported.
+- **Bilinear objectives and constraints (`x * y`)**: Products of two different DECIDE variables are supported in both objectives and constraints. Two categories:
+  - **Boolean x anything** (McCormick linearization): When one factor is `IS BOOLEAN`, the product is exactly linearized. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable (`x <= K`). Bool x Bool uses simpler AND-linearization (no Big-M).
+  - **General non-convex** (`Real*Real`, `Int*Int`, `Int*Real`): Produces indefinite Q matrix. Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via quadratic constraints). HiGHS rejects with clear errors.
+  - Data coefficients are supported: `SUM(profit * b * x)`.
+  - Composes with WHEN: `SUM(b * x) WHEN condition`.
+  - Triple or higher products (`a * b * c`) are rejected.
 
 ## 5. Aggregations
 

@@ -13,7 +13,7 @@ Covers:
   - test_avg_with_when_per: combined case
   - test_avg_boolean: AVG(x) for BOOLEAN vars
   - test_avg_integer: AVG(x) for INTEGER vars
-  - test_avg_nonlinear_rejected: AVG(x * y) where both are decide vars
+  - test_avg_bilinear_constraint: AVG(x * y) bilinear constraint (Bool×Bool)
   - test_avg_no_decide_var: AVG(col) passes through to normal DuckDB
 """
 
@@ -198,8 +198,12 @@ def test_avg_integer(packdb_cli):
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_nonlinear_rejected(packdb_cli):
-    """AVG(x * y) where both x and y are decision variables should be rejected."""
+def test_avg_bilinear_constraint(packdb_cli):
+    """AVG(x * y) where both x and y are BOOLEAN decision variables — bilinear constraint.
+
+    With bilinear support, Bool×Bool products are linearized via AND-linearization.
+    AVG(x*y) <= 0.5 with 3 rows means SUM(x*y) <= 1.5, i.e., at most 1 row has both x=1 and y=1.
+    """
     sql = """
         SELECT x, y FROM (
             VALUES (1), (2), (3)
@@ -208,12 +212,16 @@ def test_avg_nonlinear_rejected(packdb_cli):
         SUCH THAT AVG(x * y) <= 0.5
         MAXIMIZE SUM(x + y)
     """
-    with pytest.raises(Exception) as exc_info:
-        packdb_cli.execute(sql)
-    # Should fail on the non-linear x*y, not on AVG specifically
-    assert "linear" in str(exc_info.value).lower() or "non-linear" in str(exc_info.value).lower() or \
-           "multiply" in str(exc_info.value).lower() or "variable" in str(exc_info.value).lower(), \
-        f"Expected linearity error, got: {exc_info.value}"
+    rows, cols = packdb_cli.execute(sql)
+    ci = {name: i for i, name in enumerate(cols)}
+    # Verify constraint: AVG(x*y) <= 0.5 → at most 1 row with both x=1 and y=1
+    both_selected = sum(1 for r in rows if r[ci["x"]] == 1 and r[ci["y"]] == 1)
+    n = len(rows)
+    avg_xy = both_selected / n
+    assert avg_xy <= 0.5 + 1e-6, f"AVG(x*y) should be <= 0.5, got {avg_xy}"
+    # Objective MAXIMIZE SUM(x+y): should maximize total selections
+    total = sum(r[ci["x"]] + r[ci["y"]] for r in rows)
+    assert total >= 4, f"Should select at least 4 total (x+y across rows), got {total}"
 
 
 @pytest.mark.avg_rewrite

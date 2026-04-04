@@ -59,6 +59,8 @@ public:
     unique_ptr<Expression> decide_objective;
     //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
+    //! Per-variable boolean flag (true if declared IS BOOLEAN)
+    vector<bool> is_boolean_var;
     //! Table-scoped variable metadata (populated during binding, transferred to LogicalDecide)
     vector<EntityScopeInfo> entity_scopes;
     vector<idx_t> variable_entity_scope;

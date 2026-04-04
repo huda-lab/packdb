@@ -53,6 +53,8 @@ SUCH THAT constraint [AND constraint ...]
 [MINIMIZE] SUM(POWER(linear_expression, 2))  -- convex QP
 [MAXIMIZE] SUM(-POWER(linear_expression, 2)) -- concave QP (both solvers)
 [MAXIMIZE] SUM(POWER(linear_expression, 2))  -- non-convex QP (Gurobi only)
+[MAXIMIZE|MINIMIZE] SUM(bool_var * other_var) -- bilinear, McCormick (both solvers)
+[MAXIMIZE|MINIMIZE] SUM(var_a * var_b)        -- bilinear, non-convex (Gurobi only)
 ```
 
 - Variable types: `IS BOOLEAN` (0/1), `IS INTEGER` (default, non-negative), `IS REAL` (continuous, non-negative)
@@ -67,8 +69,11 @@ SUCH THAT constraint [AND constraint ...]
   - **Easy objectives**: `MINIMIZE MAX(expr)`, `MAXIMIZE MIN(expr)` → global auxiliary variable `z` with per-row linking constraints (`z >= expr_i` or `z <= expr_i`).
   - **Hard objectives**: `MAXIMIZE MAX(expr)`, `MINIMIZE MIN(expr)` → global `z` + per-row binary indicators + `SUM(y) >= 1`, because finding the row that achieves the optimum requires indicator selection.
 - **PER on objectives**: Nested aggregate syntax `OUTER(INNER(expr)) PER col` where OUTER/INNER ∈ {SUM, MIN, MAX, AVG}. AVG as outer maps to SUM (constant divisor). AVG as inner scales coefficients by `1/n_g` (group size) — NOT equivalent to SUM when groups have different sizes. Flat `SUM/AVG + PER` is a no-op; flat `MIN/MAX + PER` is an error (ambiguous). Two-level ILP formulation: inner creates per-group auxiliaries, outer creates global auxiliary. Easy/hard classification applies at each level independently.
-- **Quadratic objectives (QP)**: Three syntax forms: `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)`. Negated forms also supported: `-POWER(expr, 2)`, `(-1) * POWER(expr, 2)`. MINIMIZE with PSD Q and MAXIMIZE with NSD Q are convex (both solvers). MAXIMIZE with PSD Q is non-convex (Gurobi only, via NonConvex=2). Gurobi supports MIQP; HiGHS supports continuous convex QP only. Quadratic constraints (QCQP) are not yet supported.
-- Constraints must be linear (no `x * y` between decision variables). Objectives can be linear or quadratic (convex or non-convex with Gurobi).
+- **Quadratic objectives (QP)**: Three syntax forms: `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)`. Negated forms also supported: `-POWER(expr, 2)`, `(-1) * POWER(expr, 2)`. MINIMIZE with PSD Q and MAXIMIZE with NSD Q are convex (both solvers). MAXIMIZE with PSD Q is non-convex (Gurobi only, via NonConvex=2). Gurobi supports MIQP; HiGHS supports continuous convex QP only.
+- **Bilinear terms (`x * y`)**: Product of two different DECIDE variables supported in objectives and constraints. Two categories:
+  - **Boolean × anything** (linearizable): When one factor is Boolean, McCormick envelopes produce exact MILP reformulation. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable. Bool×Bool uses simpler AND-linearization (no Big-M).
+  - **General (non-convex)**: Real×Real, Int×Int, Int×Real produce indefinite Q matrix (off-diagonal entries). Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via `GRBaddqconstr`). HiGHS rejects with clear error.
+- Constraints support both linear and bilinear terms. Objectives can be linear, quadratic (POWER), bilinear, or mixed.
 
 For full syntax details: `context/descriptions/00_project_overview/syntax_reference.md`
 For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
@@ -92,7 +97,7 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 - The executable is named `packdb`
 - DECIDE clause keywords: DECIDE, SUCH THAT, MAXIMIZE, MINIMIZE, WHEN
 - WHEN is postfix on constraints and objectives: `expression WHEN condition` (not `WHEN condition THEN expression`)
-- Constraints must be linear; objectives support both linear and convex quadratic (QP via `MINIMIZE SUM(POWER(linear_expr, 2))`)
+- Constraints support linear and bilinear terms; objectives support linear, quadratic (QP via `POWER`), bilinear (`x * y`), or mixed forms
 - Solver strategy: Gurobi (primary, commercial) — empirically much faster in practice. HiGHS (bundled, open-source) is retained as a fallback only; it is significantly slower and not recommended for production use.
 - Always use `python3` (not `python`) — `python` is not available on this system
 

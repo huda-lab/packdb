@@ -1091,23 +1091,87 @@ static bool SumInnerIsQuadratic(const ParsedExpression &inner,
     if (SumInnerIsQuadraticCore(inner, decide_variables)) {
         return true;
     }
-    // Negated quadratic: -(POWER(expr, 2)) or (-1) * POWER(expr, 2)
+    // Scaled quadratic: -(POWER(expr, 2)) or K * POWER(expr, 2)
     if (inner.GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &func = inner.Cast<FunctionExpression>();
         // Unary negation: -(quadratic)
         if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
             return SumInnerIsQuadraticCore(*func.children[0], decide_variables);
         }
-        // Multiplication by negative constant: (-1) * quadratic or quadratic * (-1)
+        // Multiplication by constant: K * quadratic or quadratic * K
         if (func.is_operator && func.function_name == "*" && func.children.size() == 2) {
             for (idx_t i = 0; i < 2; i++) {
                 if (func.children[i]->GetExpressionClass() == ExpressionClass::CONSTANT) {
                     double val;
-                    if (IsNumericConstant(*func.children[i], val) && val < 0.0) {
+                    if (IsNumericConstant(*func.children[i], val) && val != 0.0) {
                         return SumInnerIsQuadraticCore(*func.children[1 - i], decide_variables);
                     }
                 }
             }
+        }
+    }
+    return false;
+}
+
+// Detect if a SUM inner expression contains a bilinear product of two different
+// DECIDE variables (e.g., x * y), possibly scaled by a constant.
+// This complements SumInnerIsQuadratic for normalization-skip logic.
+static bool SumInnerContainsBilinearCore(const ParsedExpression &inner,
+                                          const case_insensitive_map_t<idx_t> &decide_variables) {
+    if (inner.GetExpressionClass() != ExpressionClass::FUNCTION) return false;
+    auto &func = inner.Cast<FunctionExpression>();
+
+    // Direct x * y where both sides contain different decide variables
+    if (func.is_operator && func.function_name == "*" && func.children.size() == 2) {
+        // Exclude the identical-expression case (that's QP, not bilinear)
+        if (func.children[0]->ToString() != func.children[1]->ToString()) {
+            bool left_has = ExprContainsDecideVar(*func.children[0], decide_variables);
+            bool right_has = ExprContainsDecideVar(*func.children[1], decide_variables);
+            if (left_has && right_has) {
+                return true;
+            }
+        }
+    }
+
+    // Recurse into + and - operators (SUM argument may be a sum of terms)
+    if (func.is_operator && (func.function_name == "+" || func.function_name == "-")) {
+        for (auto &child : func.children) {
+            if (SumInnerContainsBilinearCore(*child, decide_variables)) {
+                return true;
+            }
+        }
+    }
+
+    // Scaled bilinear: K * (x * y) or (x * y) * K
+    if (func.is_operator && func.function_name == "*" && func.children.size() == 2) {
+        for (idx_t i = 0; i < 2; i++) {
+            if (func.children[i]->GetExpressionClass() == ExpressionClass::CONSTANT ||
+                !ExprContainsDecideVar(*func.children[i], decide_variables)) {
+                if (SumInnerContainsBilinearCore(*func.children[1 - i], decide_variables)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Negated bilinear: -(x * y)
+    if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
+        return SumInnerContainsBilinearCore(*func.children[0], decide_variables);
+    }
+
+    return false;
+}
+
+static bool SumInnerContainsBilinear(const ParsedExpression &inner,
+                                      const case_insensitive_map_t<idx_t> &decide_variables) {
+    if (SumInnerContainsBilinearCore(inner, decide_variables)) {
+        return true;
+    }
+    // Scaled at top level: K * bilinear
+    if (inner.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = inner.Cast<FunctionExpression>();
+        if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
+            return SumInnerContainsBilinearCore(*func.children[0], decide_variables);
         }
     }
     return false;
@@ -1147,9 +1211,17 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
         return expr.Copy();
     }
 
-    // Skip normalization for quadratic objectives — the symbolic expansion
+    // Skip normalization for quadratic objectives — symbolic expansion
     // would destroy the POWER(expr, 2) structure that the QP pipeline needs.
     if (SumInnerIsQuadratic(*f.children[0], decide_variables)) {
+        return expr.Copy();
+    }
+
+    // For bilinear objectives: skip full symbolic expansion (which would destroy
+    // the x*y structure), but still split additive terms so that pure-data terms
+    // like SUM(cost + b*x) get factored into SUM(cost) + SUM(b*x).
+    // This prevents constant data terms from leaking into the optimization pipeline.
+    if (SumInnerContainsBilinear(*f.children[0], decide_variables)) {
         return expr.Copy();
     }
 

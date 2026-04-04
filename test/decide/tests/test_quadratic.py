@@ -388,6 +388,153 @@ class TestQuadraticMaximize:
             assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
 
+    def test_maximize_negated_coefficient_not_one(self, packdb_cli):
+        """(-2) * POWER(x - target, 2) must preserve the factor of 2.
+
+        MAXIMIZE SUM((-2) * POWER(x - target, 2)) is concave (Case A).
+        Optimal: x_i = target_i (same optimum as coefficient -1, but
+        the objective value should be 0, not some wrong number).
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 10.0 AS target UNION ALL
+                SELECT 2, 20.0 UNION ALL
+                SELECT 3, 30.0
+            )
+            SELECT id, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 100
+            MAXIMIZE SUM((-2) * POWER(x - target, 2))
+        """
+        result, cols = packdb_cli.execute(sql)
+        x_col = cols.index("x")
+        id_col = cols.index("id")
+
+        for row in result:
+            rid = int(row[id_col])
+            x_val = float(row[x_col])
+            expected = {1: 10.0, 2: 20.0, 3: 30.0}[rid]
+            assert abs(x_val - expected) < 0.01, \
+                f"Row {rid}: expected x={expected}, got x={x_val}"
+
+    def test_maximize_half_negated_coefficient(self, packdb_cli):
+        """(-0.5) * POWER(x - target, 2) — fractional negative coefficient.
+
+        Ensures magnitude 0.5 is preserved, not collapsed to -1.
+        With binding constraint SUM(x) = 90 (targets sum to 60),
+        excess of 30 is distributed equally (+10 each) by QP optimality.
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 10.0 AS target UNION ALL
+                SELECT 2, 20.0 UNION ALL
+                SELECT 3, 30.0
+            )
+            SELECT id, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 90
+            MAXIMIZE SUM((-0.5) * POWER(x - target, 2))
+        """
+        result, cols = packdb_cli.execute(sql)
+        x_col = cols.index("x")
+        id_col = cols.index("id")
+
+        # Excess 30 distributed equally: each x = target + 10
+        for row in result:
+            rid = int(row[id_col])
+            x_val = float(row[x_col])
+            expected = {1: 20.0, 2: 30.0, 3: 40.0}[rid]
+            assert abs(x_val - expected) < 0.5, \
+                f"Row {rid}: expected x≈{expected}, got x={x_val}"
+
+    def test_maximize_power_times_neg_one_rhs(self, packdb_cli):
+        """POWER(x - target, 2) * (-1) — constant on right side of multiply.
+
+        Same as -POWER(...) but tests the right-hand constant path.
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 15.0 AS target UNION ALL
+                SELECT 2, 25.0
+            )
+            SELECT id, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 100
+            MAXIMIZE SUM(POWER(x - target, 2) * (-1))
+        """
+        result, cols = packdb_cli.execute(sql)
+        x_col = cols.index("x")
+        id_col = cols.index("id")
+
+        for row in result:
+            rid = int(row[id_col])
+            x_val = float(row[x_col])
+            expected = {1: 15.0, 2: 25.0}[rid]
+            assert abs(x_val - expected) < 0.01, \
+                f"Row {rid}: expected x={expected}, got x={x_val}"
+
+    def test_maximize_negated_multiplication_form(self, packdb_cli):
+        """MAXIMIZE SUM(-((x-t) * (x-t))) — negated identical-child multiply."""
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 12.0 AS target UNION ALL
+                SELECT 2, 35.0
+            )
+            SELECT id, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 100
+            MAXIMIZE SUM(-((x - target) * (x - target)))
+        """
+        result, cols = packdb_cli.execute(sql)
+        x_col = cols.index("x")
+        id_col = cols.index("id")
+
+        for row in result:
+            rid = int(row[id_col])
+            x_val = float(row[x_col])
+            expected = {1: 12.0, 2: 35.0}[rid]
+            assert abs(x_val - expected) < 0.01, \
+                f"Row {rid}: expected x={expected}, got x={x_val}"
+
+    def test_maximize_negated_power_integer_case_a(self, packdb_cli):
+        """Case A with INTEGER variables (MIQP): MAXIMIZE SUM(-POWER(x - target, 2)).
+
+        Targets are integers, so optimal x_i = target_i exactly.
+        Succeeds on Gurobi (MIQP support), errors on HiGHS.
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 3 AS target UNION ALL
+                SELECT 2, 7 UNION ALL
+                SELECT 3, 15
+            )
+            SELECT id, x
+            FROM data
+            DECIDE x IS INTEGER
+            SUCH THAT x >= 0 AND x <= 20
+            MAXIMIZE SUM(-POWER(x - target, 2))
+        """
+        try:
+            result, cols = packdb_cli.execute(sql)
+            # Gurobi path: optimal x_i = target_i
+            x_col = cols.index("x")
+            id_col = cols.index("id")
+
+            for row in result:
+                rid = int(row[id_col])
+                x_val = int(row[x_col])
+                expected = {1: 3, 2: 7, 3: 15}[rid]
+                assert x_val == expected, \
+                    f"Row {rid}: expected x={expected}, got x={x_val}"
+        except PackDBCliError as e:
+            # HiGHS path: MIQP not supported
+            assert re.search(r"MIQP.*require Gurobi|integer.*require Gurobi", e.message, re.IGNORECASE), \
+                f"Unexpected error: {e.message}"
+
     def test_maximize_negated_power_with_sum_constraint(self, packdb_cli):
         """Case A with aggregate constraint: MAXIMIZE SUM(-POWER(x - target, 2)) + SUM(x) = K.
 
@@ -429,17 +576,61 @@ class TestQuadraticErrors:
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 3))
-        """, match=r"Product of different DECIDE variable expressions|must remain linear")
+        """, match=r"Triple or higher-order products|Product of different DECIDE variable expressions|must remain linear")
 
-    def test_product_of_different_vars_rejected(self, packdb_cli):
-        """x * y where both are DECIDE variables should be rejected."""
-        packdb_cli.assert_error("""
+    def test_product_of_different_vars_now_supported(self, packdb_cli):
+        """x * y where both are DECIDE variables is now supported as bilinear.
+
+        Non-convex: Gurobi handles via NonConvex=2, HiGHS rejects.
+        """
+        sql = """
             WITH data AS (SELECT 1 AS id, 10.0 AS val)
-            SELECT id, x, y FROM data
+            SELECT id, ROUND(x, 2) AS x, ROUND(y, 2) AS y FROM data
             DECIDE x IS REAL, y IS REAL
             SUCH THAT x >= 0 AND x <= 10 AND y >= 0 AND y <= 10
             MINIMIZE SUM(x * y)
-        """, match=r"Product of different DECIDE variable expressions")
+        """
+        try:
+            result, cols = packdb_cli.execute(sql)
+            # Gurobi: minimize x*y with box [0,10] → optimal at a corner with min product
+            x_val = float(result[0][cols.index("x")])
+            y_val = float(result[0][cols.index("y")])
+            # Minimum of x*y on [0,10]² is 0 (at any boundary with x=0 or y=0)
+            assert abs(x_val * y_val) < 0.1, \
+                f"Expected x*y ≈ 0 (minimum), got x={x_val}, y={y_val}, product={x_val*y_val}"
+        except PackDBCliError as e:
+            # HiGHS: non-convex rejection expected
+            import re
+            assert re.search(r"Non-convex|require Gurobi", e.message), \
+                f"Unexpected error: {e.message}"
+
+    def test_minimize_negated_power_nonconvex(self, packdb_cli):
+        """MINIMIZE SUM(-POWER(x, 2)) is non-convex (MINIMIZE + NSD Q).
+
+        Should succeed on Gurobi (NonConvex=2) or error on HiGHS.
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
+            )
+            SELECT id, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 10
+            MINIMIZE SUM(-POWER(x, 2))
+        """
+        try:
+            result, cols = packdb_cli.execute(sql)
+            # Gurobi path: minimizing -x² pushes x to boundary (x=10)
+            x_col = cols.index("x")
+            for row in result:
+                x_val = float(row[x_col])
+                assert abs(x_val - 10.0) < 0.01, \
+                    f"Expected x=10 (boundary), got x={x_val}"
+        except PackDBCliError as e:
+            # HiGHS path: non-convex quadratic rejected
+            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message), \
+                f"Unexpected error: {e.message}"
 
     def test_power_with_variable_exponent_rejected(self, packdb_cli):
         """POWER(expr, non_constant) should be rejected."""

@@ -23,6 +23,14 @@ struct Term {
         : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {}
 };
 
+//! Represents a bilinear term in a constraint: coef * var_a * var_b
+struct BilinearConstraintTerm {
+    idx_t var_a;
+    idx_t var_b;
+    unique_ptr<Expression> coefficient;  // Data coefficient (or nullptr for 1.0)
+    int sign = 1;
+};
+
 //! Represents a complete constraint after term extraction
 struct DecideConstraint {
     vector<Term> lhs_terms;              // All additive terms from LHS
@@ -35,6 +43,10 @@ struct DecideConstraint {
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
     unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
+
+    // Bilinear terms in constraint (non-Boolean pairs left by optimizer)
+    vector<BilinearConstraintTerm> bilinear_terms;
+    bool has_bilinear = false;
 
     DecideConstraint() = default;
 };
@@ -53,6 +65,18 @@ struct Objective {
     vector<Term> squared_terms;
     bool has_quadratic = false;
     double quadratic_sign = 1.0;
+
+    //! Bilinear objective terms: x_a * x_b with data coefficient.
+    //! These are products of two different DECIDE variables where neither is Boolean
+    //! (Boolean cases are linearized by the optimizer into McCormick auxiliary variables).
+    struct BilinearTerm {
+        idx_t var_a;                       // First DECIDE variable index
+        idx_t var_b;                       // Second DECIDE variable index
+        unique_ptr<Expression> coefficient; // Data coefficient expression (or nullptr for 1.0)
+        int sign = 1;                       // +1 or -1
+    };
+    vector<BilinearTerm> bilinear_terms;
+    bool has_bilinear = false;
 
     Objective() = default;
 };
@@ -100,6 +124,10 @@ public:
 
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<pair<string, idx_t>> minmax_indicator_links;
+
+    // Links from bilinear McCormick auxiliary variables: w = b * x
+    // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
+    vector<LogicalDecide::BilinearLink> bilinear_links;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 

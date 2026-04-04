@@ -59,6 +59,9 @@ struct GurobiAPI {
 	int (*addconstr)(void *model, int numnz, int *cind, double *cval,
 	                 char sense, double rhs, const char *constrname);
 	int (*addqpterms)(void *model, int numqnz, int *qrow, int *qcol, double *qval);
+	int (*addqconstr)(void *model, int numlnz, int *lind, double *lval,
+	                  int numqnz, int *qrow, int *qcol, double *qval,
+	                  char sense, double rhs, const char *name);
 
 	// Solve and query
 	int (*optimize)(void *model);

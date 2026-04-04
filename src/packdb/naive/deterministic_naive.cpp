@@ -113,6 +113,14 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
     // 3b. Add quadratic objective (Hessian) if present
     //===--------------------------------------------------------------------===//
 
+    // HiGHS does not support quadratic constraints
+    if (!model.quadratic_constraints.empty()) {
+        throw InvalidInputException(
+            "Quadratic/bilinear constraints require Gurobi. "
+            "HiGHS does not support quadratic constraints (QCQP). "
+            "Either install Gurobi, or linearize the constraints.");
+    }
+
     if (model.has_quadratic_obj && !model.q_vals.empty()) {
         // HiGHS does not support non-convex QP
         if (model.nonconvex_quadratic) {

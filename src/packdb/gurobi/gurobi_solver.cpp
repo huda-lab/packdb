@@ -118,8 +118,30 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
         }
     }
 
+    // 3b. Add quadratic constraints (QCQP)
+    for (auto &qc : ilp.quadratic_constraints) {
+        if (!api.addqconstr) {
+            throw InvalidInputException(
+                "Quadratic constraints require Gurobi with GRBaddqconstr support. "
+                "Your Gurobi version does not support this function.");
+        }
+        error = api.addqconstr(guard.model,
+                               (int)qc.linear_indices.size(),
+                               const_cast<int *>(qc.linear_indices.data()),
+                               const_cast<double *>(qc.linear_coefficients.data()),
+                               (int)qc.q_rows.size(),
+                               const_cast<int *>(qc.q_rows.data()),
+                               const_cast<int *>(qc.q_cols.data()),
+                               const_cast<double *>(qc.q_coefficients.data()),
+                               qc.sense, qc.rhs, nullptr);
+        if (error) {
+            throw InternalException("Failed to add quadratic constraint to Gurobi: %s",
+                                    api.geterrormsg(guard.env));
+        }
+    }
+
     //===--------------------------------------------------------------------===//
-    // 3b. Add quadratic objective terms (QP/MIQP)
+    // 3c. Add quadratic objective terms (QP/MIQP)
     //===--------------------------------------------------------------------===//
 
     if (ilp.has_quadratic_obj && !ilp.q_vals.empty()) {
