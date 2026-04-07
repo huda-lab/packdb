@@ -71,16 +71,40 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
   - `<>` (not-equal): Supported on both per-row and aggregate constraints via Big-M disjunction (1 auxiliary binary variable + 2 constraints per `<>`).
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
 - **In**: `x IN (v1, ..., vK)` — works on both table columns and decision variables. On decision variables, rewritten to K binary indicator variables with cardinality + linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) is not supported.
-- **Linearity**: Any sub-expression involving a decision variable must be linear.
+- **Linearity**: Most sub-expressions involving a decision variable must be linear.
   - `x * 5`: OK.
   - `x + y`: OK.
   - `x * column`: OK (column is constant per row).
-  - `x * y`: **ERROR** (Non-linear).
+  - `x * y`: OK — bilinear (Gurobi only for non-Boolean pairs; McCormick for Boolean×anything).
+  - `POWER(x - target, 2)`: OK — quadratic constraint (Gurobi only, via `GRBaddqconstr`).
+  - `x * x * x`: **ERROR** (triple+ products not supported).
+- **Quadratic constraints**: `POWER(linear_expr, 2)` / `expr ** 2` / `(expr)*(expr)` in constraints enables QCQP. Gurobi only. Composes with WHEN, PER. See Section 3.1 below.
 - **Subqueries**: Scalar subqueries (both uncorrelated and correlated) are allowed on the RHS of constraints. Correlated subqueries are decorrelated into joins, producing per-row values. For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows. Subqueries cannot reference DECIDE variables.
+
+### 3.1 Quadratic Constraints (QCQP)
+
+```sql
+-- Per-row quadratic constraint
+SUCH THAT POWER(x - target, 2) <= 9
+
+-- Aggregate quadratic constraint (total budget)
+SUCH THAT SUM(POWER(x - target, 2)) <= 1000
+
+-- With PER grouping
+SUCH THAT SUM(POWER(x - target, 2)) <= 50 PER department
+
+-- Multiple syntax forms (all equivalent)
+SUCH THAT POWER(x - t, 2) <= K
+SUCH THAT (x - t) ** 2 <= K
+SUCH THAT (x - t) * (x - t) <= K
+```
+
+**Gurobi only** — HiGHS does not support quadratic constraints. Negated and scaled forms are supported: `-POWER(expr, 2)`, `K * POWER(expr, 2)`.
 
 ## 4. Objective
 
-- Must be a single aggregate expression: `SUM(...)`, `AVG(...)`, `MIN(...)`, or `MAX(...)`.
+- **Optional**: Omitting `MAXIMIZE`/`MINIMIZE` creates a feasibility problem — the solver finds any assignment satisfying all constraints. Both Gurobi and HiGHS support this.
+- When present, must be a single aggregate expression: `SUM(...)`, `AVG(...)`, `MIN(...)`, or `MAX(...)`.
 - Must involve at least one decision variable.
 - Linear objectives: must be linear in decision variables.
 - **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` is supported for convex quadratic programming. The inner expression must be linear in decision variables. Three equivalent syntax forms:

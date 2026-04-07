@@ -86,13 +86,13 @@ class TestBinderErrors:
             """, match=r"must reference at least one DECIDE variable")
 
     def test_multiple_decide_variables_in_sum(self, packdb_cli):
-        """x*x in SUM is quadratic — must remain linear."""
+        """Cubic (x*x*x) in SUM is not supported — must reject."""
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
-                SUCH THAT SUM((l_quantity+x)*x) <= 5
+                SUCH THAT SUM(x*x*x) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"must remain linear")
+            """, match=r"Triple.*products.*not supported")
 
     def test_nonlinear_decide_variables(self, packdb_cli):
         """SUM(col*(col+x)) passes the binder but fails at execution.

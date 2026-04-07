@@ -82,9 +82,9 @@ x <= 1                          -- one constraint generated per row
 
 ---
 
-## Linearity Requirement
+## Linearity and Quadratic Support
 
-All expressions involving decision variables must be linear:
+Expressions involving decision variables must be linear, bilinear, or quadratic:
 
 | Expression | Status |
 |---|---|
@@ -92,7 +92,31 @@ All expressions involving decision variables must be linear:
 | `x * column` — variable times table column | OK |
 | `SUM(x * column)` | OK |
 | `x + y` | OK |
-| `x * y` — two variables multiplied | **ERROR: non-linear** |
+| `x * y` — two different variables (bilinear) | OK (Gurobi only for non-Boolean) |
+| `POWER(x - target, 2)` — quadratic | OK (Gurobi only) |
+| `(x - target) ** 2` — quadratic | OK (Gurobi only) |
+| `(x - target) * (x - target)` — self-product | OK (Gurobi only) |
+| `x * x * x` — triple product | **ERROR: not supported** |
+
+### Quadratic Constraints (QCQP)
+
+`POWER(linear_expr, 2)` is supported in constraints, enabling quadratic constraint programming. The inner expression must be linear in decision variables.
+
+```sql
+SUCH THAT
+    POWER(x - target, 2) <= 9              -- per-row: each row's squared deviation bounded
+    SUM(POWER(x - target, 2)) <= 1000      -- aggregate: total squared deviation budget
+    SUM(POWER(x - target, 2)) <= 50 PER grp  -- grouped: budget per group
+    SUM(POWER(x - target, 2)) <= 10 WHEN active = 1  -- conditional: only active rows
+```
+
+**Solver support**: Gurobi only (via `GRBaddqconstr`). HiGHS rejects with a clear error message.
+
+**Syntax forms** (all equivalent): `POWER(expr, 2)`, `POW(expr, 2)`, `expr ** 2`, `(expr) * (expr)` (self-product). Negated (`-POWER(expr, 2)`) and scaled (`K * POWER(expr, 2)`) forms are also supported.
+
+**Composability**: Quadratic constraints compose with WHEN, PER, linear constraints, bilinear terms, and quadratic objectives (QCQP). Multiple quadratic constraints per query are supported.
+
+See [problem_types/done.md](../problem_types/done.md) for the full QCQP problem class description.
 
 ---
 

@@ -103,11 +103,13 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	result["Variables"] = vars_info;
 
 	// Objective
-	string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 	if (decide_objective) {
+		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		obj_info += decide_objective->GetName();
+		result["Objective"] = obj_info;
+	} else {
+		result["Objective"] = "FEASIBILITY";
 	}
-	result["Objective"] = obj_info;
 
 	// Constraints: walk the AND-tree and collect individual constraints
 	if (decide_constraints) {

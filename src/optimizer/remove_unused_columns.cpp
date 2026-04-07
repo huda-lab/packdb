@@ -323,7 +323,9 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 	case LogicalOperatorType::LOGICAL_DECIDE: {
         auto &decide = op.Cast<LogicalDecide>();
         VisitExpression(&decide.decide_constraints);
-        VisitExpression(&decide.decide_objective);
+        if (decide.decide_objective) {
+            VisitExpression(&decide.decide_objective);
+        }
         for (auto &var : decide.decide_variables) {
             VisitExpression(&var);
         }

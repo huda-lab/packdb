@@ -1246,7 +1246,8 @@ typedef enum PGSetOperation { PG_SETOP_NONE = 0, PG_SETOP_UNION, PG_SETOP_INTERS
 
 typedef enum PGObjectiveSense {
 	PG_OBJ_MAXIMIZE,         /* maximize objective */
-	PG_OBJ_MINIMIZE          /* minimize objective */
+	PG_OBJ_MINIMIZE,         /* minimize objective */
+	PG_OBJ_FEASIBILITY       /* no objective (feasibility only) */
 } PGObjectiveSense;
 
 typedef struct PGDecideClause {

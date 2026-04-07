@@ -66,12 +66,14 @@ string SelectNode::ToString() const {
             result += decide_variables[i]->ToString();
         }
         result += " SUCH THAT " + decide_constraints->ToString();
-        if (decide_sense == DecideSense::MAXIMIZE) {
-            result += " MAXIMIZE ";
-        } else if (decide_sense == DecideSense::MINIMIZE) {
-            result += " MINIMIZE ";
+        if (decide_objective) {
+            if (decide_sense == DecideSense::MAXIMIZE) {
+                result += " MAXIMIZE ";
+            } else if (decide_sense == DecideSense::MINIMIZE) {
+                result += " MINIMIZE ";
+            }
+            result += decide_objective->ToString();
         }
-        result += decide_objective->ToString();
     }
 	if (!groups.grouping_sets.empty()) {
 		result += " GROUP BY ";

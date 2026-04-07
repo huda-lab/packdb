@@ -67,6 +67,25 @@ static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) 
 		}
 	}
 
+	// Pattern 3: libgurobiXYZ.dylib (macOS)
+	p = strstr(name, "libgurobi");
+	if (p && strstr(name, ".dylib")) {
+		p += 9; // skip "libgurobi"
+		if (*p >= '0' && *p <= '9') {
+			int ver = 0;
+			while (*p >= '0' && *p <= '9') {
+				ver = ver * 10 + (*p - '0');
+				p++;
+			}
+			if (ver >= 10) {
+				major = ver / 10;
+				minor = ver % 10;
+				tech = 0;
+				return true;
+			}
+		}
+	}
+
 	// Default: unknown version
 	major = 0;
 	minor = 0;
@@ -79,7 +98,7 @@ static void *TryOpen(const char *path) {
 	return dlopen(path, RTLD_LAZY);
 }
 
-//! Search a directory for libgurobi*.so files, return the first that loads.
+//! Search a directory for libgurobi*.so or libgurobi*.dylib files.
 //! Also fills version_str with the matched filename for version extraction.
 static void *SearchDir(const std::string &dir, std::string &matched_name) {
 	DIR *d = opendir(dir.c_str());
@@ -90,15 +109,15 @@ static void *SearchDir(const std::string &dir, std::string &matched_name) {
 	struct dirent *entry;
 	while ((entry = readdir(d)) != nullptr) {
 		const char *name = entry->d_name;
-		// Match libgurobi*.so* but skip libgurobi_light and libgurobiXX_light
+		// Match libgurobi* but skip libgurobi_light and libgurobiXX_light
 		if (strncmp(name, "libgurobi", 9) != 0) {
 			continue;
 		}
 		if (strstr(name, "_light")) {
 			continue;
 		}
-		// Must contain ".so"
-		if (!strstr(name, ".so")) {
+		// Must contain ".so" or ".dylib"
+		if (!strstr(name, ".so") && !strstr(name, ".dylib")) {
 			continue;
 		}
 		std::string full_path = dir + "/" + name;
@@ -158,11 +177,15 @@ static void DoLoad() {
 		handle = SearchDir(lib_dir, matched_name);
 	}
 
-	// 2. Try well-known versioned names via system search paths (LD_LIBRARY_PATH etc.)
+	// 2. Try well-known versioned names via system search paths (LD_LIBRARY_PATH/DYLD_LIBRARY_PATH etc.)
 	if (!handle) {
 		static const char *candidates[] = {
 			"libgurobi130.so", "libgurobi120.so", "libgurobi110.so",
 			"libgurobi100.so", "libgurobi95.so",  "libgurobi.so",
+#ifdef __APPLE__
+			"libgurobi130.dylib", "libgurobi120.dylib", "libgurobi110.dylib",
+			"libgurobi100.dylib", "libgurobi95.dylib",  "libgurobi.dylib",
+#endif
 			nullptr
 		};
 		for (const char **c = candidates; *c; c++) {
@@ -176,8 +199,26 @@ static void DoLoad() {
 
 	// 3. Try common install locations
 	if (!handle) {
-		// Home directory: ~/gurobiXXXX/linux64/lib/
 		const char *home = getenv("HOME");
+#ifdef __APPLE__
+		// macOS: ~/gurobiXXXX/macos_universal2/lib/
+		if (home && home[0]) {
+			std::string home_str(home);
+			DIR *d = opendir(home_str.c_str());
+			if (d) {
+				struct dirent *entry;
+				while ((entry = readdir(d)) != nullptr) {
+					if (strncmp(entry->d_name, "gurobi", 6) == 0) {
+						std::string lib_dir = home_str + "/" + entry->d_name + "/macos_universal2/lib";
+						handle = SearchDir(lib_dir, matched_name);
+						if (handle) break;
+					}
+				}
+				closedir(d);
+			}
+		}
+#else
+		// Linux: ~/gurobiXXXX/linux64/lib/
 		if (home && home[0]) {
 			std::string home_str(home);
 			DIR *d = opendir(home_str.c_str());
@@ -187,18 +228,36 @@ static void DoLoad() {
 					if (strncmp(entry->d_name, "gurobi", 6) == 0) {
 						std::string lib_dir = home_str + "/" + entry->d_name + "/linux64/lib";
 						handle = SearchDir(lib_dir, matched_name);
-						if (handle) {
-							break;
-						}
+						if (handle) break;
 					}
 				}
 				closedir(d);
 			}
 		}
+#endif
 	}
 
 	if (!handle) {
-		// 4. Try /opt/gurobi*/linux64/lib/
+#ifdef __APPLE__
+		// 4a. macOS: /Library/gurobiXXXX/macos_universal2/lib/
+		DIR *d = opendir("/Library");
+		if (d) {
+			struct dirent *entry;
+			while ((entry = readdir(d)) != nullptr) {
+				if (strncmp(entry->d_name, "gurobi", 6) == 0) {
+					std::string lib_dir = std::string("/Library/") + entry->d_name + "/macos_universal2/lib";
+					handle = SearchDir(lib_dir, matched_name);
+					if (handle) break;
+				}
+			}
+			closedir(d);
+		}
+		// 4b. macOS: /usr/local/lib/
+		if (!handle) {
+			handle = SearchDir("/usr/local/lib", matched_name);
+		}
+#else
+		// 4. Linux: /opt/gurobi*/linux64/lib/
 		DIR *d = opendir("/opt");
 		if (d) {
 			struct dirent *entry;
@@ -206,13 +265,12 @@ static void DoLoad() {
 				if (strncmp(entry->d_name, "gurobi", 6) == 0) {
 					std::string lib_dir = std::string("/opt/") + entry->d_name + "/linux64/lib";
 					handle = SearchDir(lib_dir, matched_name);
-					if (handle) {
-						break;
-					}
+					if (handle) break;
 				}
 			}
 			closedir(d);
 		}
+#endif
 	}
 
 	if (!handle) {

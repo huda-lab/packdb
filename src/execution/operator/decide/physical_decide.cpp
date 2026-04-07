@@ -308,11 +308,13 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	}
 	result["Variables"] = vars_info;
 
-	string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 	if (decide_objective) {
+		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		obj_info += decide_objective->GetName();
+		result["Objective"] = obj_info;
+	} else {
+		result["Objective"] = "FEASIBILITY";
 	}
-	result["Objective"] = obj_info;
 
 	if (decide_constraints) {
 		vector<string> constraint_strs;
@@ -461,7 +463,9 @@ public:
         : data(context, op.children[0]->GetTypes()), op(op) {
         // Analyze constraints and objective using new visitor-based approach
         AnalyzeConstraint(op.decide_constraints);
-        AnalyzeObjective(op.decide_objective);
+        if (op.decide_objective) {
+            AnalyzeObjective(op.decide_objective);
+        }
 
         // Minimal: keep constructor lean; detailed solver output comes from HiGHS
     }
@@ -588,8 +592,9 @@ public:
                         }
                     } else {
                         // Multi-variable per-row constraint with complex LHS
-                        // (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0)
-                        op.ExtractTerms(*lhs, constraint->lhs_terms);
+                        // (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0,
+                        //  or POWER(x - target, 2) <= K quadratic constraint)
+                        ExtractConstraintTerms(*lhs, *constraint, 1);
                     }
                 }
 
@@ -735,12 +740,89 @@ public:
                 ExtractConstraintTerms(*func.children[0], constr, -sign);
                 return;
             }
+            // Helper: try to detect POWER(expr, 2), POW(expr, 2), expr ** 2,
+            // or (expr)*(expr) self-product. Returns the inner expression on success.
+            auto TryDetectConstraintQuadratic = [&](const Expression *test_expr) -> const Expression * {
+                while (test_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    test_expr = test_expr->Cast<BoundCastExpression>().child.get();
+                }
+                if (test_expr->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return nullptr;
+                auto &qf = test_expr->Cast<BoundFunctionExpression>();
+                string qname = StringUtil::Lower(qf.function.name);
+                // POWER/POW/** with exponent 2
+                if ((qname == "power" || qname == "pow" || qname == "**") && qf.children.size() == 2) {
+                    const Expression *exp_expr = qf.children[1].get();
+                    while (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                        exp_expr = exp_expr->Cast<BoundCastExpression>().child.get();
+                    }
+                    if (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                        double exponent = exp_expr->Cast<BoundConstantExpression>()
+                                              .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                        if (exponent == 2.0) {
+                            const Expression *inner = qf.children[0].get();
+                            while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                                inner = inner->Cast<BoundCastExpression>().child.get();
+                            }
+                            if (op.FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
+                                return inner;
+                            }
+                        }
+                    }
+                }
+                // Self-product: (expr)*(expr) with identical sides
+                if (qname == "*" && qf.children.size() == 2 &&
+                    qf.children[0]->ToString() == qf.children[1]->ToString() &&
+                    op.FindDecideVariable(*qf.children[0]) != DConstants::INVALID_INDEX) {
+                    const Expression *inner = qf.children[0].get();
+                    while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                        inner = inner->Cast<BoundCastExpression>().child.get();
+                    }
+                    return inner;
+                }
+                return nullptr;
+            };
+
+            // Direct POWER/self-product detection
+            {
+                const Expression *inner = TryDetectConstraintQuadratic(&func);
+                if (inner) {
+                    DecideConstraint::QuadraticGroup qg;
+                    qg.sign = static_cast<double>(sign);
+                    op.ExtractTerms(*inner, qg.inner_terms);
+                    constr.quadratic_groups.push_back(std::move(qg));
+                    constr.has_quadratic = true;
+                    return;
+                }
+            }
             if (fname == "*" && func.children.size() == 2) {
+                // Scaled quadratic: const * POWER(expr, 2) or POWER(expr, 2) * const
+                for (idx_t side = 0; side < 2; side++) {
+                    const Expression *maybe_const = func.children[side].get();
+                    while (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                        maybe_const = maybe_const->Cast<BoundCastExpression>().child.get();
+                    }
+                    if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                        double cval = maybe_const->Cast<BoundConstantExpression>()
+                                          .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                        if (cval != 0.0) {
+                            const Expression *inner = TryDetectConstraintQuadratic(func.children[1 - side].get());
+                            if (inner) {
+                                DecideConstraint::QuadraticGroup qg;
+                                qg.sign = static_cast<double>(sign) * cval;
+                                op.ExtractTerms(*inner, qg.inner_terms);
+                                constr.quadratic_groups.push_back(std::move(qg));
+                                constr.has_quadratic = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+                // Self-product (expr)*(expr): handled by TryDetectConstraintQuadratic above
+                // Bilinear constraint term: var_a * var_b with different variables
                 idx_t left_var = op.FindDecideVariable(*func.children[0]);
                 idx_t right_var = op.FindDecideVariable(*func.children[1]);
                 if (left_var != DConstants::INVALID_INDEX && right_var != DConstants::INVALID_INDEX &&
                     func.children[0]->ToString() != func.children[1]->ToString()) {
-                    // Bilinear constraint term
                     BilinearConstraintTerm bt;
                     bt.var_a = left_var;
                     bt.var_b = right_var;
@@ -1508,6 +1590,49 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ebt.row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
                 }
                 eval_const.bilinear_terms.push_back(std::move(ebt));
+            }
+        }
+
+        // Evaluate quadratic groups in constraint (POWER(expr, 2) / self-products)
+        if (constraint->has_quadratic) {
+            eval_const.has_quadratic = true;
+            for (auto &qg : constraint->quadratic_groups) {
+                EvaluatedConstraint::QuadraticGroup eqg;
+                eqg.sign = qg.sign;
+
+                for (auto &term : qg.inner_terms) {
+                    eqg.variable_indices.push_back(term.variable_index);
+
+                    auto transformed = TransformToChunkExpression(*term.coefficient, context);
+                    ExpressionExecutor coef_executor(context);
+                    coef_executor.AddExpression(*transformed);
+
+                    vector<double> row_coeffs;
+                    ColumnDataScanState qscan;
+                    gstate.data.InitializeScan(qscan);
+                    DataChunk qchunk;
+                    qchunk.Initialize(context, gstate.data.Types());
+
+                    while (gstate.data.Scan(qscan, qchunk)) {
+                        DataChunk coef_result;
+                        coef_result.Initialize(context, {transformed->return_type});
+                        coef_executor.Execute(qchunk, coef_result);
+                        auto &vec = coef_result.data[0];
+                        for (idx_t r = 0; r < qchunk.size(); r++) {
+                            Value val = vec.GetValue(r);
+                            if (val.IsNull()) {
+                                throw InvalidInputException(
+                                    "DECIDE quadratic constraint coefficient returned NULL at row %llu. "
+                                    "Use COALESCE() or WHERE to handle NULLs.",
+                                    row_coeffs.size());
+                            }
+                            double dval = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                            row_coeffs.push_back(dval * term.sign);
+                        }
+                    }
+                    eqg.row_coefficients.push_back(std::move(row_coeffs));
+                }
+                eval_const.quadratic_groups.push_back(std::move(eqg));
             }
         }
 

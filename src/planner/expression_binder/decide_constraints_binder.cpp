@@ -478,7 +478,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
                         colref.GetColumnName());
                     return DecideExpression::INVALID;
                 }
-            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/false, /*allow_bilinear=*/true)) {
+            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }

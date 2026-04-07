@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <map>
+#include <numeric>
 #include <unordered_map>
 
 namespace duckdb {
@@ -240,7 +241,11 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         int rj = row_terms[j].flat_idx;
                         int q_row = std::max(ri, rj);
                         int q_col = std::min(ri, rj);
-                        double val = q_sign * 2.0 * row_terms[i].coeff * row_terms[j].coeff;
+                        // GRBaddqpterms adds raw x_i*x_j terms (no 1/2 factor).
+                        // Diagonal: coeff_i^2. Off-diagonal: 2*coeff_i*coeff_j
+                        // (symmetry — we store lower triangle only).
+                        double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
+                        if (i != j) val *= 2.0;
                         q_map[{q_row, q_col}] += val;
                     }
                 }
@@ -263,8 +268,8 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
 
         // Bilinear objective terms: off-diagonal Q entries for x_a * x_b
-        // Gurobi convention: objective is c^Tx + x^TQx (no 1/2 factor for off-diagonal)
-        // So for SUM(c * x_a * x_b): Q[a,b] += c (lower triangle: Q[max,min])
+        // GRBaddqpterms adds raw terms (no 1/2 factor).
+        // For SUM(c * x_a * x_b): Q[max(a,b), min(a,b)] += c
         if (has_bilinear) {
             model.has_quadratic_obj = true;
             model.nonconvex_quadratic = true; // Bilinear → always indefinite
@@ -317,6 +322,11 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     };
 
     for (auto &eval_const : input.constraints) {
+        // Skip constraints with quadratic/bilinear terms — handled in quadratic section below
+        if (!eval_const.bilinear_terms.empty() || eval_const.has_quadratic) {
+            continue;
+        }
+
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
 
@@ -449,82 +459,177 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
     }
 
-    // Build quadratic constraints from bilinear terms in evaluated constraints.
-    // Re-scan constraints: if any have bilinear terms, we need to convert the
-    // corresponding ModelConstraint into a QuadraticConstraint.
-    // Since we already built linear ModelConstraints above, we rebuild for constraints
-    // that have bilinear terms. The approach: build quadratic constraints separately
-    // from input.constraints that have bilinear_terms.
-    {
-        // Track which constraints have bilinear terms and need quadratic handling
-        idx_t model_constr_idx = 0;
-        for (auto &eval_const : input.constraints) {
-            if (eval_const.bilinear_terms.empty()) {
-                // Skip — already handled as linear above
-                continue;
+    // Build quadratic constraints from bilinear terms and/or POWER(expr, 2) groups.
+    // These constraints were skipped in the linear loop above.
+    // A single QuadraticConstraint can contain linear terms, bilinear Q entries,
+    // and POWER outer-product Q entries — all accumulated together.
+
+    // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
+    // row_set: which rows to include (empty = all rows for a single-row per-row case)
+    auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec,
+                                        const vector<idx_t> &row_set,
+                                        double rhs) -> SolverModel::QuadraticConstraint {
+        SolverModel::QuadraticConstraint qc;
+        std::unordered_map<int, double> linear_accum;
+        std::map<std::pair<int,int>, double> q_accum;
+        double rhs_adjustment = 0.0;
+
+        // Linear terms from the constraint LHS
+        for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+            idx_t decide_var_idx = ec.variable_indices[term_idx];
+            if (decide_var_idx != DConstants::INVALID_INDEX) {
+                for (idx_t row : row_set) {
+                    double coeff = ec.row_coefficients[term_idx][row];
+                    int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                    linear_accum[var_idx] += coeff;
+                }
+            }
+        }
+
+        // Bilinear terms: x_a * x_b → off-diagonal Q entries
+        for (auto &bt : ec.bilinear_terms) {
+            for (idx_t row : row_set) {
+                double coeff = bt.row_coefficients[row];
+                if (coeff == 0.0) continue;
+                int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
+                int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
+                int q_row = std::max(flat_a, flat_b);
+                int q_col = std::min(flat_a, flat_b);
+                q_accum[{q_row, q_col}] += coeff;
+            }
+        }
+
+        // POWER groups: outer product Q = sign * A^T A for each group
+        // GRBaddqconstr uses x^T Q x directly (no 1/2 factor),
+        // so diagonal entries use factor 1.0 and off-diagonal use factor 2.0.
+        for (auto &qg : ec.quadratic_groups) {
+            double q_sign = qg.sign;
+            idx_t num_q_terms = qg.variable_indices.size();
+
+            for (idx_t row : row_set) {
+                struct VarCoeff { int flat_idx; double coeff; };
+                vector<VarCoeff> row_terms;
+                double c_row = 0.0;  // Constant term contribution for this row
+
+                for (idx_t t = 0; t < num_q_terms; t++) {
+                    if (t >= qg.row_coefficients.size() || row >= qg.row_coefficients[t].size()) {
+                        continue;
+                    }
+                    double a = qg.row_coefficients[t][row];
+                    if (a == 0.0) continue;
+                    idx_t decide_var_idx = qg.variable_indices[t];
+                    if (decide_var_idx == DConstants::INVALID_INDEX) {
+                        c_row += a;
+                        continue;
+                    }
+                    int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                    row_terms.push_back({flat_idx, a});
+                }
+
+                // Variable × variable → Q entries (outer product)
+                for (idx_t i = 0; i < row_terms.size(); i++) {
+                    for (idx_t j = 0; j <= i; j++) {
+                        int ri = row_terms[i].flat_idx;
+                        int rj = row_terms[j].flat_idx;
+                        int q_r = std::max(ri, rj);
+                        int q_c = std::min(ri, rj);
+                        double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
+                        if (i != j) val *= 2.0;  // Off-diagonal: 2*a_i*a_j
+                        q_accum[{q_r, q_c}] += val;
+                    }
+                }
+
+                // Variable × constant → linear terms (cross-product from expansion)
+                if (c_row != 0.0) {
+                    for (auto &vt : row_terms) {
+                        linear_accum[vt.flat_idx] += q_sign * 2.0 * c_row * vt.coeff;
+                    }
+                }
+
+                // Constant × constant → adjusts RHS
+                rhs_adjustment += q_sign * c_row * c_row;
+            }
+        }
+
+        // Flush linear terms
+        for (auto &pair : linear_accum) {
+            if (pair.second != 0.0) {
+                qc.linear_indices.push_back(pair.first);
+                qc.linear_coefficients.push_back(pair.second);
+            }
+        }
+        // Flush Q terms
+        for (auto &entry : q_accum) {
+            if (entry.second != 0.0) {
+                qc.q_rows.push_back(entry.first.first);
+                qc.q_cols.push_back(entry.first.second);
+                qc.q_coefficients.push_back(entry.second);
+            }
+        }
+
+        // RHS and sense (move constant terms to RHS)
+        qc.rhs = rhs - rhs_adjustment;
+        if (ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+            qc.sense = '<';
+        } else if (ec.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+            qc.sense = '>';
+        } else {
+            qc.sense = '=';
+        }
+        return qc;
+    };
+
+    for (auto &eval_const : input.constraints) {
+        if (eval_const.bilinear_terms.empty() && !eval_const.has_quadratic) {
+            continue;  // Already handled as linear above
+        }
+
+        bool is_aggregate = eval_const.lhs_is_aggregate;
+        bool has_groups = !eval_const.row_group_ids.empty();
+
+        if (is_aggregate) {
+            double rhs = eval_const.rhs_values.empty() ? 0.0 : eval_const.rhs_values[0];
+            if (eval_const.was_avg_rewrite) {
+                rhs *= static_cast<double>(num_rows);
             }
 
-            bool is_aggregate = eval_const.lhs_is_aggregate;
-
-            if (is_aggregate) {
-                // Build a single QuadraticConstraint for this aggregate
-                SolverModel::QuadraticConstraint qc;
-
-                // Linear part: accumulate coefficients
-                std::unordered_map<int, double> linear_accum;
-                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-                    if (decide_var_idx != DConstants::INVALID_INDEX) {
-                        for (idx_t row = 0; row < num_rows; row++) {
-                            double coeff = eval_const.row_coefficients[term_idx][row];
-                            int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                            linear_accum[var_idx] += coeff;
-                        }
+            if (!has_groups) {
+                // Single aggregate: all rows
+                vector<idx_t> all_rows(num_rows);
+                std::iota(all_rows.begin(), all_rows.end(), 0);
+                model.quadratic_constraints.push_back(
+                    BuildQuadraticConstraint(eval_const, all_rows, rhs));
+            } else {
+                // PER groups: one QuadraticConstraint per group
+                vector<vector<idx_t>> group_rows(eval_const.num_groups);
+                for (idx_t row = 0; row < num_rows; row++) {
+                    idx_t gid = eval_const.row_group_ids[row];
+                    if (gid != DConstants::INVALID_INDEX) {
+                        group_rows[gid].push_back(row);
                     }
                 }
-                for (auto &pair : linear_accum) {
-                    if (pair.second != 0.0) {
-                        qc.linear_indices.push_back(pair.first);
-                        qc.linear_coefficients.push_back(pair.second);
+                double group_rhs = rhs;
+                for (idx_t g = 0; g < eval_const.num_groups; g++) {
+                    if (group_rows[g].empty()) continue;
+                    if (eval_const.was_avg_rewrite) {
+                        group_rhs = rhs / static_cast<double>(num_rows) *
+                                    static_cast<double>(group_rows[g].size());
                     }
+                    model.quadratic_constraints.push_back(
+                        BuildQuadraticConstraint(eval_const, group_rows[g], group_rhs));
                 }
-
-                // Quadratic part: bilinear terms
-                std::map<std::pair<int,int>, double> q_accum;
-                for (auto &bt : eval_const.bilinear_terms) {
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        double coeff = bt.row_coefficients[row];
-                        if (coeff == 0.0) continue;
-                        int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
-                        int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
-                        int q_row = std::max(flat_a, flat_b);
-                        int q_col = std::min(flat_a, flat_b);
-                        q_accum[{q_row, q_col}] += coeff;
-                    }
-                }
-                for (auto &entry : q_accum) {
-                    if (entry.second != 0.0) {
-                        qc.q_rows.push_back(entry.first.first);
-                        qc.q_cols.push_back(entry.first.second);
-                        qc.q_coefficients.push_back(entry.second);
-                    }
-                }
-
-                // RHS and sense
-                double rhs = eval_const.rhs_values.empty() ? 0.0 : eval_const.rhs_values[0];
-                if (eval_const.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                    qc.sense = '<';
-                } else if (eval_const.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                    qc.sense = '>';
-                } else {
-                    qc.sense = '=';
-                }
-                qc.rhs = rhs;
-
-                model.quadratic_constraints.push_back(std::move(qc));
             }
-            // Per-row bilinear constraints would each become a separate QuadraticConstraint
-            // (not yet implemented — aggregate case is the primary use case)
+        } else {
+            // Per-row: each row gets its own QuadraticConstraint
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                vector<idx_t> single_row = {row};
+                double rhs = eval_const.rhs_values[row];
+                model.quadratic_constraints.push_back(
+                    BuildQuadraticConstraint(eval_const, single_row, rhs));
+            }
         }
     }
 

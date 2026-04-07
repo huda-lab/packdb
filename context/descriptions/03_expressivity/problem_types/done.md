@@ -137,9 +137,7 @@ SUCH THAT SUM(x * y) <= 100
 
 ### Feasibility Problems (No Objective)
 
-> **Not yet implemented.** The grammar currently requires `MAXIMIZE` or `MINIMIZE`. This section describes the planned behavior — see `problem_types/todo.md` for status.
-
-Any combination of variable types, with constraints but **no** `MAXIMIZE`/`MINIMIZE` clause. The solver finds any feasible assignment satisfying all constraints.
+Any combination of variable types, with constraints but **no** `MAXIMIZE`/`MINIMIZE` clause. The solver finds any feasible assignment satisfying all constraints. The `DecideSense::FEASIBILITY` enum value is used internally; the model builder sets all objective coefficients to zero.
 
 ```sql
 SELECT * FROM shifts
@@ -147,7 +145,33 @@ DECIDE assigned IS BOOLEAN
 SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
 ```
 
-Both Gurobi and HiGHS support feasibility problems natively.
+Supported by both Gurobi and HiGHS.
+
+### QCQP (Quadratically Constrained Quadratic Programming)
+
+Quadratic terms (`POWER(linear_expr, 2)`) are supported in `SUCH THAT` constraints, enabling QCQP. The constraint takes the form `SUM(POWER(expr, 2)) <= K` or per-row `POWER(expr, 2) <= K`.
+
+**Gurobi only** — HiGHS does not support quadratic constraints and rejects with a clear error.
+
+```sql
+-- Aggregate quadratic constraint: total squared deviation budget
+SELECT id, ROUND(x, 2) FROM data
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+    AND SUM(POWER(x - target, 2)) <= 1000
+MAXIMIZE SUM(x)
+
+-- Per-row quadratic constraint
+SUCH THAT POWER(x - target, 2) <= 9
+
+-- QCQP: quadratic in both objective and constraint
+MINIMIZE SUM(POWER(x - preferred, 2))
+SUCH THAT SUM(POWER(x - required, 2)) <= 50
+```
+
+All syntax forms supported: `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)` self-product. Negated and scaled forms also supported: `-POWER(expr, 2)`, `K * POWER(expr, 2)`.
+
+Composes with WHEN, PER, and linear constraints. Multiple quadratic constraints per query are supported.
 
 ---
 
@@ -165,6 +189,7 @@ The user does not declare a problem class. PackDB infers it from the variable ty
 | Mix of REAL + INTEGER/BOOLEAN | Quadratic | MIQP (Gurobi only) |
 | Any (one factor BOOLEAN) | Bilinear (`b * x`) | MILP (McCormick, both solvers) |
 | Any (no BOOLEAN factor) | Bilinear (`x * y`) | Non-convex QP (Gurobi only) |
+| Any | Linear/quadratic, with `POWER(expr,2)` constraints | QCQP (Gurobi only) |
 | Any | None (feasibility) | Feasibility |
 
 The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and `nonconvex_quadratic` flags accordingly, and the solver backend handles the appropriate formulation.
@@ -184,6 +209,7 @@ The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and
 | Bilinear (Bool × anything) | Yes (McCormick → MILP) | Yes (McCormick → MILP) |
 | Bilinear (non-convex) | Yes (Q matrix, NonConvex=2) | **No** (error) |
 | Bilinear constraints | Yes (`GRBaddqconstr`) | **No** (error) |
+| QCQP (quadratic constraints) | Yes (`GRBaddqconstr`) | **No** (error) |
 | Feasibility | Yes | Yes |
 
 ---
@@ -192,10 +218,11 @@ The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and
 
 ### Constraints
 
-Constraints are primarily linear. Products of two decision variables (`x * y`) are also supported:
+Constraints are primarily linear. Products of two decision variables (`x * y`) and quadratic terms (`POWER(expr, 2)`) are also supported:
 
 - **Boolean × anything**: Exactly linearized via McCormick envelopes (both solvers). The bilinear product is replaced with auxiliary variables and linear constraints at optimizer time, so the feasible region remains a convex polytope.
-- **General non-convex** (`Real×Real`, `Int×Int`, `Int×Real`): Gurobi only, via `GRBaddqconstr`. HiGHS rejects with a clear error.
+- **General non-convex bilinear** (`Real×Real`, `Int×Int`, `Int×Real`): Gurobi only, via `GRBaddqconstr`. HiGHS rejects with a clear error.
+- **Quadratic constraints** (`POWER(expr, 2)` in SUCH THAT): Gurobi only, via `GRBaddqconstr`. Each `POWER(inner_expr, 2)` is expanded into Q = sign * A^T A (outer product of inner expression coefficients). Multiple quadratic groups per constraint are accumulated. Constant terms from the inner expression are moved to the RHS. Composes with WHEN, PER, and linear terms in the same constraint.
 
 ### Quadratic Objectives — Convexity and Sign
 
@@ -294,6 +321,21 @@ Several constructs (`<>`, `IN` on decision variables, `COUNT` on INTEGER, hard `
 - **SUM argument validation (QP + bilinear syntax)**: `src/planner/expression_binder/decide_binder.cpp`
   - `ValidateSumArgumentInternal` accepts `POWER(linear_expr, 2)`, `POW(linear_expr, 2)`, `(expr) * (expr)` where both sides are identical, and products of two different DECIDE variables (`x * y`) when `allow_bilinear` is true
   - Rejects `POWER(expr, N)` for N != 2, triple or higher products, non-constant exponents
+
+- **Quadratic constraint extraction**: `src/execution/operator/decide/physical_decide.cpp`
+  - `ExtractConstraintTerms` detects `POWER(expr, 2)`, `expr ** 2`, `(expr)*(expr)` self-products, and scaled forms
+  - `TryDetectConstraintQuadratic` (local lambda) handles pattern matching for all syntax forms
+  - Populates `DecideConstraint::QuadraticGroup` with inner linear terms and sign
+
+- **Quadratic constraint Q matrix**: `src/packdb/utility/ilp_model_builder.cpp`
+  - `BuildQuadraticConstraint` lambda builds `QuadraticConstraint` from `EvaluatedConstraint` quadratic groups
+  - Computes outer product Q = sign * A^T A per group, accumulates into single Q matrix
+  - Handles PER groups (one QuadraticConstraint per group), WHEN filtering, and per-row constraints
+
+- **Feasibility support**: Grammar rule in `third_party/libpg_query/grammar/statements/select.y` accepts `DECIDE ... SUCH THAT ...` without objective. `DecideSense::FEASIBILITY` flows through parser → binder → physical → model builder. Model builder sets all objective coefficients to zero.
+
+- **Symbolic normalization skip**: `src/packdb/symbolic/decide_symbolic.cpp`
+  - `ComparisonLhsHasQuadraticOrBilinear` prevents symbolic expansion of POWER/bilinear structure
 
 - **Bilinear implementation**: See [bilinear/done.md](../bilinear/done.md) for full implementation details including:
   - McCormick rewrite pass in optimizer (`RewriteBilinear`)

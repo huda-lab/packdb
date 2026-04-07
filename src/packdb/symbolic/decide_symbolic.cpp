@@ -853,6 +853,50 @@ static bool ContainsSumFunction(const ParsedExpression &expr) {
 }
 
 // Normalize comparator between LHS and numeric RHS by isolating SUM terms containing DECIDE variables
+// Forward declarations for quadratic/bilinear detection (defined later in file).
+static bool SumInnerIsQuadratic(const ParsedExpression &inner,
+                                const case_insensitive_map_t<idx_t> &decide_variables);
+static bool SumInnerContainsBilinear(const ParsedExpression &inner,
+                                      const case_insensitive_map_t<idx_t> &decide_variables);
+
+// Check if a SUM inner expression contains ANY quadratic term (POWER/self-product),
+// possibly as one additive term among several (e.g., SUM(POWER(x,2) + POWER(y,2) + linear_terms)).
+// Recurses into + and - operators to find nested quadratic terms.
+static bool SumInnerContainsQuadratic(const ParsedExpression &inner,
+                                       const case_insensitive_map_t<idx_t> &decide_variables) {
+    // Direct/negated/scaled quadratic (whole expression)
+    if (SumInnerIsQuadratic(inner, decide_variables)) return true;
+    if (inner.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = inner.Cast<FunctionExpression>();
+        // Recurse into additive/multiplicative terms
+        if (func.is_operator && (func.function_name == "+" || func.function_name == "-" || func.function_name == "*")) {
+            for (auto &child : func.children) {
+                if (SumInnerContainsQuadratic(*child, decide_variables)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Check if a comparison LHS contains a SUM whose inner has quadratic or bilinear terms.
+// If so, symbolic expansion would destroy the POWER/product structure.
+static bool ComparisonLhsHasQuadraticOrBilinear(const ParsedExpression &lhs,
+                                                  const case_insensitive_map_t<idx_t> &decide_variables) {
+    if (lhs.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = lhs.Cast<FunctionExpression>();
+        auto fname = StringUtil::Lower(func.function_name);
+        if (!func.is_operator && fname == "sum" && !func.children.empty()) {
+            if (SumInnerContainsQuadratic(*func.children[0], decide_variables)) return true;
+            if (SumInnerContainsBilinear(*func.children[0], decide_variables)) return true;
+        }
+        // Recurse into operator children (for + / - combinations)
+        for (auto &child : func.children) {
+            if (ComparisonLhsHasQuadraticOrBilinear(*child, decide_variables)) return true;
+        }
+    }
+    return false;
+}
+
 static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpression &cmp,
                                                             const case_insensitive_map_t<idx_t> &decide_variables) {
     // Only handle <=, <, >=, > with numeric RHS
@@ -868,6 +912,12 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     // Only normalize if the LHS contains a SUM() somewhere in the tree.
     // For bare per-row constraints (e.g., "x < 6"), leave unchanged.
     if (!ContainsSumFunction(*cmp.left)) {
+        return cmp.Copy();
+    }
+
+    // Skip normalization for quadratic/bilinear constraints — symbolic expansion
+    // would destroy the POWER(expr, 2) or x*y structure that the solver pipeline needs.
+    if (ComparisonLhsHasQuadraticOrBilinear(*cmp.left, decide_variables)) {
         return cmp.Copy();
     }
 
@@ -1012,6 +1062,30 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
             if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
                 // Normalize the inner constraint (child[0]), pass through PER columns (children[1..N])
                 auto normalized_constraint = NormalizeConstraintsRecursive(*func.children[0], decide_variables);
+
+                // Fix grammar ambiguity: "A AND B PER col" parses as "(A AND B) PER col"
+                // due to a_expr absorbing AND via shift/reduce. The user's intent is
+                // "A AND (B PER col)" — PER binds to the rightmost constraint only.
+                // Fix: pull all-but-last AND children out, wrap only the last with PER.
+                if (normalized_constraint->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
+                    auto &conj = normalized_constraint->Cast<ConjunctionExpression>();
+                    if (conj.children.size() >= 2) {
+                        // Wrap only the last child with PER
+                        vector<unique_ptr<ParsedExpression>> per_args;
+                        per_args.push_back(std::move(conj.children.back()));
+                        for (idx_t i = 1; i < func.children.size(); i++) {
+                            per_args.push_back(func.children[i]->Copy());
+                        }
+                        auto per_expr = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(per_args));
+                        per_expr->is_operator = true;
+
+                        // Rebuild: unwrapped children AND PER(last, columns...)
+                        conj.children.pop_back();
+                        conj.children.push_back(std::move(per_expr));
+                        return std::move(normalized_constraint);
+                    }
+                }
+
                 vector<unique_ptr<ParsedExpression>> args;
                 args.push_back(std::move(normalized_constraint));
                 for (idx_t i = 1; i < func.children.size(); i++) {

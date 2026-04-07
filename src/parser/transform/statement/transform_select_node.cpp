@@ -111,8 +111,12 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
                 result.decide_sense = DecideSense::MAXIMIZE;
             } else if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MINIMIZE) {
                 result.decide_sense = DecideSense::MINIMIZE;
+            } else {
+                result.decide_sense = DecideSense::FEASIBILITY;
             }
-            result.decide_objective = TransformExpression(decide_clause.objective);
+            if (decide_clause.objective) {
+                result.decide_objective = TransformExpression(decide_clause.objective);
+            }
         }
 		// where
 		result.where_clause = TransformExpression(stmt.whereClause);

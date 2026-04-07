@@ -38,6 +38,18 @@ struct EvaluatedConstraint {
     };
     vector<BilinearTerm> bilinear_terms;
 
+    //! Quadratic groups in this constraint. Each POWER(expr, 2) or self-product
+    //! becomes a separate group with its own sign and inner coefficients.
+    //! The model builder computes outer-product Q = sign * A^T A for each group
+    //! and accumulates all groups into the same QuadraticConstraint.
+    struct QuadraticGroup {
+        double sign = 1.0;
+        vector<idx_t> variable_indices;          // [term_idx]
+        vector<vector<double>> row_coefficients;  // [term_idx][row_idx]
+    };
+    vector<QuadraticGroup> quadratic_groups;
+    bool has_quadratic = false;
+
     //! Unified WHEN+PER row→group mapping
     //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
     //! DConstants::INVALID_INDEX = row excluded (WHEN filter or NULL PER value)

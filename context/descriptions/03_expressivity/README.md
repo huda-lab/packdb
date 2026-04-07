@@ -11,9 +11,9 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
-| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, QCQP, SOCP |
+| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, SOCP |
 | [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, row-scoped/table-scoped, linearity | *(no planned features)* |
-| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER | *(no planned features)* |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | *(no planned features)* |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition) | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
@@ -44,6 +44,8 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Quadratic objective: `MINIMIZE SUM(POWER(expr, 2))` | Yes (convex QP, syntax-enforced) | — |
 | Bilinear objectives (`b * x`, `x * y`) | Yes (McCormick / Q matrix) | — |
 | Bilinear constraints (`b * x`, `x * y`) | Yes (McCormick / `GRBaddqconstr`) | — |
+| Quadratic constraints: `POWER(expr, 2)` in SUCH THAT | Yes (QCQP, Gurobi only) | — |
+| Feasibility (no MAXIMIZE/MINIMIZE) | Yes (both solvers) | — |
 | `WHEN` on constraints | Yes | — |
 | `WHEN` on objective | Yes | — |
 | `PER` on constraints | Yes | — |

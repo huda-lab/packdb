@@ -267,7 +267,6 @@ def test_zero_rows_empty_input(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 
 
 @pytest.mark.edge_case
-@pytest.mark.xfail(reason="Grammar requires MAXIMIZE/MINIMIZE — feasibility-only not yet supported")
 def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Feasibility problem (no MAXIMIZE/MINIMIZE) — should find any feasible solution."""
     sql = """

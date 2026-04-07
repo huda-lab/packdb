@@ -11,7 +11,16 @@ MAXIMIZE objective_expression
 MINIMIZE objective_expression
 ```
 
-The objective expression must be a single aggregate expression using one of the supported aggregate functions.
+The objective clause is **optional**. Omitting it creates a feasibility problem — the solver finds any assignment satisfying all constraints without optimizing. Both Gurobi and HiGHS support feasibility problems natively.
+
+```sql
+-- Feasibility: find any valid assignment (no optimization)
+SELECT * FROM shifts
+DECIDE assigned IS BOOLEAN
+SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
+```
+
+When present, the objective expression must be a single aggregate expression using one of the supported aggregate functions.
 
 ---
 

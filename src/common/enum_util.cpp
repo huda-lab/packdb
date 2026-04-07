@@ -1096,19 +1096,20 @@ DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideSense::MAXIMIZE), "MAXIMIZE" },
-		{ static_cast<uint32_t>(DecideSense::MINIMIZE), "MINIMIZE" }
+		{ static_cast<uint32_t>(DecideSense::MINIMIZE), "MINIMIZE" },
+		{ static_cast<uint32_t>(DecideSense::FEASIBILITY), "FEASIBILITY" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value) {
-	return StringUtil::EnumToString(GetDecideSenseValues(), 2, "DecideSense", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDecideSenseValues(), 3, "DecideSense", static_cast<uint32_t>(value));
 }
 
 template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value) {
-	return static_cast<DecideSense>(StringUtil::StringToEnum(GetDecideSenseValues(), 2, "DecideSense", value));
+	return static_cast<DecideSense>(StringUtil::StringToEnum(GetDecideSenseValues(), 3, "DecideSense", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDefaultOrderByNullTypeValues() {

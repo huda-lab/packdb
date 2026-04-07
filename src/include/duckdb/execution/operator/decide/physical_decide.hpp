@@ -48,6 +48,19 @@ struct DecideConstraint {
     vector<BilinearConstraintTerm> bilinear_terms;
     bool has_bilinear = false;
 
+    // Quadratic groups in constraint: each POWER(expr, 2) or (expr)*(expr) self-product
+    // becomes a separate group. The model builder computes an outer-product Q for each
+    // group independently, then accumulates all into the same QuadraticConstraint.
+    // This is necessary because POWER(x-t,2) + POWER(y-s,2) ≠ POWER(x-t+y-s, 2).
+    struct QuadraticGroup {
+        vector<Term> inner_terms;  // Inner linear expression of POWER(inner, 2)
+        double sign = 1.0;         // +1, -1, or scalar (from negation/scaling)
+
+        QuadraticGroup() = default;
+    };
+    vector<QuadraticGroup> quadratic_groups;
+    bool has_quadratic = false;
+
     DecideConstraint() = default;
 };
 

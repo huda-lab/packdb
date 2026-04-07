@@ -4,11 +4,11 @@
 
 While PackDB demonstrates the feasibility of in-database optimization, the current implementation has specific constraints:
 
-### 1.1 Constraint Linearity Requirement
-PackDB supports **LP**, **ILP**, **MILP**, **QP**, and **MIQP** problem classes (see `03_expressivity/problem_types/done.md` for the full taxonomy).
--   **Constraints** must be linear: $\sum c_i x_i \le K$. Products of two decision variables (`x * y`) are rejected.
--   **Objectives** may be linear ($\max \sum c_i x_i$) or convex quadratic (`MINIMIZE SUM(POWER(linear_expr, 2))`).
--   **Impact**: Users cannot express non-linear constraints (e.g., `x * y <= K`). Quadratic constraints (QCQP) are not yet supported — see `03_expressivity/problem_types/todo.md`.
+### 1.1 Constraint and Objective Forms
+PackDB supports **LP**, **ILP**, **MILP**, **QP**, **MIQP**, **QCQP**, bilinear, and feasibility problem classes (see `03_expressivity/problem_types/done.md` for the full taxonomy).
+-   **Constraints** may be linear ($\sum c_i x_i \le K$), bilinear (`x * y`), or quadratic (`POWER(expr, 2)`). Bilinear and quadratic constraints require Gurobi (HiGHS rejects).
+-   **Objectives** may be linear ($\max \sum c_i x_i$), quadratic (`MINIMIZE SUM(POWER(linear_expr, 2))`), bilinear, or omitted (feasibility).
+-   **Remaining limitation**: Higher-order nonlinearities (cubic, etc.) are not supported — only linear, bilinear, and degree-2 quadratic forms are allowed.
 
 ### 1.2 Scalability (Exact Solver)
 Both Gurobi and HiGHS are exact solvers. For NP-Hard problems (integer optimization), the run-time can grow exponentially with the number of decision variables (rows).

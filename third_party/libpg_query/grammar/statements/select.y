@@ -286,6 +286,15 @@ decide_clause:
                     n->objective = $7;
                     $$ = (PGNode *)n;
                 }
+			| DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list
+                {
+                    PGDecideClause *n = makeNode(PGDecideClause);
+                    n->variables = $2;
+                    n->constraints = $5;
+                    n->sense = PG_OBJ_FEASIBILITY;
+                    n->objective = NULL;
+                    $$ = (PGNode *)n;
+                }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 

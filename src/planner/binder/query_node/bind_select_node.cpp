@@ -13,6 +13,7 @@
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
@@ -805,14 +806,14 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
-        {
+        if (statement.decide_objective) {
             DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
             decide_objective_binder.var_types = var_types;
             decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
-            result->decide_sense = statement.decide_sense;
         }
+        result->decide_sense = statement.decide_sense;
         // Update types in bind context to reflect the determined types from DECIDE clause
         bind_context.GetBindingsList().back()->types = var_types;
         for (idx_t i = 0; i < var_names.size(); i++) {
@@ -825,6 +826,54 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         }
         result->num_auxiliary_vars = num_auxiliary_vars;
         result->is_boolean_var = is_boolean_var;
+
+        // Refine entity keys: exclude scoped-table columns that appear as coefficient
+        // data in constraints/objectives. These are dependent data columns, not identity columns.
+        // Without this refinement, CTEs with multiple columns would use ALL columns as
+        // entity key, making every row its own entity and defeating table-scoping.
+        if (!entity_scopes.empty()) {
+            // Collect column bindings from scoped tables that appear in bound expressions
+            unordered_set<uint64_t> data_columns;  // encode as (table_index << 32) | col_index
+            auto collect_data_cols = [&](Expression &expr) {
+                if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    auto &col_ref = expr.Cast<BoundColumnRefExpression>();
+                    auto &binding = col_ref.binding;
+                    // Check if this column belongs to any scoped table
+                    for (auto &scope : entity_scopes) {
+                        if (binding.table_index == scope.source_table_index) {
+                            data_columns.insert((static_cast<uint64_t>(binding.table_index) << 32) |
+                                                static_cast<uint64_t>(binding.column_index));
+                        }
+                    }
+                }
+            };
+            if (result->decide_constraints) {
+                ExpressionIterator::EnumerateExpression(result->decide_constraints, collect_data_cols);
+            }
+            if (result->decide_objective) {
+                ExpressionIterator::EnumerateExpression(result->decide_objective, collect_data_cols);
+            }
+
+            // Remove data columns from entity keys (keep at least one key column)
+            for (auto &scope : entity_scopes) {
+                vector<ColumnBinding> refined_bindings;
+                vector<LogicalType> refined_types;
+                for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
+                    auto &b = scope.entity_key_bindings[k];
+                    uint64_t key = (static_cast<uint64_t>(b.table_index) << 32) |
+                                   static_cast<uint64_t>(b.column_index);
+                    if (data_columns.find(key) == data_columns.end()) {
+                        refined_bindings.push_back(b);
+                        refined_types.push_back(scope.entity_key_column_types[k]);
+                    }
+                }
+                // Only apply refinement if at least one column survives
+                if (!refined_bindings.empty()) {
+                    scope.entity_key_bindings = std::move(refined_bindings);
+                    scope.entity_key_column_types = std::move(refined_types);
+                }
+            }
+        }
 
         // Store table-scoped variable metadata
         result->entity_scopes = std::move(entity_scopes);

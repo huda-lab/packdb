@@ -2,20 +2,9 @@
 
 ---
 
-## Feasibility Problems (No Objective)
+## ~~Feasibility Problems (No Objective)~~
 
-**Priority: Medium**
-
-The grammar currently requires `MAXIMIZE` or `MINIMIZE` — omitting the objective clause produces a parse error. Both solver backends (Gurobi and HiGHS) support feasibility problems natively; the only gap is the grammar.
-
-```sql
--- NOT YET SUPPORTED (parser rejects)
-SELECT * FROM shifts
-DECIDE assigned IS BOOLEAN
-SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
-```
-
-**Design note**: Requires making the objective clause optional in `third_party/libpg_query/grammar/statements/select.y`. The solver dispatch in `physical_decide.cpp` already handles a zero-objective model — the grammar is the only blocker.
+**Done** — see [done.md](done.md). The grammar now accepts `DECIDE ... SUCH THAT ...` without `MAXIMIZE`/`MINIMIZE`. Both Gurobi and HiGHS support feasibility problems natively.
 
 ---
 
@@ -53,23 +42,9 @@ DECIDE y IS REAL IN [-10, 10]
 
 ---
 
-## QCQP (Quadratically Constrained Quadratic Programming)
+## ~~QCQP (Quadratically Constrained Quadratic Programming)~~
 
-**Priority: Low**
-
-Allowing `POWER(linear_expr, 2)` in `SUCH THAT` constraints would enable QCQP:
-
-```sql
--- NOT YET SUPPORTED
-SUCH THAT SUM(POWER(new_val - old_val, 2)) <= 1000
-```
-
-**Note**: Bilinear constraints (`x * y` in `SUCH THAT`) are now supported — see [bilinear/done.md](../bilinear/done.md). The remaining gap is `POWER(expr, 2)` in constraints (sum-of-squares form). The `GRBaddqconstr` infrastructure is already in place from the bilinear constraint implementation, so adding QCQP constraints would primarily require binder and extraction changes.
-
-Deferred due to:
-- HiGHS does not support quadratic constraints at all
-- Requires strict syntax enforcement for convexity: only `<=` with positive RHS, only sum-of-squares form
-- Lower demand than bilinear terms (which are now done)
+**Done** — see [done.md](done.md). `POWER(linear_expr, 2)` is now supported in `SUCH THAT` constraints (Gurobi only; HiGHS rejects with a clear error). Leverages the existing `GRBaddqconstr` infrastructure from the bilinear constraint implementation.
 
 ## ~~Products of Decision Variables (Bilinear Terms)~~
 

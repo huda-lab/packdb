@@ -145,7 +145,7 @@ static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &childre
 	}
 	if (exp_val != 2.0) {
 		error_msg = StringUtil::Format(
-		    "Only POWER(expr, 2) is supported for quadratic objectives. "
+		    "Only POWER(expr, 2) is supported for quadratic expressions. "
 		    "Found exponent %g. Higher powers are not allowed.", exp_val);
 		return false;
 	}
@@ -156,7 +156,7 @@ static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &childre
 		return false;
 	}
 	if (!base_has_var) {
-		error_msg = label + " in DECIDE objective must reference at least one DECIDE variable";
+		error_msg = label + " in DECIDE expression must reference at least one DECIDE variable";
 		return false;
 	}
 	has_decide_variable = true;

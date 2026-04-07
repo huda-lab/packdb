@@ -12,7 +12,8 @@ namespace duckdb {
 
 enum class DecideSense : uint8_t {
     MAXIMIZE = 0,
-    MINIMIZE = 1
+    MINIMIZE = 1,
+    FEASIBILITY = 2
 };
 
 enum class DecideExpression : uint8_t {
