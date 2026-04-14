@@ -281,8 +281,39 @@ Expression-level WHEN is a special case of a unified row-grouping system:
 | WHEN only | `0` (included) or `INVALID_INDEX` (excluded) | 1 |
 | PER only | `0..K-1` (group assignment) or `INVALID_INDEX` (NULL PER value) | K |
 | WHEN + PER | WHEN filters first, PER groups the rest | K (of filtered rows) |
+| WHEN + PER STRICT | Groups from ALL rows, WHEN-excluded → INVALID_INDEX | K (of all rows) |
 
 Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Each extracted aggregate term carries its own optional filter mask. With PER, a row participates in a generated group only when it passes the global expression-level WHEN (if present), has a non-NULL PER key, and contributes to at least one aggregate-local term.
+
+### PER STRICT (PER→WHEN Evaluation Order)
+
+By default, WHEN→PER skips empty groups (groups where all rows fail the WHEN condition). `PER STRICT` switches to PER→WHEN order: groups are discovered from ALL rows first, then WHEN filters within each group. Empty groups still emit constraints, evaluated with `AGG(∅)`:
+
+- `SUM(∅) = 0` — lower bounds fail (`0 >= 30` → infeasible), upper bounds pass (`0 <= 500` → true)
+- `MAX(∅) = -∞` — `MAX(∅) <= C` is vacuously true; `MAX(∅) >= C` is infeasible
+- `MIN(∅) = +∞` — `MIN(∅) >= C` is vacuously true; `MIN(∅) <= C` is infeasible
+
+Syntax: `PER STRICT column` or `PER STRICT (col1, col2, ...)`. Applied per-constraint or per-objective (local switch).
+
+```sql
+-- Default (WHEN→PER): South has no renewables → no constraint, silently skipped
+SUM(output_mw) >= 30 WHEN is_renewable PER region
+
+-- PER STRICT (PER→WHEN): South gets SUM(∅) = 0 >= 30 → infeasible (mandate unmet)
+SUM(output_mw) >= 30 WHEN is_renewable PER STRICT region
+```
+
+Implementation uses two-phase group discovery:
+1. Phase 1: scan ALL rows to discover PER groups (ignoring WHEN)
+2. Phase 2: assign `row_group_ids` — WHEN-excluded rows get `INVALID_INDEX`, but the group exists in `num_groups`
+
+For easy MIN/MAX cases (vacuously true direction), PER STRICT is a no-op — the optimizer strips PER and converts to per-row constraints, which are vacuously satisfied for empty groups.
+
+For hard MIN/MAX cases (existential direction), empty groups produce `SUM(y) >= 1` with 0 indicators → `0 >= 1` → infeasible, which is mathematically correct.
+
+Grammar note: `STRICT` is a `func_name_keyword` (not unreserved) to avoid ambiguity with `PER <columnref>`. A column literally named `strict` must be quoted.
+
+For full analysis of WHEN/PER evaluation order divergence: `context/descriptions/03_expressivity/when/when_per_interaction.tex`.
 
 ---
 
@@ -305,7 +336,7 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.
 
 - **Execution**: `src/execution/operator/decide/physical_decide.cpp`
-  - `AnalyzeConstraint()`: Signature takes `when_condition` and `per_columns`. PER tag is unwrapped first (outermost), then WHEN tag is unwrapped inside it.
+  - `AnalyzeConstraint()`: Signature takes `when_condition`, `per_columns`, and `per_strict`. PER tag is unwrapped first (outermost), then WHEN tag is unwrapped inside it. WHEN handler forwards `per_strict` to the recursive call.
   - `ExtractAggregateConstraintTerms()` / `ExtractAggregateObjectiveTerms()`: Extract additive aggregate expressions and copy aggregate-local filters onto linear, bilinear, and quadratic terms.
   - `Finalize()`, WHEN+PER unified grouping section: `has_when` / `has_per` flags determine evaluation path.
   - `Finalize()`, WHEN evaluation: WHEN condition evaluated into a `when_mask` boolean vector.
@@ -315,14 +346,23 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
 - **Data structures**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
   - `DecideConstraint::when_condition`: Optional WHEN condition expression.
   - `DecideConstraint::per_columns`: Optional PER grouping columns (vector).
+  - `DecideConstraint::per_strict`: Boolean flag for PER STRICT semantics.
+  - `Objective::per_columns`, `Objective::per_strict`: Same for objectives.
   - `Term::filter`, `BilinearConstraintTerm::filter`, `DecideConstraint::QuadraticGroup::filter`, and `Objective::BilinearTerm::filter`: Optional aggregate-local WHEN filters carried to coefficient evaluation.
 
 - **Evaluated constraint**: `src/include/duckdb/packdb/solver_input.hpp`
   - `EvaluatedConstraint::row_group_ids`: Per-row group assignment (`INVALID_INDEX` = excluded).
   - `EvaluatedConstraint::num_groups`: `0` = ungrouped fast path, `1` = WHEN-only, `>1` = PER groups.
+  - `EvaluatedConstraint::per_strict`: Propagated from `DecideConstraint::per_strict`. When true, model builder emits constraints for empty groups.
 
-- **Tag constants**: `src/include/duckdb/common/enums/decide.hpp`
+- **Model builder**: `src/packdb/utility/ilp_model_builder.cpp`
+  - Empty group handling: when `per_strict` is true, emits constraint with zero LHS instead of skipping.
+
+- **Tag constants and helpers**: `src/include/duckdb/common/enums/decide.hpp`
   ```cpp
-  WHEN_CONSTRAINT_TAG = "__when_constraint__"
-  PER_CONSTRAINT_TAG  = "__per_constraint__"
+  WHEN_CONSTRAINT_TAG        = "__when_constraint__"
+  PER_CONSTRAINT_TAG         = "__per_constraint__"
+  PER_STRICT_CONSTRAINT_TAG  = "__per_strict_constraint__"
+  IsPerConstraintTag(alias)  // matches both PER and PER STRICT
+  IsPerStrictTag(alias)      // matches PER STRICT only
   ```

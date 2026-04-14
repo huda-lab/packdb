@@ -36,10 +36,16 @@ constraint_expression [WHEN condition] PER column
 -- Constraint: multi-column PER
 constraint_expression [WHEN condition] PER (column1, column2, ...)
 
+-- PER STRICT: evaluate all groups, even if WHEN filters out all rows
+constraint_expression [WHEN condition] PER STRICT column
+constraint_expression [WHEN condition] PER STRICT (column1, column2, ...)
+
 -- Objective: nested aggregate PER
 MAXIMIZE OUTER(INNER(...)) PER column
 MINIMIZE OUTER(INNER(...)) PER (column1, column2, ...)
 ```
+
+`PER STRICT` switches from WHEN→PER (skip empty groups) to PER→WHEN (evaluate all groups). See `context/descriptions/03_expressivity/when/done.md` for full semantics and `when_per_interaction.tex` for the formal analysis.
 
 **Examples**:
 
