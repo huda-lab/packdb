@@ -2394,16 +2394,20 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (ec.ne_indicator_idx != DConstants::INVALID_INDEX) {
                 idx_t indicator_var_idx = ec.ne_indicator_idx;
 
-                // Compute M from variable bounds
+                // Compute M from variable bounds (only consider active rows)
                 double M = 1e6; // default
                 for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
                     idx_t var_idx = ec.variable_indices[t];
                     double ub = solver_input.upper_bounds[var_idx];
                     if (ub < 1e20) {
-                        // Sum of max absolute coefficient * bound
+                        // Sum of max absolute coefficient * bound among active rows
                         double max_coef = 0.0;
-                        for (auto &v : ec.row_coefficients[t]) {
-                            max_coef = std::max(max_coef, std::abs(v));
+                        for (idx_t r = 0; r < ec.row_coefficients[t].size(); r++) {
+                            if (!ec.row_group_ids.empty() &&
+                                ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                                continue;
+                            }
+                            max_coef = std::max(max_coef, std::abs(ec.row_coefficients[t][r]));
                         }
                         M = std::max(M, max_coef * ub);
                     }
@@ -2416,12 +2420,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // Both aggregate and per-row cases use the same structure.
                 bool is_agg = ec.lhs_is_aggregate;
 
+                // Build indicator coefficient vector (0 for excluded rows, -M for active)
+                vector<double> indicator_coeffs(num_rows, 0.0);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    if (ec.row_group_ids.empty() ||
+                        ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
+                        indicator_coeffs[r] = -M;
+                    }
+                }
+
                 // Constraint 1: x - M*z ≤ K - 1
                 EvaluatedConstraint ec1;
                 ec1.variable_indices = ec.variable_indices;
                 ec1.row_coefficients = ec.row_coefficients;
                 ec1.variable_indices.push_back(indicator_var_idx);
-                ec1.row_coefficients.push_back(vector<double>(num_rows, -M));
+                ec1.row_coefficients.push_back(indicator_coeffs);
                 ec1.rhs_values.resize(num_rows);
                 for (idx_t r = 0; r < num_rows; r++) {
                     ec1.rhs_values[r] = ec.rhs_values[r] - 1.0;
@@ -2437,7 +2450,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec2.variable_indices = ec.variable_indices;
                 ec2.row_coefficients = ec.row_coefficients;
                 ec2.variable_indices.push_back(indicator_var_idx);
-                ec2.row_coefficients.push_back(vector<double>(num_rows, -M));
+                ec2.row_coefficients.push_back(indicator_coeffs);
                 ec2.rhs_values.resize(num_rows);
                 for (idx_t r = 0; r < num_rows; r++) {
                     ec2.rhs_values[r] = ec.rhs_values[r] + 1.0 - M;

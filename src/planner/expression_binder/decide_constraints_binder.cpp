@@ -298,24 +298,23 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
 
 //! Check if a parsed constraint expression is aggregate (SUM-based).
 //! Unwraps optional WHEN wrapper to inspect the inner comparison.
+//! Handles both direct aggregates (SUM(...) <= K) and aggregate-local WHEN
+//! (SUM(...) WHEN cond <= K) on the comparison LHS.
 static bool IsAggregateConstraint(const ParsedExpression &expr) {
     const ParsedExpression *inner = &expr;
-    // Unwrap WHEN wrapper if present
+    // Unwrap expression-level WHEN wrapper if present
     if (inner->GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &func = inner->Cast<FunctionExpression>();
         if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
             inner = func.children[0].get();
         }
     }
-    // Check if the comparison's LHS is a SUM function
+    // Check if the comparison's LHS contains a DECIDE aggregate
+    // (either directly or wrapped in aggregate-local WHEN)
     if (inner->GetExpressionClass() == ExpressionClass::COMPARISON) {
         auto &comp = inner->Cast<ComparisonExpression>();
-        if (comp.left->GetExpressionClass() == ExpressionClass::FUNCTION) {
-            auto &lhs = comp.left->Cast<FunctionExpression>();
-            auto lhs_fn = StringUtil::Lower(lhs.function_name);
-            if (lhs_fn == "sum" || lhs_fn == "avg" || lhs_fn == "min" || lhs_fn == "max" || lhs_fn == "count") {
-                return true;
-            }
+        if (ContainsDecideAggregate(*comp.left)) {
+            return true;
         }
     }
     return false;

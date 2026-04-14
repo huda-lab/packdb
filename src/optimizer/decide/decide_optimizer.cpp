@@ -438,9 +438,17 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// Easy part: per-row bound
 		auto easy_cmp_type = is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO
 		                            : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-		auto easy = make_uniq<BoundComparisonExpression>(
+		unique_ptr<Expression> easy = make_uniq<BoundComparisonExpression>(
 		    easy_cmp_type,
 		    agg.children[0]->Copy(), comp.right->Copy());
+		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
+		if (agg.filter) {
+			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+			when_wrapper->children.push_back(std::move(easy));
+			when_wrapper->children.push_back(agg.filter->Copy());
+			when_wrapper->alias = WHEN_CONSTRAINT_TAG;
+			easy = std::move(when_wrapper);
+		}
 		new_constraints.push_back(std::move(easy));
 
 		// Hard part: create indicator
@@ -475,7 +483,20 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// Easy case: strip the aggregate, make it per-row
 		// MAX(expr) <= K → expr <= K
 		// MIN(expr) >= K → expr >= K
+		// Save filter before destroying the aggregate (comp.left assignment invalidates agg reference)
+		unique_ptr<Expression> saved_filter;
+		if (agg.filter) {
+			saved_filter = agg.filter->Copy();
+		}
 		comp.left = agg.children[0]->Copy();
+		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
+		if (saved_filter) {
+			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+			when_wrapper->children.push_back(std::move(expr));
+			when_wrapper->children.push_back(std::move(saved_filter));
+			when_wrapper->alias = WHEN_CONSTRAINT_TAG;
+			expr = std::move(when_wrapper);
+		}
 		out_was_easy = true;
 		return;
 	}

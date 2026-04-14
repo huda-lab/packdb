@@ -167,7 +167,6 @@ def test_aggregate_local_when_with_avg_constraint(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.per_clause
 @pytest.mark.correctness
-@pytest.mark.xfail(reason="Aggregate-local WHEN + PER composition not yet supported")
 def test_aggregate_local_when_with_per_constraint(packdb_cli):
     """Aggregate-local WHEN composes with PER for per-group filtered constraints."""
     sql = """
@@ -202,7 +201,6 @@ def test_aggregate_local_when_with_per_constraint(packdb_cli):
 @pytest.mark.avg_rewrite
 @pytest.mark.per_clause
 @pytest.mark.correctness
-@pytest.mark.xfail(reason="Aggregate-local WHEN + PER composition not yet supported")
 def test_aggregate_local_when_with_avg_and_per(packdb_cli):
     """AVG + aggregate-local WHEN + PER: triple composition."""
     sql = """
@@ -264,7 +262,6 @@ def test_aggregate_local_when_with_count(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.min_max
 @pytest.mark.correctness
-@pytest.mark.xfail(reason="MIN/MAX easy-case rewrite does not carry aggregate-local WHEN filter")
 def test_aggregate_local_when_with_max(packdb_cli):
     """MAX with aggregate-local WHEN: easy-case MAX strips to per-row within filter."""
     sql = """
@@ -648,7 +645,7 @@ def test_bilinear_aggregate_local_when_objective(packdb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.xfail(reason="NE indicator rewrite does not compose with aggregate-local WHEN filter")
+@pytest.mark.xfail(reason="Pre-existing bug: NE indicator Big-M expansion does not compose with WHEN filters (expression-level or aggregate-local)")
 def test_ne_aggregate_local_when_constraint(packdb_cli):
     """Not-equal (<>) with aggregate-local WHEN on constraint."""
     sql = """

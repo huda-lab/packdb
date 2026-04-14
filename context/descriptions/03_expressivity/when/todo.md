@@ -2,17 +2,9 @@
 
 ## Known Feature Gaps
 
-### Aggregate-local WHEN + PER Composition
+### WHEN + Not-Equal (`<>`) Indicator (pre-existing, affects both expression-level and aggregate-local)
 
-`SUM(x * value) WHEN priority <= 12 PER grp` is rejected by the PER binder because aggregate-local WHEN wraps the SUM in a `WHEN_CONSTRAINT_TAG` that the PER validation does not recognize as an aggregate constraint.
-
-### Aggregate-local WHEN + MIN/MAX Rewrite
-
-`MAX(x * value) WHEN eligible <= 7` produces incorrect results. The easy-case MAX-to-per-row rewrite applies `x * value <= 7` to all rows instead of only eligible rows. The optimizer's MIN/MAX rewrite does not carry the aggregate-local WHEN filter into the generated per-row constraints.
-
-### Aggregate-local WHEN + Not-Equal (`<>`) Indicator
-
-`SUM(x) WHEN active <> 2` produces incorrect results. The NE indicator rewrite (which creates an auxiliary Boolean variable to enforce disjunctive not-equal constraints) does not account for the aggregate-local WHEN filter. The indicator links against unfiltered row coefficients, so the `<>` constraint is effectively ignored or applied to the wrong subset of rows.
+Both `SUM(x) <> 2 WHEN active` (expression-level) and `SUM(x) WHEN active <> 2` (aggregate-local) produce incorrect results. The NE indicator Big-M expansion does not correctly interact with WHEN-filtered row coefficients. The root cause is in the NE expansion section of `physical_decide.cpp` — the Big-M disjunction does not properly account for the reduced row set when computing indicator constraints.
 
 ### Aggregate-local WHEN Grammar Asymmetry
 
