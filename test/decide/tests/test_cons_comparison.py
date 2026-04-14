@@ -272,3 +272,63 @@ def test_sum_not_equal_with_when(packdb_cli):
     conditional_total = sum(row[3] for row in result if row[2] > 20)
     assert conditional_total != 5, \
         f"SUM(x) WHEN l_quantity > 20 = {conditional_total}, expected <> 5"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.when
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_not_equal_with_when_binding(packdb_cli):
+    """SUM(x) <> K WHEN cond — expression-level WHEN where NE is binding.
+
+    Without <> 2, the optimal picks a+b+c (value=23, active_sum=2).
+    With <> 2 enforced, the optimal shifts to active_sum=1 or 3 (value=18).
+    """
+    rows, cols = packdb_cli.execute("""
+        SELECT name, value, active, x FROM (
+            VALUES ('a', 10, true),
+                   ('b', 5, true),
+                   ('c', 8, false),
+                   ('d', 3, true)
+        ) t(name, value, active)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <> 2 WHEN active
+            AND SUM(x) <= 3
+        MAXIMIZE SUM(x * value)
+    """)
+    ci = {name: i for i, name in enumerate(cols)}
+    active_sum = sum(1 for r in rows if r[ci["active"]] and r[ci["x"]] == 1)
+    assert active_sum != 2, f"SUM(x) among active rows must not be 2, got {active_sum}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_not_equal_no_when_binding(packdb_cli):
+    """SUM(x) <> K without WHEN where NE is the binding constraint.
+
+    Regression test: ensures aggregate NE without WHEN still works after
+    the global-z refactor.
+    Without <> 2, optimal picks a+c (value=18, sum=2).
+    With <> 2, optimal shifts to sum=1 (a only, value=10) or sum=3 (a+c+d, value=21).
+    """
+    rows, cols = packdb_cli.execute("""
+        SELECT name, value, x FROM (
+            VALUES ('a', 10),
+                   ('b', 5),
+                   ('c', 8),
+                   ('d', 3)
+        ) t(name, value)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <> 2
+            AND SUM(x) <= 3
+            AND SUM(x * value) <= 21
+        MAXIMIZE SUM(x * value)
+    """)
+    ci = {name: i for i, name in enumerate(cols)}
+    total = sum(r[ci["x"]] for r in rows)
+    assert total != 2, f"SUM(x) must not be 2, got {total}"

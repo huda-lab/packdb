@@ -2,10 +2,6 @@
 
 ## Known Feature Gaps
 
-### WHEN + Not-Equal (`<>`) Indicator (pre-existing, affects both expression-level and aggregate-local)
-
-Both `SUM(x) <> 2 WHEN active` (expression-level) and `SUM(x) WHEN active <> 2` (aggregate-local) produce incorrect results. The NE indicator Big-M expansion does not correctly interact with WHEN-filtered row coefficients. The root cause is in the NE expansion section of `physical_decide.cpp` — the Big-M disjunction does not properly account for the reduced row set when computing indicator constraints.
-
 ### Aggregate-local WHEN Grammar Asymmetry
 
 The `decide_when_condition` non-terminal is `c_expr` — a restricted expression that excludes comparison operators (`=`, `<`, `>`, `<=`, `>=`, `<>`) and arithmetic (`+`, `-`). Unparenthesized comparison conditions in aggregate-local WHEN are misinterpreted:

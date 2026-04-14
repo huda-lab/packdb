@@ -54,6 +54,24 @@ For the objective, `WHEN` zeros out the contribution of non-matching rows. The s
 MAXIMIZE SUM(x * profit) WHEN category = 'electronics'
 ```
 
+### WHEN with Not-Equal (`<>`) Constraints
+
+Both expression-level and aggregate-local `WHEN` compose correctly with `<>` (not-equal) aggregate constraints:
+
+```sql
+-- Expression-level WHEN + NE
+SUM(x) <> 2 WHEN active
+
+-- Aggregate-local WHEN + NE
+SUM(x) WHEN active <> 2
+```
+
+The NE Big-M disjunction uses a **single global binary indicator variable** per group (one for WHEN-only, one per group for PER). This is expanded as raw constraints after the `VarIndexer` is built, bypassing the per-row indicator path used by per-row NE constraints. The formulation is:
+- `SUM(coeffs) - M*z <= K-1`  (z=0 → SUM ≤ K-1)
+- `SUM(coeffs) - M*z >= K+1-M`  (z=1 → SUM ≥ K+1)
+
+Code pointer: deferred aggregate NE expansion in `physical_decide.cpp`, after `VarIndexer pre_indexer` construction.
+
 ### Aggregate-local WHEN
 
 Aggregate-local `WHEN` attaches to a single aggregate, not to the whole constraint or objective. This lets one expression use different row filters for different aggregate terms:

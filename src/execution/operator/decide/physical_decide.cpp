@@ -2383,24 +2383,31 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         gstate.evaluated_constraints = std::move(new_constraints);
     }
 
-    // Generate Big-M constraints for not-equal (<>) indicators
+    // Generate Big-M constraints for not-equal (<>) indicators.
     // For each COMPARE_NOTEQUAL constraint, replace it with two disjunctive constraints:
-    //   LHS + M*z <= RHS - 1 + M   (when z=0: LHS <= RHS - 1, i.e., LHS < RHS)
-    //   LHS - M*z >= RHS + 1 - M   (when z=1: LHS >= RHS + 1, i.e., LHS > RHS)
-    // Constraints are matched to their indicator variables via explicit tags (not positional).
+    //   x - M*z ≤ K-1        (z=0 → x ≤ K-1; z=1 → trivially true)
+    //   x - M*z ≥ K+1-M      (z=0 → trivially true; z=1 → x ≥ K+1)
+    //
+    // Per-row NE: expanded inline with row-scoped indicator variables (one z per row).
+    // Aggregate NE: deferred — expanded after the VarIndexer is built, using a single
+    //   global binary z per group. This avoids the per-row z interaction with the
+    //   aggregate constraint building path (unified path with row_group_ids).
+    struct DeferredAggregateNE {
+        EvaluatedConstraint original;
+        double big_M;
+    };
+    vector<DeferredAggregateNE> deferred_ne_aggregate;
+
     if (!ne_indicator_indices.empty()) {
         vector<EvaluatedConstraint> new_constraints;
         for (auto &ec : gstate.evaluated_constraints) {
             if (ec.ne_indicator_idx != DConstants::INVALID_INDEX) {
-                idx_t indicator_var_idx = ec.ne_indicator_idx;
-
                 // Compute M from variable bounds (only consider active rows)
                 double M = 1e6; // default
                 for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
                     idx_t var_idx = ec.variable_indices[t];
                     double ub = solver_input.upper_bounds[var_idx];
                     if (ub < 1e20) {
-                        // Sum of max absolute coefficient * bound among active rows
                         double max_coef = 0.0;
                         for (idx_t r = 0; r < ec.row_coefficients[t].size(); r++) {
                             if (!ec.row_group_ids.empty() &&
@@ -2413,53 +2420,59 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
 
-                // Big-M disjunction: x ≠ K  ↔  (x ≤ K-1) ∨ (x ≥ K+1)
-                // Linearized as:
-                //   x - M*z ≤ K-1        (z=0 → x ≤ K-1; z=1 → trivially true)
-                //   x - M*z ≥ K+1-M      (z=0 → trivially true; z=1 → x ≥ K+1)
-                // Both aggregate and per-row cases use the same structure.
-                bool is_agg = ec.lhs_is_aggregate;
+                if (ec.lhs_is_aggregate) {
+                    // Aggregate NE: defer to after pre_indexer is built.
+                    // Will be expanded with a single global z per group.
+                    DeferredAggregateNE deferred;
+                    deferred.original = ec; // copy before the loop moves on
+                    deferred.big_M = M;
+                    deferred_ne_aggregate.push_back(std::move(deferred));
+                    // Don't add to new_constraints — handled via global_constraints later
+                } else {
+                    // Per-row NE: expand inline with row-scoped indicator variable
+                    idx_t indicator_var_idx = ec.ne_indicator_idx;
 
-                // Build indicator coefficient vector (0 for excluded rows, -M for active)
-                vector<double> indicator_coeffs(num_rows, 0.0);
-                for (idx_t r = 0; r < num_rows; r++) {
-                    if (ec.row_group_ids.empty() ||
-                        ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
-                        indicator_coeffs[r] = -M;
+                    // Build indicator coefficient vector (0 for excluded rows, -M for active)
+                    vector<double> indicator_coeffs(num_rows, 0.0);
+                    for (idx_t r = 0; r < num_rows; r++) {
+                        if (ec.row_group_ids.empty() ||
+                            ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
+                            indicator_coeffs[r] = -M;
+                        }
                     }
-                }
 
-                // Constraint 1: x - M*z ≤ K - 1
-                EvaluatedConstraint ec1;
-                ec1.variable_indices = ec.variable_indices;
-                ec1.row_coefficients = ec.row_coefficients;
-                ec1.variable_indices.push_back(indicator_var_idx);
-                ec1.row_coefficients.push_back(indicator_coeffs);
-                ec1.rhs_values.resize(num_rows);
-                for (idx_t r = 0; r < num_rows; r++) {
-                    ec1.rhs_values[r] = ec.rhs_values[r] - 1.0;
-                }
-                ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-                ec1.lhs_is_aggregate = is_agg;
-                ec1.row_group_ids = ec.row_group_ids;
-                ec1.num_groups = ec.num_groups;
-                new_constraints.push_back(std::move(ec1));
+                    // Constraint 1: x - M*z ≤ K - 1
+                    EvaluatedConstraint ec1;
+                    ec1.variable_indices = ec.variable_indices;
+                    ec1.row_coefficients = ec.row_coefficients;
+                    ec1.variable_indices.push_back(indicator_var_idx);
+                    ec1.row_coefficients.push_back(indicator_coeffs);
+                    ec1.rhs_values.resize(num_rows);
+                    for (idx_t r = 0; r < num_rows; r++) {
+                        ec1.rhs_values[r] = ec.rhs_values[r] - 1.0;
+                    }
+                    ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+                    ec1.lhs_is_aggregate = false; // per-row
+                    ec1.row_group_ids = ec.row_group_ids;
+                    ec1.num_groups = ec.num_groups;
+                    new_constraints.push_back(std::move(ec1));
 
-                // Constraint 2: x - M*z ≥ K + 1 - M
-                EvaluatedConstraint ec2;
-                ec2.variable_indices = ec.variable_indices;
-                ec2.row_coefficients = ec.row_coefficients;
-                ec2.variable_indices.push_back(indicator_var_idx);
-                ec2.row_coefficients.push_back(indicator_coeffs);
-                ec2.rhs_values.resize(num_rows);
-                for (idx_t r = 0; r < num_rows; r++) {
-                    ec2.rhs_values[r] = ec.rhs_values[r] + 1.0 - M;
+                    // Constraint 2: x - M*z ≥ K + 1 - M
+                    EvaluatedConstraint ec2;
+                    ec2.variable_indices = ec.variable_indices;
+                    ec2.row_coefficients = ec.row_coefficients;
+                    ec2.variable_indices.push_back(indicator_var_idx);
+                    ec2.row_coefficients.push_back(indicator_coeffs);
+                    ec2.rhs_values.resize(num_rows);
+                    for (idx_t r = 0; r < num_rows; r++) {
+                        ec2.rhs_values[r] = ec.rhs_values[r] + 1.0 - M;
+                    }
+                    ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+                    ec2.lhs_is_aggregate = false; // per-row
+                    ec2.row_group_ids = ec.row_group_ids;
+                    ec2.num_groups = ec.num_groups;
+                    new_constraints.push_back(std::move(ec2));
                 }
-                ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-                ec2.lhs_is_aggregate = is_agg;
-                ec2.row_group_ids = ec.row_group_ids;
-                ec2.num_groups = ec.num_groups;
-                new_constraints.push_back(std::move(ec2));
             } else {
                 new_constraints.push_back(std::move(ec));
             }
@@ -2708,6 +2721,97 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Global variables are appended at pre_indexer.global_block_start.
     // As we add more global vars, their indices are global_block_start + g
     // where g is the position in the global vars array.
+
+    // Expand deferred aggregate NE constraints using global binary indicator variables.
+    // Each group gets a single z (binary), yielding two raw constraints:
+    //   SUM(coeffs) - M*z <= K-1       (z=0 → SUM ≤ K-1; z=1 → trivially true)
+    //   SUM(coeffs) - M*z >= K+1-M     (z=0 → trivially true; z=1 → SUM ≥ K+1)
+    for (auto &deferred : deferred_ne_aggregate) {
+        auto &ec = deferred.original;
+        double M = deferred.big_M;
+        bool has_groups = !ec.row_group_ids.empty();
+
+        // Build group → rows mapping (mirrors model builder unified path)
+        idx_t num_groups_to_process = 1;
+        vector<vector<idx_t>> group_rows;
+        if (has_groups) {
+            group_rows.resize(ec.num_groups);
+            num_groups_to_process = ec.num_groups;
+            for (idx_t row = 0; row < num_rows; row++) {
+                idx_t gid = ec.row_group_ids[row];
+                if (gid != DConstants::INVALID_INDEX) {
+                    group_rows[gid].push_back(row);
+                }
+            }
+        } else {
+            // No WHEN/PER — all rows in one implicit group
+            group_rows.resize(1);
+            for (idx_t row = 0; row < num_rows; row++) {
+                group_rows[0].push_back(row);
+            }
+        }
+
+        double rhs = ec.rhs_values[0];
+
+        for (idx_t g = 0; g < num_groups_to_process; g++) {
+            if (group_rows[g].empty()) {
+                continue;
+            }
+
+            // Allocate one global binary z for this group
+            idx_t z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+            solver_input.num_global_vars++;
+            solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
+            solver_input.global_lower_bounds.push_back(0.0);
+            solver_input.global_upper_bounds.push_back(1.0);
+            solver_input.global_obj_coeffs.push_back(0.0);
+
+            // Accumulate LHS coefficients for active rows in this group
+            std::unordered_map<int, double> coeff_accum;
+            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+                idx_t decide_var_idx = ec.variable_indices[term_idx];
+                if (decide_var_idx == DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                for (idx_t row : group_rows[g]) {
+                    double coeff = ec.row_coefficients[term_idx][row];
+                    if (std::abs(coeff) < 1e-15) {
+                        continue;
+                    }
+                    int var_idx = static_cast<int>(pre_indexer.Get(decide_var_idx, row));
+                    coeff_accum[var_idx] += coeff;
+                }
+            }
+
+            // ec1: SUM(coeffs) - M*z <= K - 1
+            SolverInput::RawConstraint rc1;
+            rc1.sense = '<';
+            rc1.rhs = rhs - 1.0;
+            for (auto &[idx, coeff] : coeff_accum) {
+                if (coeff != 0.0) {
+                    rc1.indices.push_back(idx);
+                    rc1.coefficients.push_back(coeff);
+                }
+            }
+            rc1.indices.push_back(static_cast<int>(z_idx));
+            rc1.coefficients.push_back(-M);
+            solver_input.global_constraints.push_back(std::move(rc1));
+
+            // ec2: SUM(coeffs) - M*z >= K + 1 - M
+            SolverInput::RawConstraint rc2;
+            rc2.sense = '>';
+            rc2.rhs = rhs + 1.0 - M;
+            for (auto &[idx, coeff] : coeff_accum) {
+                if (coeff != 0.0) {
+                    rc2.indices.push_back(idx);
+                    rc2.coefficients.push_back(coeff);
+                }
+            }
+            rc2.indices.push_back(static_cast<int>(z_idx));
+            rc2.coefficients.push_back(-M);
+            solver_input.global_constraints.push_back(std::move(rc2));
+        }
+    }
 
     // Save objective data (needed for constraint generation in both paths)
     auto saved_obj_coefficients = solver_input.objective_coefficients;

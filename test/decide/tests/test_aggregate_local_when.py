@@ -645,7 +645,6 @@ def test_bilinear_aggregate_local_when_objective(packdb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.xfail(reason="Pre-existing bug: NE indicator Big-M expansion does not compose with WHEN filters (expression-level or aggregate-local)")
 def test_ne_aggregate_local_when_constraint(packdb_cli):
     """Not-equal (<>) with aggregate-local WHEN on constraint."""
     sql = """
@@ -665,6 +664,38 @@ def test_ne_aggregate_local_when_constraint(packdb_cli):
 
     active_selected = sum(1 for r in rows if r[ci["active"]] and r[ci["x"]] == 1)
     assert active_selected != 2, f"SUM(x) among active rows must not be 2, got {active_selected}"
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_comparison
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_ne_with_per_constraint(packdb_cli):
+    """SUM(x) <> K PER group — each group independently avoids its forbidden value."""
+    sql = """
+        SELECT name, value, dept, x FROM (
+            VALUES ('a', 10, 'eng'),
+                   ('b', 5, 'eng'),
+                   ('c', 8, 'sales'),
+                   ('d', 3, 'sales'),
+                   ('e', 7, 'eng')
+        ) t(name, value, dept)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <> 2 PER dept
+            AND SUM(x) <= 4
+        MAXIMIZE SUM(x * value)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    ci = {name: i for i, name in enumerate(cols)}
+
+    from collections import defaultdict
+    dept_sums = defaultdict(int)
+    for r in rows:
+        if r[ci["x"]] == 1:
+            dept_sums[r[ci["dept"]]] += 1
+    for dept, s in dept_sums.items():
+        assert s != 2, f"SUM(x) in dept '{dept}' must not be 2, got {s}"
 
 
 @pytest.mark.when
