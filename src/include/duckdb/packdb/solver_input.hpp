@@ -55,6 +55,7 @@ struct EvaluatedConstraint {
     //! 0..K-1 = group assignment
     vector<idx_t> row_group_ids;
     idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
+    bool per_strict = false;                  // True: empty groups emit constraints (not skipped)
 };
 
 //! Maps result rows to unique entities in a source table.

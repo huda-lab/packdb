@@ -62,6 +62,7 @@ SUCH THAT constraint [AND constraint ...]
 - Constraints: linear expressions with `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN` (all operators supported on both per-row and aggregate constraints; `IN` on aggregates not supported)
 - Conditional: `expression WHEN condition` (postfix, on constraints and objectives)
 - Grouping: `SUM(expr) op rhs PER column` or `PER (col1, col2, ...)` (one constraint per distinct value/combination)
+- **PER STRICT**: `PER STRICT column` or `PER STRICT (col1, col2, ...)` — switches from WHEN→PER (default: skip empty groups) to PER→WHEN (evaluate all groups). Empty groups emit constraints with `AGG(∅)`: SUM(∅)=0, MAX(∅)=-∞, MIN(∅)=+∞. Per-constraint/objective modifier. Note: `STRICT` is a `func_name_keyword`, so a column literally named `strict` must be quoted.
 - `SUM()` aggregate supported over decision variables; `COUNT(x)` supported for BOOLEAN (rewritten to SUM) and INTEGER (Big-M indicator variable rewrite); `AVG(expr)` supported (rewritten to SUM with RHS scaling by row count at execution time)
 - `MIN(expr)` / `MAX(expr)` supported in constraints and objectives via linearization:
   - **Easy cases** (no Big-M): `MAX(expr) <= K` → per-row `expr <= K`; `MIN(expr) >= K` → per-row `expr >= K`. The aggregate is simply stripped because bounding every row individually is equivalent.

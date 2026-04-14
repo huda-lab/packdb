@@ -1096,7 +1096,7 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
                 result->is_operator = true;
                 return std::move(result);
             }
-            if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
+            if (func.is_operator && IsPerConstraintTag(func.function_name)) {
                 // Normalize the inner constraint (child[0]), pass through PER columns (children[1..N])
                 auto normalized_constraint = NormalizeConstraintsRecursive(*func.children[0], decide_variables);
 
@@ -1107,13 +1107,13 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
                 if (normalized_constraint->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
                     auto &conj = normalized_constraint->Cast<ConjunctionExpression>();
                     if (conj.children.size() >= 2) {
-                        // Wrap only the last child with PER
+                        // Wrap only the last child with PER (preserve original tag for STRICT)
                         vector<unique_ptr<ParsedExpression>> per_args;
                         per_args.push_back(std::move(conj.children.back()));
                         for (idx_t i = 1; i < func.children.size(); i++) {
                             per_args.push_back(func.children[i]->Copy());
                         }
-                        auto per_expr = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(per_args));
+                        auto per_expr = make_uniq<FunctionExpression>(func.function_name, std::move(per_args));
                         per_expr->is_operator = true;
 
                         // Rebuild: unwrapped children AND PER(last, columns...)
@@ -1128,7 +1128,7 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
                 for (idx_t i = 1; i < func.children.size(); i++) {
                     args.push_back(func.children[i]->Copy());
                 }
-                auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(args));
+                auto result = make_uniq<FunctionExpression>(func.function_name, std::move(args));
                 result->is_operator = true;
                 return std::move(result);
             }
@@ -1351,14 +1351,14 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
         return std::move(result);
     }
     // PackDB: Handle PER wrapper — normalize inner objective, pass through PER columns
-    if (f.is_operator && f.function_name == PER_CONSTRAINT_TAG) {
+    if (f.is_operator && IsPerConstraintTag(f.function_name)) {
         auto normalized = NormalizeDecideObjective(*f.children[0], decide_variables);
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(normalized));
         for (idx_t i = 1; i < f.children.size(); i++) {
             args.push_back(f.children[i]->Copy());
         }
-        auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(args));
+        auto result = make_uniq<FunctionExpression>(f.function_name, std::move(args));
         result->is_operator = true;
         return std::move(result);
     }

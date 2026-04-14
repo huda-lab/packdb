@@ -388,7 +388,7 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
     for (idx_t i = 1; i < func.children.size(); i++) {
         result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
     }
-    result->alias = PER_CONSTRAINT_TAG;
+    result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG or PER_STRICT_CONSTRAINT_TAG
     return BindResult(std::move(result));
 }
 
@@ -411,7 +411,7 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
         // PackDB: PER constraint wrapper (outermost, wraps optional WHEN)
-        if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
+        if (func.is_operator && IsPerConstraintTag(func.function_name)) {
             return BindPerConstraint(expr_ptr, depth);
         }
         // PackDB: top-level WHEN wraps a whole constraint. Nested WHEN is the

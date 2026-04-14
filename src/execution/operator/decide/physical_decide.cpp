@@ -280,8 +280,8 @@ string PhysicalDecide::GetName() const {
 static void CollectConstraintStringsPhysical(const Expression &expr, vector<string> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
-			string per_suffix = " PER ";
+		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+			string per_suffix = IsPerStrictTag(conj.alias) ? " PER STRICT " : " PER ";
 			for (idx_t i = 1; i < conj.children.size(); i++) {
 				if (i > 1) {
 					per_suffix += ", ";
@@ -564,28 +564,30 @@ public:
 
     void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr,
                            unique_ptr<Expression> when_condition = nullptr,
-                           vector<unique_ptr<Expression>> per_columns = {}) {
+                           vector<unique_ptr<Expression>> per_columns = {},
+                           bool per_strict = false) {
         auto &expr = *expr_ptr;
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // PackDB: PER wrapper — outermost layer
-                if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
+                // PackDB: PER [STRICT] wrapper — outermost layer
+                if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
                     // child[0] = the constraint (possibly WHEN-wrapped)
                     // children[1..N] = the PER column expressions
                     vector<unique_ptr<Expression>> per_cols;
+                    bool strict = IsPerStrictTag(conj.alias);
                     for (idx_t i = 1; i < conj.children.size(); i++) {
                         per_cols.push_back(conj.children[i]->Copy());
                     }
                     AnalyzeConstraint(conj.children[0], std::move(when_condition),
-                                      std::move(per_cols));
+                                      std::move(per_cols), strict);
                     break;
                 }
                 // PackDB: Check if this is a WHEN constraint wrapper
                 if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
                     // child[0] = the actual constraint, child[1] = the WHEN condition
                     AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(),
-                                      std::move(per_columns));
+                                      std::move(per_columns), per_strict);
                     break;
                 }
                 // Regular conjunction: recursively analyze each child
@@ -617,6 +619,7 @@ public:
                 if (!per_columns.empty()) {
                     constraint->per_columns = std::move(per_columns);
                 }
+                constraint->per_strict = per_strict;
 
                 // Extract terms from LHS
                 Expression *lhs = comp.left.get();
@@ -1017,11 +1020,13 @@ public:
             expr = expr->Cast<BoundCastExpression>().child.get();
         }
 
-        // PackDB: Check for PER wrapper on objective (outermost layer)
+        // PackDB: Check for PER [STRICT] wrapper on objective (outermost layer)
         vector<unique_ptr<Expression>> per_cols;
+        bool obj_per_strict = false;
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conj = expr->Cast<BoundConjunctionExpression>();
-            if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
+            if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+                obj_per_strict = IsPerStrictTag(conj.alias);
                 for (idx_t i = 1; i < conj.children.size(); i++) {
                     per_cols.push_back(conj.children[i]->Copy());
                 }
@@ -1171,11 +1176,13 @@ public:
 
             objective->when_condition = std::move(when_cond);
             objective->per_columns = std::move(per_cols);
+            objective->per_strict = obj_per_strict;
         } else if (BoundExpressionContainsAggregate(*expr)) {
             objective = make_uniq<Objective>();
             ExtractAggregateObjectiveTerms(*expr, *objective, 1);
             objective->when_condition = std::move(when_cond);
             objective->per_columns = std::move(per_cols);
+            objective->per_strict = obj_per_strict;
         }
     }
 
@@ -1195,7 +1202,7 @@ public:
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
                 // PackDB PER: only recurse into the constraint (child[0]), skip the columns
-                if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
+                if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
                     TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
                     break;
                 }
@@ -1501,6 +1508,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         eval_const.minmax_indicator_idx = constraint->minmax_indicator_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
         eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
+        eval_const.per_strict = constraint->per_strict;
 
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
@@ -1765,47 +1773,77 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 return true;
             };
 
+            // Helper: build composite PER key for a row
+            auto build_per_key = [&](idx_t row, bool &has_null_out) -> string {
+                has_null_out = false;
+                for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
+                    if (all_per_values[col_idx][row].IsNull()) {
+                        has_null_out = true;
+                        return {};
+                    }
+                }
+                string key;
+                for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
+                    if (col_idx > 0) {
+                        key.push_back('\0');
+                    }
+                    key += all_per_values[col_idx][row].ToString();
+                }
+                return key;
+            };
+
             if (has_per) {
                 // PER (with or without WHEN)
                 // Map distinct composite PER keys to group IDs (first-seen order)
+                bool is_strict = constraint->per_strict;
                 unordered_map<string, idx_t> value_to_group;
                 idx_t next_group = 0;
 
-                for (idx_t row = 0; row < num_rows; row++) {
-                    // WHEN filter: excluded rows get INVALID_INDEX
-                    if (!row_is_included(row)) {
-                        eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                        continue;
-                    }
-                    // NULL in any PER column: excluded (matches SQL GROUP BY NULL semantics)
-                    bool has_null = false;
-                    for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
-                        if (all_per_values[col_idx][row].IsNull()) {
-                            has_null = true;
-                            break;
+                if (is_strict) {
+                    // PER STRICT: Phase 1 — discover groups from ALL rows (ignoring WHEN)
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        bool has_null = false;
+                        string key = build_per_key(row, has_null);
+                        if (has_null) continue;
+                        if (value_to_group.find(key) == value_to_group.end()) {
+                            value_to_group[key] = next_group++;
                         }
                     }
-                    if (has_null) {
-                        eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                        continue;
-                    }
-                    // Build composite key from all PER column values
-                    // Use null-byte separator (cannot appear in ToString output)
-                    string key;
-                    for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
-                        if (col_idx > 0) {
-                            key.push_back('\0');
+                    // Phase 2: Assign row_group_ids (WHEN-excluded → INVALID_INDEX)
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        bool has_null = false;
+                        string key = build_per_key(row, has_null);
+                        if (has_null) {
+                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                            continue;
                         }
-                        key += all_per_values[col_idx][row].ToString();
+                        if (!row_is_included(row)) {
+                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                            continue;
+                        }
+                        eval_const.row_group_ids[row] = value_to_group[key];
                     }
-                    // Assign group ID by composite key
-                    auto it = value_to_group.find(key);
-                    if (it == value_to_group.end()) {
-                        value_to_group[key] = next_group;
-                        eval_const.row_group_ids[row] = next_group;
-                        next_group++;
-                    } else {
-                        eval_const.row_group_ids[row] = it->second;
+                } else {
+                    // Standard WHEN→PER: discover groups only from WHEN-qualifying rows
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (!row_is_included(row)) {
+                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                            continue;
+                        }
+                        bool has_null = false;
+                        string key = build_per_key(row, has_null);
+                        if (has_null) {
+                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                            continue;
+                        }
+                        auto it = value_to_group.find(key);
+                        if (it == value_to_group.end()) {
+                            value_to_group[key] = next_group;
+                            eval_const.row_group_ids[row] = next_group;
+                            next_group++;
+                        } else {
+                            eval_const.row_group_ids[row] = it->second;
+                        }
                     }
                 }
                 eval_const.num_groups = next_group;
@@ -2338,6 +2376,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false; // per-row!
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
+                ec_row.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_row));
 
                 // SUM(y) >= 1 (at least one row must satisfy)
@@ -2349,6 +2388,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
+                ec_sum.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_sum));
             } else {
                 // MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M
@@ -2366,6 +2406,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false;
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
+                ec_row.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_row));
 
                 // SUM(y) >= 1
@@ -2377,6 +2418,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
+                ec_sum.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_sum));
             }
         }
@@ -2455,6 +2497,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec1.lhs_is_aggregate = false; // per-row
                     ec1.row_group_ids = ec.row_group_ids;
                     ec1.num_groups = ec.num_groups;
+                    ec1.per_strict = ec.per_strict;
                     new_constraints.push_back(std::move(ec1));
 
                     // Constraint 2: x - M*z ≥ K + 1 - M
@@ -2471,6 +2514,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec2.lhs_is_aggregate = false; // per-row
                     ec2.row_group_ids = ec.row_group_ids;
                     ec2.num_groups = ec.num_groups;
+                    ec2.per_strict = ec.per_strict;
                     new_constraints.push_back(std::move(ec2));
                 }
             } else {
@@ -2604,34 +2648,72 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_input.objective_row_group_ids.resize(num_rows);
         unordered_map<string, idx_t> obj_value_to_group;
         idx_t obj_next_group = 0;
-        for (idx_t row = 0; row < num_rows; row++) {
-            if ((objective_has_when && !objective_when_mask[row]) || !objective_row_has_local_term(row)) {
-                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                continue;
-            }
-            bool has_null = false;
+        bool obj_strict = gstate.objective->per_strict;
+
+        // Helper: build composite PER key for objective
+        auto build_obj_per_key = [&](idx_t row, bool &has_null_out) -> string {
+            has_null_out = false;
             for (idx_t col_idx = 0; col_idx < obj_per_values.size(); col_idx++) {
                 if (obj_per_values[col_idx][row].IsNull()) {
-                    has_null = true;
-                    break;
+                    has_null_out = true;
+                    return {};
                 }
-            }
-            if (has_null) {
-                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                continue;
             }
             string key;
             for (idx_t col_idx = 0; col_idx < obj_per_values.size(); col_idx++) {
                 if (col_idx > 0) key.push_back('\0');
                 key += obj_per_values[col_idx][row].ToString();
             }
-            auto it = obj_value_to_group.find(key);
-            if (it == obj_value_to_group.end()) {
-                obj_value_to_group[key] = obj_next_group;
-                solver_input.objective_row_group_ids[row] = obj_next_group;
-                obj_next_group++;
-            } else {
-                solver_input.objective_row_group_ids[row] = it->second;
+            return key;
+        };
+
+        auto obj_row_is_included = [&](idx_t row) -> bool {
+            if (objective_has_when && !objective_when_mask[row]) return false;
+            if (!objective_row_has_local_term(row)) return false;
+            return true;
+        };
+
+        if (obj_strict) {
+            // PER STRICT: Phase 1 — discover groups from ALL rows (ignoring WHEN)
+            for (idx_t row = 0; row < num_rows; row++) {
+                bool has_null = false;
+                string key = build_obj_per_key(row, has_null);
+                if (has_null) continue;
+                if (obj_value_to_group.find(key) == obj_value_to_group.end()) {
+                    obj_value_to_group[key] = obj_next_group++;
+                }
+            }
+            // Phase 2: Assign row_group_ids (WHEN-excluded → INVALID_INDEX)
+            for (idx_t row = 0; row < num_rows; row++) {
+                bool has_null = false;
+                string key = build_obj_per_key(row, has_null);
+                if (has_null || !obj_row_is_included(row)) {
+                    solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                    continue;
+                }
+                solver_input.objective_row_group_ids[row] = obj_value_to_group[key];
+            }
+        } else {
+            // Standard WHEN→PER: discover groups only from qualifying rows
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (!obj_row_is_included(row)) {
+                    solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                    continue;
+                }
+                bool has_null = false;
+                string key = build_obj_per_key(row, has_null);
+                if (has_null) {
+                    solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                    continue;
+                }
+                auto it = obj_value_to_group.find(key);
+                if (it == obj_value_to_group.end()) {
+                    obj_value_to_group[key] = obj_next_group;
+                    solver_input.objective_row_group_ids[row] = obj_next_group;
+                    obj_next_group++;
+                } else {
+                    solver_input.objective_row_group_ids[row] = it->second;
+                }
             }
         }
         solver_input.objective_num_groups = obj_next_group;
@@ -2755,6 +2837,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         for (idx_t g = 0; g < num_groups_to_process; g++) {
             if (group_rows[g].empty()) {
+                if (!ec.per_strict) {
+                    continue;
+                }
+                // PER STRICT + NE + empty group: SUM(∅) <> K means 0 <> K
+                // If K != 0: trivially true (no constraint needed)
+                // If K == 0: infeasible — emit 0 >= 1
+                if (std::abs(rhs) < 1e-15) {
+                    SolverInput::RawConstraint rc;
+                    rc.sense = '>';
+                    rc.rhs = 1.0;
+                    solver_input.global_constraints.push_back(std::move(rc));
+                }
                 continue;
             }
 

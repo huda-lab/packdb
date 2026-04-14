@@ -46,6 +46,7 @@ struct DecideConstraint {
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
     unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
+    bool per_strict = false;                        // PackDB: PER STRICT semantics (all groups emit, even empty)
 
     // Bilinear terms in constraint (non-Boolean pairs left by optimizer)
     vector<BilinearConstraintTerm> bilinear_terms;
@@ -76,6 +77,7 @@ struct Objective {
     vector<Term> terms;                    // Linear objective terms
     unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns; // PackDB: optional PER grouping columns (empty = no grouping)
+    bool per_strict = false;                    // PackDB: PER STRICT semantics (all groups emit, even empty)
 
     //! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
     //! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).

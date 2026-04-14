@@ -33,7 +33,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	case ExpressionClass::FUNCTION: {
 	    auto &func = expr.Cast<FunctionExpression>();
 	    // PackDB: Handle PER on objective — preserve PER columns for per-group objectives
-	    if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
+	    if (func.is_operator && IsPerConstraintTag(func.function_name)) {
 	        D_ASSERT(func.children.size() >= 2);
 
 	        // Validate each PER column
@@ -84,7 +84,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	        for (idx_t i = 1; i < func.children.size(); i++) {
 	            result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
 	        }
-	        result->alias = PER_CONSTRAINT_TAG;
+	        result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG or PER_STRICT_CONSTRAINT_TAG
 	        return BindResult(std::move(result));
 	    }
 	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.

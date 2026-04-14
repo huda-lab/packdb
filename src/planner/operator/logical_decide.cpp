@@ -51,9 +51,9 @@ string LogicalDecide::GetName() const {
 void LogicalDecide::CollectConstraintStrings(const Expression &expr, vector<string> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (conj.alias == PER_CONSTRAINT_TAG && conj.children.size() >= 2) {
-			// PER wrapper: child[0] is the constraint, children[1..N] are PER columns
-			string per_suffix = " PER ";
+		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+			// PER [STRICT] wrapper: child[0] is the constraint, children[1..N] are PER columns
+			string per_suffix = IsPerStrictTag(conj.alias) ? " PER STRICT " : " PER ";
 			for (idx_t i = 1; i < conj.children.size(); i++) {
 				if (i > 1) {
 					per_suffix += ", ";

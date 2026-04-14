@@ -396,6 +396,13 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) {
+                        if (!eval_const.per_strict) {
+                            continue;
+                        }
+                        // PER STRICT: emit constraint with zero LHS (AGG(∅) = 0)
+                        ModelConstraint empty_constr;
+                        ApplyComparisonSense(empty_constr, eval_const.comparison_type, rhs);
+                        model.constraints.push_back(std::move(empty_constr));
                         continue;
                     }
                     ModelConstraint constr;
@@ -599,7 +606,14 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     }
                 }
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
-                    if (group_rows[g].empty()) continue;
+                    if (group_rows[g].empty()) {
+                        if (!eval_const.per_strict) continue;
+                        // PER STRICT: emit quadratic constraint with zero LHS
+                        vector<idx_t> empty_rows;
+                        model.quadratic_constraints.push_back(
+                            BuildQuadraticConstraint(eval_const, empty_rows, rhs));
+                        continue;
+                    }
                     model.quadratic_constraints.push_back(
                         BuildQuadraticConstraint(eval_const, group_rows[g], rhs));
                 }

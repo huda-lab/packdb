@@ -79,7 +79,7 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 	// Recurse into child[0] (the actual constraint)
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (conj.alias == WHEN_CONSTRAINT_TAG || conj.alias == PER_CONSTRAINT_TAG) {
+		if (conj.alias == WHEN_CONSTRAINT_TAG || IsPerConstraintTag(conj.alias)) {
 			// child[0] is the wrapped constraint
 			if (!conj.children.empty()) {
 				FindNotEqualConstraints(*conj.children[0], decide);
@@ -355,11 +355,13 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			}
 			return;
 		}
-		if (conj.alias == PER_CONSTRAINT_TAG) {
+		if (IsPerConstraintTag(conj.alias)) {
 			// Recurse into the wrapped constraint (child[0])
 			if (!conj.children.empty()) {
 				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
-				// If PER wrapped an easy case, strip PER (per-row makes PER redundant)
+				// Easy MIN/MAX (e.g., MAX(e) <= C, MIN(e) >= C) are vacuously true over
+				// empty sets. Strip PER — the per-row form skips WHEN-excluded rows, which
+				// is correct for both PER and PER STRICT (vacuously true = no constraint).
 				if (out_was_easy) {
 					expr = std::move(conj.children[0]);
 				}
@@ -541,7 +543,7 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 	// Unwrap PER wrapper (outermost layer)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (conj.alias == PER_CONSTRAINT_TAG && !conj.children.empty()) {
+		if (IsPerConstraintTag(conj.alias) && !conj.children.empty()) {
 			has_per = true;
 			obj_owner = &conj.children[0];
 			obj_expr = conj.children[0].get();
