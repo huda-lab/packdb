@@ -72,6 +72,7 @@ Constraints are joined by `AND`. Each `AND`-separated expression is a distinct c
 ```sql
 SUM(x * weight) <= 50                          -- one constraint over all rows
 SUM(x * weight) <= 20 WHEN category = 'A'      -- one constraint over category-A rows
+SUM(x * weight) WHEN a + SUM(x * hours) WHEN b <= 50  -- independent filters per aggregate term
 ```
 
 **Per-row constraints** do not use an aggregate. The system generates one constraint per input row.
@@ -168,6 +169,13 @@ SUCH THAT
     SUM(x * weight) <= 30 WHEN category = 'clothing'
 ```
 
+Aggregate-local `WHEN` filters only one aggregate term:
+
+```sql
+SUCH THAT
+    SUM(x * weight) WHEN category_a + SUM(x * volume) WHEN category_b <= 50
+```
+
 ---
 
 ## Examples
@@ -194,8 +202,9 @@ SUCH THAT
   - `BindBetween()` — desugars to two comparison constraints
   - `BindOperator()` — handles IN clause
   - `BindWhenConstraint()` — handles WHEN modifier
+  - Nested `WHEN` dispatch through `DecideBinder::BindLocalWhenAggregate()` — handles aggregate-local WHEN filters
   - `BindPerConstraint()` — handles PER modifier
-  - Validates that only SUM, AVG, MIN, and MAX are used as aggregate functions
+  - Validates that only SUM, COUNT, AVG, MIN, and MAX are used as aggregate functions
 
 - **Subquery handling**: `src/planner/expression_binder/decide_binder.cpp`
   - `DecideBinder::BindExpression()` — validates scalar-only, no DECIDE variable references, then delegates to `ExpressionBinder::BindExpression` for both uncorrelated and correlated subqueries

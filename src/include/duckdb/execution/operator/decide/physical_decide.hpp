@@ -18,6 +18,8 @@ struct Term {
     idx_t variable_index;              // Which DECIDE variable (or INVALID_INDEX for constants)
     unique_ptr<Expression> coefficient; // Row-varying expression to evaluate later
     int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
+    unique_ptr<Expression> filter;       // Optional aggregate-local WHEN filter
+    bool avg_scale = false;              // True when this term came from AVG and needs 1/N scaling
 
     Term(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
         : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {}
@@ -29,6 +31,8 @@ struct BilinearConstraintTerm {
     idx_t var_b;
     unique_ptr<Expression> coefficient;  // Data coefficient (or nullptr for 1.0)
     int sign = 1;
+    unique_ptr<Expression> filter;        // Optional aggregate-local WHEN filter
+    bool avg_scale = false;               // True when this term came from AVG and needs 1/N scaling
 };
 
 //! Represents a complete constraint after term extraction
@@ -37,7 +41,6 @@ struct DecideConstraint {
     unique_ptr<Expression> rhs_expr;     // RHS expression (may contain aggregates)
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
-    bool was_avg_rewrite = false;        // True if this aggregate was originally AVG (RHS needs scaling)
     idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
     string minmax_agg_type;              // "min" or "max" (empty if not minmax)
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
@@ -55,6 +58,8 @@ struct DecideConstraint {
     struct QuadraticGroup {
         vector<Term> inner_terms;  // Inner linear expression of POWER(inner, 2)
         double sign = 1.0;         // +1, -1, or scalar (from negation/scaling)
+        unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
+        bool avg_scale = false;    // True when this group came from AVG and needs 1/N scaling
 
         QuadraticGroup() = default;
     };
@@ -87,6 +92,8 @@ struct Objective {
         idx_t var_b;                       // Second DECIDE variable index
         unique_ptr<Expression> coefficient; // Data coefficient expression (or nullptr for 1.0)
         int sign = 1;                       // +1 or -1
+        unique_ptr<Expression> filter;       // Optional aggregate-local WHEN filter
+        bool avg_scale = false;              // True when this term came from AVG and needs 1/N scaling
     };
     vector<BilinearTerm> bilinear_terms;
     bool has_bilinear = false;

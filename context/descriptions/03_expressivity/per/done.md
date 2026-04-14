@@ -68,7 +68,7 @@ SUM(new_hours) <= 40 WHEN empID = 'E003' AND
 
 ### WHEN + PER Composition
 
-WHEN filters rows first, then PER groups the remaining rows:
+Expression-level WHEN filters rows first, then PER groups the remaining rows:
 
 ```sql
 -- Per-employee constraint, but only for Directors
@@ -76,6 +76,13 @@ SUCH THAT SUM(x * hours) <= 30 WHEN title = 'Director' PER empID
 ```
 
 **Execution order**: WHEN (filter) → PER (partition → generate one constraint per group).
+
+Aggregate-local WHEN also composes with PER. Local filters are applied per aggregate term, then PER groups rows that participate in at least one local term:
+
+```sql
+SUCH THAT
+    SUM(x * hours) WHEN weekday + SUM(x * overtime) WHEN weekend <= 40 PER empID
+```
 
 ### PER on Objective — Nested Aggregate Syntax
 
@@ -99,7 +106,7 @@ The formulation uses two levels of auxiliary variables: inner (per-group) and ou
 
 ## Restrictions
 
-- **Aggregate-only**: PER requires a SUM constraint. Per-row constraints produce a binder error.
+- **Aggregate-only**: PER requires an aggregate constraint, such as `SUM(...)`, `AVG(...)`, or an additive expression of aggregate terms. Per-row constraints produce a binder error.
 - **Column references only**: Each PER column must be a simple column reference, not an expression. DECIDE variables are not allowed.
 - **Constant RHS**: No row-varying RHS with PER.
 - **NULL handling**: NULL in any PER column excludes the row (`INVALID_INDEX`), matching SQL GROUP BY behavior.
@@ -128,6 +135,8 @@ idx_t num_groups = 0;           // 0 = ungrouped, >0 = number of groups
 | WHEN + PER | 0..K-1 or INVALID_INDEX | K | K (filtered, grouped) |
 
 `SolverModel::Build` uses a group→rows index for O(N)-total constraint generation across all groups.
+
+Aggregate-local WHEN is not represented as a standalone `row_group_ids` wrapper. Each aggregate term carries a filter mask, and row grouping includes rows that pass at least one local term filter.
 
 ---
 

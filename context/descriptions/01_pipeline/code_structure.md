@@ -149,7 +149,7 @@ classDiagram
 
 ### `src/execution/operator/decide/physical_decide.cpp`
 -   **`Sink(GlobalSinkState, LocalSinkState, DataChunk)`**: Materializes input rows into the `DecideGlobalSinkState`.
--   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds WHEN+PER group mappings, generates Big-M linking constraints for COUNT indicators, constructs `SolverInput`, calls `SolveModel()`, and stores the solution vector.
+-   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds expression-level WHEN+PER group mappings and aggregate-local filter masks, generates Big-M linking constraints for COUNT indicators, constructs `SolverInput`, calls `SolveModel()`, and stores the solution vector.
 -   **`GetData(ExecutionContext, DataChunk)`**: Streaming output. Re-scans the materialized data, projects solution values with type-specific casting (BOOLEAN/INTEGER/DOUBLE rounding), and filters out auxiliary variables.
 
 ### EXPLAIN Support (Logical & Physical)
@@ -157,7 +157,7 @@ classDiagram
 -   **`LogicalDecide::ParamsToString()`** / **`PhysicalDecide::ParamsToString()`**: Build an `InsertionOrderPreservingMap` with `Variables`, `Objective`, and `Constraints` entries. Constraints are extracted by recursively splitting the AND-tree via `CollectConstraintStrings`, unwrapping WHEN/PER wrappers into display suffixes.
 
 ### `src/packdb/utility/ilp_model_builder.cpp`
--   **`SolverModel::Build(const SolverInput &input)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row) and applies AVG→SUM RHS scaling.
+-   **`SolverModel::Build(const SolverInput &input)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row). AVG scaling is applied during coefficient evaluation before `SolverInput` reaches the model builder.
 
 ### `src/packdb/utility/ilp_solver.cpp`
 -   **`SolveModel(const SolverInput &input)`**: Facade that builds the SolverModel and dispatches to GurobiSolver (if available) or DeterministicNaive (HiGHS fallback).

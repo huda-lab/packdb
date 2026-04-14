@@ -67,13 +67,12 @@ private:
 	                              case_insensitive_map_t<idx_t> &count_indicator_map);
 
 	//! Rewrite AVG(expr) aggregates to SUM(expr) with alias tagging.
-	//! Constraints: tagged with AVG_REWRITE_TAG so execution can scale RHS by row count.
-	//! Objectives: pure replacement (dividing by constant N doesn't change argmax/argmin).
+	//! Execution scales extracted AVG terms by the active row count.
 	void RewriteAvgToSum(LogicalDecide &decide);
 
 	//! Helper: recursively walk a bound expression tree, replacing AVG aggregates with SUM.
-	//! When is_objective is false, the replacement is tagged with AVG_REWRITE_TAG.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr, bool is_objective);
+	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
+	void RewriteAvgInExpression(unique_ptr<Expression> &expr);
 
 	//! Rewrite MIN/MAX aggregates in constraints and objectives.
 	//! Constraints: easy cases (MAX<=K, MIN>=K) strip aggregate; hard cases create indicators.

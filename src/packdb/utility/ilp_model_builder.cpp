@@ -369,9 +369,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                             rhs, r, eval_const.rhs_values[r]);
                     }
                 }
-                if (eval_const.was_avg_rewrite) {
-                    rhs *= static_cast<double>(num_rows);
-                }
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
                 model.constraints.push_back(std::move(constr));
 
@@ -423,11 +420,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         }
                     }
 
-                    double group_rhs = rhs;
-                    if (eval_const.was_avg_rewrite) {
-                        group_rhs *= static_cast<double>(group_rows[g].size());
-                    }
-                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs);
+                    ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
                     model.constraints.push_back(std::move(constr));
                 }
             }
@@ -589,9 +582,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
         if (is_aggregate) {
             double rhs = eval_const.rhs_values.empty() ? 0.0 : eval_const.rhs_values[0];
-            if (eval_const.was_avg_rewrite) {
-                rhs *= static_cast<double>(num_rows);
-            }
 
             if (!has_groups) {
                 // Single aggregate: all rows
@@ -608,15 +598,10 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         group_rows[gid].push_back(row);
                     }
                 }
-                double group_rhs = rhs;
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) continue;
-                    if (eval_const.was_avg_rewrite) {
-                        group_rhs = rhs / static_cast<double>(num_rows) *
-                                    static_cast<double>(group_rows[g].size());
-                    }
                     model.quadratic_constraints.push_back(
-                        BuildQuadraticConstraint(eval_const, group_rows[g], group_rhs));
+                        BuildQuadraticConstraint(eval_const, group_rows[g], rhs));
                 }
             }
         } else {

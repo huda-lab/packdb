@@ -36,7 +36,7 @@ static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 //! Tag used to identify PER-grouped constraints throughout the pipeline
 static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
 
-//! Tag used to identify AVG→SUM rewritten aggregates (RHS needs scaling at execution)
+//! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
 //! Tag prefix for MIN/MAX hard-case indicator linking (on BoundAggregateExpression.alias)

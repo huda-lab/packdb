@@ -229,6 +229,11 @@ typed_decide_variable_list:
 				{ $$ = lappend($1, $3); }
 		;
 
+decide_when_condition:
+			c_expr
+				{ $$ = $1; }
+		;
+
 decide_objective_item:
 			a_expr WHEN b_expr PER columnref
 				{
@@ -2906,6 +2911,11 @@ b_expr:		c_expr
  * ambiguity to the b_expr syntax.
  */
 c_expr:		d_expr
+			| func_application WHEN decide_when_condition	%prec POSTFIXOP
+				{
+					/* PackDB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{
 					if ($2)

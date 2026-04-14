@@ -23,7 +23,7 @@ For table-scoped (entity-scoped) decision variables, this phase runs after data 
 Extracts the structure of constraints and objectives into `DecideConstraint` and `Objective` structs. See `03a_expression_analysis.md`.
 
 ### 2.3 Phase 3: Coefficient Evaluation
-Evaluates coefficient expressions against materialized data. Computes WHEN+PER groupings. See `03b_coefficient_evaluation.md`.
+Evaluates coefficient expressions against materialized data. Computes expression-level WHEN+PER groupings, aggregate-local WHEN masks, and AVG coefficient scaling. See `03b_coefficient_evaluation.md`.
 
 ### 2.4 Phase 4: Model Building & Solving
 Transforms evaluated constraints into a solver-agnostic `SolverModel` via `SolverModel::Build()`, then dispatches to Gurobi or HiGHS. See `03c_model_building.md` and `03d_solver_backends.md`.

@@ -56,9 +56,9 @@ Constant offsets in the objective (e.g., `MAX SUM(x * p + 10)`) are dropped from
 ## 4. Interaction with Binder
 The Binder receives this normalized tree. It no longer needs to perform algebraic rearrangement; it simply validates that the structure matches the expectation (linear sum on LHS, scalar on RHS) and binds the column references.
 
-## 5. `WHEN` Keyword (Conditional Constraints)
+## 5. `WHEN` Keyword
 
-The parser handles the `WHEN` postfix keyword for conditional constraints via a DECIDE-scoped grammar rule. WHEN is **not** added to the global `a_expr` production (which would conflict with `CASE expr WHEN`), but instead lives in a dedicated `decide_constraint_item` non-terminal:
+The parser handles the expression-level `WHEN` postfix keyword for conditional constraints and objectives via DECIDE-scoped grammar rules. The whole-expression form lives in the dedicated `decide_constraint_item` and `decide_objective_item` non-terminals:
 
 ```yacc
 decide_constraint_item:
@@ -70,6 +70,25 @@ decide_constraint_item:
 The parser emits a `PG_AEXPR_WHEN_CONSTRAINT` node, which the transformer converts to a `FunctionExpression("__when_constraint__", [constraint, condition])`. The symbolic layer normalizes the constraint child while passing through the condition unchanged.
 
 > **Note on normalization with wrappers**: Normalization passes through PER and WHEN wrappers unchanged — only the inner constraint expression is normalized. The wrapper functions (`__per_constraint__`, `__when_constraint__`) are preserved as-is around the normalized child.
+
+Aggregate-local `WHEN` uses the same parser tag but a different grammar entry:
+
+```yacc
+c_expr:
+    func_application WHEN decide_when_condition
+    | ...
+
+decide_when_condition:
+    c_expr
+```
+
+This permits additive aggregate expressions such as:
+
+```sql
+SUM(x * w) WHEN active + SUM(x * w2) WHEN priority <= 10
+```
+
+The condition is intentionally narrow (`c_expr`) so the aggregate-local form does not consume the rest of a DECIDE expression. Comparison predicates for aggregate-local filters therefore need parentheses, for example `SUM(x * w) WHEN (category = 'A')`. Legacy objective syntax such as `MAXIMIZE SUM(x) WHEN category = 'A'` is normalized in `NormalizeDecideObjective()` back into a whole-objective `WHEN` to preserve existing semantics.
 
 ## 6. `PER` Keyword (Grouped Constraints)
 
@@ -88,7 +107,7 @@ The parser emits a `PG_AEXPR_PER_CONSTRAINT` node (analogous to `PG_AEXPR_WHEN_C
 
 The symbolic layer normalizes the constraint child while passing through the PER column unchanged.
 
-**Combined PER+WHEN**: When both keywords are present, the wrapper nesting is `PER(WHEN(constraint, condition), per_column)`. The parser produces this nesting directly from the `a_expr PER a_expr WHEN a_expr` rule — PER wraps the outer layer, and WHEN wraps the inner constraint+condition pair.
+**Combined PER+WHEN**: When both keywords are present, the wrapper nesting is `PER(WHEN(constraint, condition), per_column)`. PER wraps the outer layer, and WHEN wraps the inner constraint+condition pair.
 
 ## 7. Table-Scoped Decision Variables
 

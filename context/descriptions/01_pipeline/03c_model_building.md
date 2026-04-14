@@ -79,7 +79,7 @@ Fast path when `row_group_ids` is empty. A single `ModelConstraint` is produced 
 - For each term with a valid variable index, all rows contribute: solver variable index from `var_indexer.Get(decide_var_idx, row)`, coefficient from `row_coefficients[term_idx][row]`.
 - For entity-scoped variables, multiple rows may map to the same solver variable index. Coefficients for the same variable are accumulated using an `unordered_map<int, double>` keyed by solver variable index, then flattened to COO format. This correctly handles the case where an entity appears in multiple rows.
 - RHS comes from `rhs_values[0]`.
-- If `was_avg_rewrite` is true, the RHS is scaled by `num_rows` (converting AVG semantics to SUM).
+- AVG terms have already been coefficient-scaled in Phase 2. The model builder consumes the evaluated coefficients directly.
 
 ### Path 2: Aggregate, Grouped (WHEN and/or PER)
 
@@ -87,7 +87,7 @@ A `group_to_rows` index is built: for each group ID, collect which rows belong t
 
 - Only rows in the group contribute coefficients.
 - RHS comes from `rhs_values[0]`.
-- If `was_avg_rewrite` is true, the RHS is scaled by the group's row count (`group_rows[g].size()`), not the total row count. This correctly computes AVG per group.
+- AVG terms have already been coefficient-scaled in Phase 2 using the group's active row count. The model builder consumes the evaluated coefficients directly.
 
 ### Path 3: Per-Row
 

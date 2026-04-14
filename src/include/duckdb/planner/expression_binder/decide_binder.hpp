@@ -26,6 +26,10 @@ bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
+bool IsDecideAggregateName(const string &name);
+bool ContainsDecideAggregate(const ParsedExpression &expr);
+bool ContainsWhenOperator(const ParsedExpression &expr);
+
 
 // inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
 // 	deb("[BINDER] ", tag, ": ", expr.ToString());
@@ -41,6 +45,7 @@ public:
 
 protected:
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
+    BindResult BindLocalWhenAggregate(FunctionExpression &when_expr, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {

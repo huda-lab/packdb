@@ -20,7 +20,7 @@ DECIDE assigned IS BOOLEAN
 SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
 ```
 
-When present, the objective expression must be a single aggregate expression using one of the supported aggregate functions.
+When present, the objective expression must be a supported aggregate expression, or an additive expression composed of supported aggregate terms.
 
 ---
 
@@ -82,6 +82,12 @@ The objective can be made conditional: only rows where the `WHEN` condition hold
 MAXIMIZE SUM(x * profit) WHEN category = 'electronics'
 ```
 
+Aggregate-local `WHEN` can filter individual aggregate terms in an additive objective:
+
+```sql
+MAXIMIZE SUM(x * profit) WHEN high_margin + SUM(x * bonus) WHEN strategic
+```
+
 ### PER on Objective — Nested Aggregate Syntax
 
 PER on objectives uses nested aggregate syntax: `OUTER(INNER(expr)) PER col`. See [per/done.md](../per/done.md) for full details on the two-level formulation, easy/hard classification, and WHEN+PER composition.
@@ -102,7 +108,7 @@ maximize  c^T x
 subject to  Ax <= b,  x >= 0,  x integer
 ```
 
-When a `WHEN` condition is present, coefficients for non-matching rows are set to 0. The solver sees a standard dense objective vector.
+When an expression-level `WHEN` condition is present, coefficients for non-matching rows are set to 0. With aggregate-local `WHEN`, only the coefficients from that aggregate term are zeroed for non-matching rows.
 
 For quadratic objectives, additional Q matrix terms are added. See [problem_types/done.md](../problem_types/done.md).
 
@@ -129,6 +135,7 @@ For quadratic objectives, additional Q matrix terms are added. See [problem_type
 MAXIMIZE SUM(x * value)
 MINIMIZE SUM(x * cost)
 MAXIMIZE SUM(x * value) WHEN category = 'electronics'
+MAXIMIZE SUM(x * value) WHEN priority + SUM(x * bonus) WHEN strategic
 MAXIMIZE SUM(keepS) + SUM(keepP)
 ```
 
@@ -137,8 +144,9 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
 ## Code Pointers
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
-  - Validates that only `SUM`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
+  - Validates that only `SUM`, `COUNT`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
   - Handles WHEN condition extraction on objective
+  - Dispatches nested `WHEN` on aggregate terms to aggregate-local binding
   - Binds nested aggregate PER objectives (inner/outer aggregate detection)
 
 - **SUM argument validation**: `src/planner/expression_binder/decide_binder.cpp`

@@ -165,13 +165,8 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
                 break;
             }
             case DecideExpression::SUM: {
-                if (comp.left->GetExpressionClass() != ExpressionClass::FUNCTION) {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...) or AVG(...)"));
-                }
-                auto &lhs_func = comp.left->Cast<FunctionExpression>();
-                auto lhs_fname = StringUtil::Lower(lhs_func.function_name);
-                if (!lhs_func.is_operator && lhs_fname != "sum" && lhs_fname != "avg" && lhs_fname != "min" && lhs_fname != "max" && lhs_fname != "count") {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must be SUM(...), AVG(...), MIN(...), MAX(...), or COUNT(...)"));
+                if (!ContainsDecideAggregate(*comp.left)) {
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must contain SUM(...), AVG(...), MIN(...), MAX(...), or COUNT(...)"));
                 }
                 if (!IsAllowedConstraintRHS(right, variables) || ExpressionContainsDecideVariable(right, variables)) {
                     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
@@ -258,6 +253,11 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
         return BindResult(BinderException::Unsupported(*expr_ptr,
             "WHEN conditions cannot reference DECIDE variables. "
             "The WHEN condition must only reference table columns."));
+    }
+    if (ContainsWhenOperator(*func.children[0])) {
+        return BindResult(BinderException::Unsupported(*expr_ptr,
+            "Cannot combine expression-level WHEN with aggregate-local WHEN in the same DECIDE constraint. "
+            "Move the shared condition into each aggregate-local WHEN, or keep a single expression-level WHEN."));
     }
 
     // Bind the constraint (child[0]) through normal DECIDE constraint dispatch
@@ -415,8 +415,12 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
         if (func.is_operator && func.function_name == PER_CONSTRAINT_TAG) {
             return BindPerConstraint(expr_ptr, depth);
         }
-        // PackDB: Check for __when_constraint__ operator
+        // PackDB: top-level WHEN wraps a whole constraint. Nested WHEN is the
+        // aggregate-local form and binds through DecideBinder::BindFunction.
         if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+            if (!is_top_expression) {
+                return BindFunction(expr_ptr, depth);
+            }
             return BindWhenConstraint(expr_ptr, depth);
         }
         if (!is_top_expression) {
@@ -482,6 +486,8 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
+            return DecideExpression::SUM;
+		} else if (ContainsDecideAggregate(expr)) {
             return DecideExpression::SUM;
 		} else if (ExpressionContainsDecideVariable(expr, variables)) {
             // Operator/function expressions containing DECIDE variables

@@ -25,7 +25,6 @@ struct EvaluatedConstraint {
     vector<double> rhs_values;                // [row_idx] = RHS value
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
-    bool was_avg_rewrite = false;              // True if originally AVG (RHS scaled by row count)
     idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
     string minmax_agg_type;                    // "min" or "max" (empty if not minmax)
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal

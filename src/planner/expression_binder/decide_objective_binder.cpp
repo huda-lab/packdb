@@ -1,6 +1,8 @@
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 
@@ -85,14 +87,24 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	        result->alias = PER_CONSTRAINT_TAG;
 	        return BindResult(std::move(result));
 	    }
-	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition
+	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.
+	    // Nested WHEN is the aggregate-local form and binds through
+	    // DecideBinder::BindFunction.
 	    if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+	        if (!is_top_expression) {
+	            return BindFunction(expr_ptr, depth);
+	        }
 	        D_ASSERT(func.children.size() == 2);
 	        // Validate: WHEN condition cannot reference DECIDE variables
 	        if (ExpressionContainsDecideVariable(*func.children[1], variables)) {
 	            return BindResult(BinderException::Unsupported(*expr_ptr,
 	                "WHEN conditions in MAXIMIZE/MINIMIZE cannot reference DECIDE variables. "
 	                "The WHEN condition must only reference table columns."));
+	        }
+	        if (ContainsWhenOperator(*func.children[0])) {
+	            return BindResult(BinderException::Unsupported(*expr_ptr,
+	                "Cannot combine expression-level WHEN with aggregate-local WHEN in the same DECIDE objective. "
+	                "Move the shared condition into each aggregate-local WHEN, or keep a single expression-level WHEN."));
 	        }
 	        // Bind the objective (child[0]) through normal objective binding
 	        is_top_expression = true;
@@ -175,6 +187,9 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
             }
             return DecideExpression::SUM;
 		} else {
+            if (ContainsDecideAggregate(expr)) {
+                return DecideExpression::SUM;
+            }
             error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }

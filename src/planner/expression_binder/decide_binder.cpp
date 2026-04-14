@@ -1,8 +1,10 @@
 #include "duckdb/planner/expression_binder/decide_binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/expression/operator_expression.hpp"
+#include "duckdb/parser/expression/operator_expression.hpp">
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
@@ -94,6 +96,76 @@ static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
+}
+
+bool IsDecideAggregateName(const string &name) {
+	auto lname = StringUtil::Lower(name);
+	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max" || lname == "count";
+}
+
+bool ContainsDecideAggregate(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (!func.is_operator && IsDecideAggregateName(func.function_name)) {
+			return true;
+		}
+		if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
+			return ContainsDecideAggregate(*func.children[0]);
+		}
+		for (auto &child : func.children) {
+			if (ContainsDecideAggregate(*child)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::OPERATOR) {
+		auto &op = expr.Cast<const OperatorExpression>();
+		for (auto &child : op.children) {
+			if (ContainsDecideAggregate(*child)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+		auto &cast = expr.Cast<const CastExpression>();
+		return ContainsDecideAggregate(*cast.child);
+	}
+	return false;
+}
+
+bool ContainsWhenOperator(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+			return true;
+		}
+		for (auto &child : func.children) {
+			if (ContainsWhenOperator(*child)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::OPERATOR) {
+		auto &op = expr.Cast<const OperatorExpression>();
+		for (auto &child : op.children) {
+			if (ContainsWhenOperator(*child)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+		auto &cast = expr.Cast<const CastExpression>();
+		return ContainsWhenOperator(*cast.child);
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::COMPARISON) {
+		auto &cmp = expr.Cast<const ComparisonExpression>();
+		return ContainsWhenOperator(*cmp.left) || ContainsWhenOperator(*cmp.right);
+	}
+	return false;
 }
 
 //! Collect the set of DECIDE variable indices referenced by an expression.
@@ -404,9 +476,59 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	return BindResult(std::move(bound_aggregate));
 }
 
+static BoundAggregateExpression *GetBoundAggregate(Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return &expr.Cast<BoundAggregateExpression>();
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		return GetBoundAggregate(*cast.child);
+	}
+	return nullptr;
+}
+
+BindResult DecideBinder::BindLocalWhenAggregate(FunctionExpression &when_expr, idx_t depth) {
+	if (when_expr.children.size() != 2) {
+		return BindResult(BinderException::Unsupported(
+		    when_expr, "Aggregate-local WHEN expects exactly two arguments: aggregate WHEN condition."));
+	}
+	if (ExpressionContainsDecideVariable(*when_expr.children[1], variables)) {
+		return BindResult(BinderException::Unsupported(
+		    when_expr,
+		    "Aggregate-local WHEN conditions cannot reference DECIDE variables. "
+		    "The WHEN condition must only reference table columns."));
+	}
+
+	auto aggregate_result = BindExpression(when_expr.children[0], depth);
+	if (aggregate_result.HasError()) {
+		return aggregate_result;
+	}
+	auto aggregate_expr = std::move(aggregate_result.expression);
+	auto *aggregate = GetBoundAggregate(*aggregate_expr);
+	if (!aggregate) {
+		return BindResult(BinderException::Unsupported(
+		    when_expr, "Aggregate-local WHEN can only be applied directly to SUM, COUNT, AVG, MIN, or MAX aggregates."));
+	}
+	if (aggregate->filter) {
+		return BindResult(BinderException::Unsupported(
+		    when_expr, "DECIDE aggregate-local WHEN cannot be combined with SQL FILTER on the same aggregate."));
+	}
+
+	auto condition_result = ExpressionBinder::BindExpression(when_expr.children[1], depth);
+	if (condition_result.HasError()) {
+		return condition_result;
+	}
+	aggregate->filter = BoundCastExpression::AddCastToType(context, std::move(condition_result.expression),
+	                                                       LogicalType::BOOLEAN);
+	return BindResult(std::move(aggregate_expr));
+}
+
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &function = expr.Cast<FunctionExpression>();
+    if (function.is_operator && function.function_name == WHEN_CONSTRAINT_TAG) {
+        return BindLocalWhenAggregate(function, depth);
+    }
     // Check if this is an aggregate function
     QueryErrorContext error_context(expr_ptr->GetQueryLocation());
     auto &catalog_entry = *GetCatalogEntry(CatalogType::SCALAR_FUNCTION_ENTRY, function.catalog, function.schema, function.function_name, OnEntryNotFound::THROW_EXCEPTION, error_context);

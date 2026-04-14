@@ -104,7 +104,7 @@ SUCH THAT (x - t) * (x - t) <= K
 ## 4. Objective
 
 - **Optional**: Omitting `MAXIMIZE`/`MINIMIZE` creates a feasibility problem — the solver finds any assignment satisfying all constraints. Both Gurobi and HiGHS support this.
-- When present, must be a single aggregate expression: `SUM(...)`, `AVG(...)`, `MIN(...)`, or `MAX(...)`.
+- When present, must be a supported aggregate expression (`SUM(...)`, `AVG(...)`, `MIN(...)`, `MAX(...)`, `COUNT(...)`) or an additive expression composed of supported aggregate terms.
 - Must involve at least one decision variable.
 - Linear objectives: must be linear in decision variables.
 - **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` is supported for convex quadratic programming. The inner expression must be linear in decision variables. Three equivalent syntax forms:
@@ -127,6 +127,7 @@ SUCH THAT (x - t) * (x - t) <= K
 - `COUNT(x)` is supported for **BOOLEAN and INTEGER variables**. BOOLEAN is rewritten to `SUM(x)`; INTEGER uses a Big-M indicator variable rewrite.
 - `AVG(expr)` is supported. Rewritten to `SUM(expr)` with RHS scaled by row count N at execution time. For objectives, `AVG` and `SUM` share the same argmax/argmin. For constraints, `AVG(expr) op K` becomes `SUM(expr) op K*N` where N is the row count (adjusted for WHEN/PER context).
 - `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`, `MIN(expr) >= K`) become per-row constraints with no auxiliary variables. Hard cases (opposite direction, equality) use a global auxiliary variable and Big-M binary indicators. In objectives, `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use a global auxiliary; `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` additionally require Big-M indicators. Composes with WHEN.
+- Aggregate-local filters are supported on individual aggregate terms: `SUM(expr) WHEN condition + SUM(expr2) WHEN condition2`. This is different from an expression-level `WHEN` on the whole constraint or objective.
 
 ## 6. Conditional Expressions — `WHEN`
 
@@ -154,7 +155,29 @@ MINIMIZE SUM(x * cost) WHEN region = 'US'
 
 **Execution**: Objective coefficients for non-matching rows are zeroed out. The solver sees a standard ILP where only matching rows contribute to the objective value.
 
-### 6.3 Rules (applies to both constraints and objectives)
+### 6.3 Aggregate-local WHEN
+
+`WHEN` can also be attached directly to a single aggregate term inside an additive aggregate expression:
+
+```sql
+SUCH THAT
+    SUM(x * hours) WHEN morning + SUM(x * hours) WHEN evening <= 40
+
+MAXIMIZE
+    SUM(x * profit) WHEN high_margin + SUM(x * bonus) WHEN strategic
+```
+
+Each aggregate-local `WHEN` filters only that aggregate's rows. Rows outside all local aggregate filters do not contribute to that expression, but they are not removed from the query or from unrelated constraints/objectives.
+
+Comparison predicates in aggregate-local `WHEN` conditions must be parenthesized:
+
+```sql
+SUM(x * hours) WHEN (shift = 'morning') + SUM(x * hours) WHEN (shift = 'evening') <= 40
+```
+
+Do not combine expression-level `WHEN` with aggregate-local `WHEN` in the same constraint or objective; the binder rejects that shape to avoid ambiguous double-filter semantics.
+
+### 6.4 Rules (applies to both constraints and objectives)
 
 - `WHEN` is postfix: the expression comes first, then `WHEN condition`.
 - The `WHEN` condition must reference only table columns, **not** decision variables.
@@ -208,7 +231,7 @@ WHEN + PER composition is supported: `MINIMIZE MAX(SUM(x * hours)) WHEN active =
 
 ### 7.3 Restrictions
 
-- **Aggregate-only**: PER requires a SUM constraint (per-row constraints are rejected).
+- **Aggregate-only**: PER requires an aggregate constraint, such as `SUM(...)`, `AVG(...)`, or an additive expression of aggregate terms. Per-row constraints are rejected.
 - **Column references only**: Each PER column must be a simple column reference, not an expression or decision variable.
 - **Constant RHS**: The right-hand side must be constant across groups.
 - **NULL handling**: Rows where any PER column is NULL are excluded.

@@ -3,7 +3,11 @@
 %}
 #line 5 "third_party/libpg_query/grammar/grammar.y"
 %pure-parser
-%expect 3
+/* %expect 4:
+ * 3 inherited shift/reduce conflicts from DuckDB's PostgreSQL-derived grammar.
+ * 1 from aggregate-local WHEN in DECIDE (func_application WHEN decide_when_condition in c_expr).
+ */
+%expect 4
 %name-prefix="base_yy"
 %locations
 

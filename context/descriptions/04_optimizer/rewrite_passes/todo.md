@@ -51,7 +51,7 @@ All DECIDE algebraic rewrites have been migrated from the binder to the `DecideO
 - `RewriteMinMax` — MIN/MAX easy/hard classification, indicator creation, objective handling (flat + nested PER)
 - `RewriteNotEqual` — `<>` indicator variable creation
 - `RewriteCountToSum` — COUNT→SUM with indicator variables for INTEGER
-- `RewriteAvgToSum` — AVG→SUM with alias tagging for RHS scaling
+- `RewriteAvgToSum` — AVG→SUM with alias tagging for execution-time coefficient scaling
 
 The only remaining binder-level rewrite is `RewriteInDomain` (IN domain constraints → indicator variables). This operates on `ParsedExpression` and creates auxiliary variables at bind time.
 

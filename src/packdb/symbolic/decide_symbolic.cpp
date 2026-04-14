@@ -852,6 +852,36 @@ static bool ContainsSumFunction(const ParsedExpression &expr) {
     }
 }
 
+static bool ContainsAggregateLocalWhen(const ParsedExpression &expr) {
+    if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = expr.Cast<const FunctionExpression>();
+        if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+            return true;
+        }
+        for (auto &child : func.children) {
+            if (ContainsAggregateLocalWhen(*child)) return true;
+        }
+        if (func.filter && ContainsAggregateLocalWhen(*func.filter)) return true;
+        return false;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::OPERATOR) {
+        auto &op = expr.Cast<const OperatorExpression>();
+        for (auto &child : op.children) {
+            if (ContainsAggregateLocalWhen(*child)) return true;
+        }
+        return false;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+        auto &cast = expr.Cast<const CastExpression>();
+        return ContainsAggregateLocalWhen(*cast.child);
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::COMPARISON) {
+        auto &cmp = expr.Cast<const ComparisonExpression>();
+        return ContainsAggregateLocalWhen(*cmp.left) || ContainsAggregateLocalWhen(*cmp.right);
+    }
+    return false;
+}
+
 // Normalize comparator between LHS and numeric RHS by isolating SUM terms containing DECIDE variables
 // Forward declarations for quadratic/bilinear detection (defined later in file).
 static bool SumInnerIsQuadratic(const ParsedExpression &inner,
@@ -912,6 +942,13 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     // Only normalize if the LHS contains a SUM() somewhere in the tree.
     // For bare per-row constraints (e.g., "x < 6"), leave unchanged.
     if (!ContainsSumFunction(*cmp.left)) {
+        return cmp.Copy();
+    }
+
+    // Aggregate-local WHEN needs to survive into binding/execution as a
+    // per-aggregate filter. Symbolic normalization would flatten the aggregate
+    // tree and lose the filter boundary.
+    if (ContainsAggregateLocalWhen(*cmp.left)) {
         return cmp.Copy();
     }
 
@@ -1251,9 +1288,53 @@ static bool SumInnerContainsBilinear(const ParsedExpression &inner,
     return false;
 }
 
+static bool IsDecideObjectiveAggregate(const ParsedExpression &expr) {
+    if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = expr.Cast<const FunctionExpression>();
+        if (!func.is_operator) {
+            auto name_lower = StringUtil::Lower(func.function_name);
+            return name_lower == "sum" || name_lower == "avg" || name_lower == "min" ||
+                   name_lower == "max" || name_lower == "count";
+        }
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+        auto &cast = expr.Cast<const CastExpression>();
+        return IsDecideObjectiveAggregate(*cast.child);
+    }
+    return false;
+}
+
+static unique_ptr<ParsedExpression> ReassociateObjectiveWhenComparison(const ComparisonExpression &cmp) {
+    if (cmp.left->GetExpressionClass() != ExpressionClass::FUNCTION) {
+        return nullptr;
+    }
+    auto &left = cmp.left->Cast<const FunctionExpression>();
+    if (!left.is_operator || left.function_name != WHEN_CONSTRAINT_TAG || left.children.size() != 2 ||
+        !IsDecideObjectiveAggregate(*left.children[0])) {
+        return nullptr;
+    }
+
+    auto condition = make_uniq<ComparisonExpression>(cmp.type, left.children[1]->Copy(), cmp.right->Copy());
+
+    vector<unique_ptr<ParsedExpression>> args;
+    args.push_back(left.children[0]->Copy());
+    args.push_back(std::move(condition));
+    auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(args));
+    result->is_operator = true;
+    return std::move(result);
+}
+
 unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
                                                       const case_insensitive_map_t<idx_t> &decide_variables) {
     // Expect SUM(inner), possibly wrapped in WHEN or PER
+    if (expr.GetExpressionClass() == ExpressionClass::COMPARISON) {
+        auto &cmp = expr.Cast<const ComparisonExpression>();
+        auto reassociated = ReassociateObjectiveWhenComparison(cmp);
+        if (reassociated) {
+            return NormalizeDecideObjective(*reassociated, decide_variables);
+        }
+        return expr.Copy();
+    }
     if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
         return expr.Copy();
     }

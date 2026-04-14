@@ -41,19 +41,20 @@ The binder recognizes COUNT as a valid DECIDE aggregate and binds it into a `Bou
 
 ---
 
-### AVG() — RHS Scaling at Execution Time
+### AVG() — Coefficient Scaling at Execution Time
 
-`AVG(expr)` over decision variables is treated as an aggregate constraint like SUM, but with the RHS scaled by the row count N at model-build time.
+`AVG(expr)` over decision variables is treated as an aggregate constraint like SUM, but terms are scaled by the row count N at execution time so the model represents the average, not the raw sum.
 
 **Semantics**: Standard SQL AVG — divide by count of all rows (decision variables are never NULL). This is always linear since N is a data-determined constant.
 
-**Constraints**: `AVG(expr) op K` becomes `SUM(expr) op K*N` where N depends on context:
+**Constraints**: Semantically, `AVG(expr) op K` is equivalent to `SUM(expr) op K*N` where N depends on context:
 - No WHEN/PER: N = total row count
 - WHEN: N = count of WHEN-matching rows
 - PER: N = count of rows in each group
 - WHEN+PER: N = count of WHEN-matching rows per group
+- Aggregate-local WHEN: N = count of rows matching that aggregate-local filter, within each PER group if PER is present
 
-**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` simply becomes `SUM(expr)` — same argmax/argmin since N > 0 is constant.
+**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, PackDB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
 
 **Objectives (nested PER)**: `OUTER(AVG(expr)) PER col` is fully supported. Inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. Outer AVG maps to SUM (dividing by constant G). See [maximize_minimize/done.md](../maximize_minimize/done.md).
 
@@ -61,11 +62,12 @@ The binder recognizes COUNT as a valid DECIDE aggregate and binds it into a `Bou
 SUCH THAT AVG(x * weight) <= 10         -- SUM(x*weight) <= 10*N
 SUCH THAT AVG(x) <= 0.5                 -- at most half the rows selected (BOOLEAN)
 SUCH THAT AVG(x * cost) <= 5 WHEN active -- only among active rows
+SUCH THAT AVG(x * cost) WHEN active + SUM(x * fee) WHEN priority <= 100
 SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
 MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 ```
 
-**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the constraint with `AVG_REWRITE_TAG` in the aggregate's alias. At execution time (`physical_decide.cpp`), the code checks `agg.alias == AVG_REWRITE_TAG` to set `DecideConstraint::was_avg_rewrite`, propagated to `EvaluatedConstraint::was_avg_rewrite`. RHS scaling applied in `ilp_model_builder.cpp` at model build time.
+**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`.
 
 **Tests**: `test/decide/tests/test_avg.py` — 9 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, and no-decide-var passthrough.
 

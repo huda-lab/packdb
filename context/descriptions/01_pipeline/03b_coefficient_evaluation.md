@@ -43,7 +43,7 @@ The right-hand side of each constraint is evaluated similarly:
 
 Results are stored in `rhs_values[row_idx]`.
 
-## Unified WHEN+PER Row-to-Group Mapping
+## Expression-level WHEN+PER Row-to-Group Mapping
 
 After coefficient evaluation, the WHEN and PER modifiers are processed to compute `row_group_ids` -- a per-row vector that assigns each row to a constraint group (or excludes it). There are 4 code paths:
 
@@ -58,6 +58,23 @@ The PER column expression is evaluated per-row. Distinct values are mapped to gr
 
 ### WHEN + PER
 Both are evaluated. WHEN filtering is applied first: rows not matching the WHEN condition get `INVALID_INDEX`. Among surviving rows, PER grouping assigns group IDs as above. `num_groups = K`.
+
+## Aggregate-local WHEN Masks
+
+Aggregate-local `WHEN` filters are carried on individual extracted terms rather than on the whole `DecideConstraint` or `Objective`. During `Finalize()`:
+
+1. Each distinct term-level filter expression is transformed and evaluated into a boolean row mask.
+2. For linear, bilinear, and quadratic aggregate terms, rows where the local filter is false or NULL get coefficient `0` for that term only.
+3. If PER grouping is present, a row is assigned to a group only if it passes the expression-level WHEN (if any), has a non-NULL PER key, and participates in at least one aggregate-local term.
+4. Rows outside a term's local filter are not removed from unrelated constraints or objective terms.
+
+This lets one constraint or objective use independent aggregate filters:
+
+```sql
+SUM(x * a) WHEN active + SUM(x * b) WHEN priority <= 10 PER grp
+```
+
+Here `active` only filters the `a` term, `priority` only filters the `b` term, and `PER grp` groups rows that participate in at least one local term.
 
 ## NULL/NaN/Infinity Validation
 
@@ -88,6 +105,19 @@ The objective follows the same pattern as constraints:
 3. Variable indices are stored in `objective_variable_indices[term_idx]`.
 
 If the objective has a WHEN condition, it is evaluated as a boolean mask. Rows where the condition is false or NULL have all their objective coefficients zeroed out (effectively excluding them from the objective sum).
+
+If objective terms have aggregate-local filters, those filters are applied per term before the expression-level objective WHEN is applied. Objective PER grouping uses the same row-participation rule as constraints: a row must pass the expression-level objective WHEN (if present) and at least one local aggregate filter.
+
+## AVG Scaling
+
+`AVG` is rewritten to `SUM` by the optimizer and tagged with `AVG_REWRITE_TAG`. During coefficient evaluation, terms marked with `avg_scale` are scaled by the number of active rows in the applicable group:
+
+- Ungrouped: scale by total active row count
+- Expression-level WHEN: scale by rows passing the WHEN mask
+- PER: scale by group size
+- Aggregate-local WHEN: scale by rows passing that aggregate-local filter, within the group if PER is present
+
+Quadratic AVG terms scale their inner linear coefficients by `1/sqrt(N)` so the resulting quadratic outer product is scaled by `1/N`.
 
 ## Entity Mapping Construction (Phase 1.5)
 
@@ -124,7 +154,7 @@ The evaluated data is packaged into a `SolverInput` struct:
   - `comparison_type`: The comparison operator
   - `row_group_ids[row_idx]`: Group assignment (empty for ungrouped)
   - `num_groups`: Number of distinct groups
-  - `lhs_is_aggregate`, `was_avg_rewrite`: Flags for model builder
+  - `lhs_is_aggregate`: Flag for model builder
 - `objective_coefficients[term_idx][row_idx]`: Objective term values
 - `objective_variable_indices[term_idx]`: Which variable each objective term references
 - `sense`: MAXIMIZE or MINIMIZE

@@ -176,7 +176,7 @@ class TestBinderErrors:
                 DECIDE x
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE SUM(x*l_quantity)+3 LIMIT 1
-            """, match=r"does not support.*only SUM")
+            """, match=r"non-aggregate term")
 
     def test_objective_bare_column(self, packdb_cli):
         """MAXIMIZE with a bare column (not SUM) is not allowed."""

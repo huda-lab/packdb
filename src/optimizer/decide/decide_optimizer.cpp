@@ -169,6 +169,9 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 					vector<unique_ptr<Expression>> sum_children;
 					sum_children.push_back(child->Copy());
 					expr = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+					if (agg.filter) {
+						expr->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
+					}
 				} else {
 					// INTEGER: COUNT(x) → SUM(indicator)
 					string var_name = decide_var.alias;
@@ -218,6 +221,9 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 					vector<unique_ptr<Expression>> sum_children;
 					sum_children.push_back(std::move(ind_ref));
 					expr = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+					if (agg.filter) {
+						expr->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
+					}
 				}
 				return; // Node replaced, no need to recurse into it
 			}
@@ -236,14 +242,14 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	if (decide.decide_constraints) {
-		RewriteAvgInExpression(decide.decide_constraints, /*is_objective=*/false);
+		RewriteAvgInExpression(decide.decide_constraints);
 	}
 	if (decide.decide_objective) {
-		RewriteAvgInExpression(decide.decide_objective, /*is_objective=*/true);
+		RewriteAvgInExpression(decide.decide_objective);
 	}
 }
 
-void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, bool is_objective) {
+void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr) {
 	if (!expr) {
 		return;
 	}
@@ -263,11 +269,15 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, bool 
 			vector<unique_ptr<Expression>> sum_children;
 			sum_children.push_back(agg.children[0]->Copy());
 			auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-
-			if (!is_objective) {
-				// Tag so execution layer knows to scale RHS by row count
-				new_sum->alias = AVG_REWRITE_TAG;
+			if (agg.filter) {
+				new_sum->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
 			}
+
+			// Tag so execution layer knows to apply AVG's row-count denominator.
+			// For a single objective AVG this is optimization-equivalent to SUM,
+			// but additive objective expressions can mix AVG with SUM or filtered
+			// aggregates, so preserving the scale is required for correct semantics.
+			new_sum->alias = AVG_REWRITE_TAG;
 
 			if (has_cast) {
 				// Preserve the cast wrapper — update its child
@@ -282,7 +292,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, bool 
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		RewriteAvgInExpression(child, is_objective);
+		RewriteAvgInExpression(child);
 	});
 }
 
@@ -452,6 +462,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		vector<unique_ptr<Expression>> sum_children;
 		sum_children.push_back(agg.children[0]->Copy());
 		auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+		if (agg.filter) {
+			new_sum->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
+		}
 		new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "_" + fname + "__";
 		comp.left = std::move(new_sum);
 		comp.type = hard_cmp_type;
@@ -485,6 +498,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		vector<unique_ptr<Expression>> sum_children;
 		sum_children.push_back(agg.children[0]->Copy());
 		auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+		if (agg.filter) {
+			new_sum->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
+		}
 		new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "_" + fname + "__";
 		comp.left = std::move(new_sum);
 		return;
@@ -578,6 +594,9 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 					vector<unique_ptr<Expression>> sum_children;
 					sum_children.push_back(inner_agg.children[0]->Copy());
 					auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+					if (inner_agg.filter) {
+						new_sum->Cast<BoundAggregateExpression>().filter = inner_agg.filter->Copy();
+					}
 					// Replace inner aggregate within the outer
 					outer_agg.children[0] = std::move(new_sum);
 				}
@@ -611,7 +630,11 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 		// Replace MIN/MAX with SUM
 		vector<unique_ptr<Expression>> sum_children;
 		sum_children.push_back(outer_agg.children[0]->Copy());
-		*obj_owner = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+		auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+		if (outer_agg.filter) {
+			new_sum->Cast<BoundAggregateExpression>().filter = outer_agg.filter->Copy();
+		}
+		*obj_owner = std::move(new_sum);
 	}
 }
 

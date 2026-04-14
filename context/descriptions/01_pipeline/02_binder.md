@@ -98,12 +98,29 @@ The `DecideObjectiveBinder` handles WHEN on the objective (`MAXIMIZE SUM(...) WH
 4. **Condition binding**: The condition (child[1]) is bound via `ExpressionBinder` using the `binding_when_condition` flag bypass.
 5. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG`, identical in structure to the constraint WHEN output.
 
-### 5.3 PER Constraint Validation
+### 5.3 Aggregate-local WHEN
+
+Aggregate-local `WHEN` uses the same parser tag (`WHEN_CONSTRAINT_TAG`) but is bound only when it appears nested inside a larger aggregate expression, for example:
+
+```sql
+SUM(x * weight) WHEN active + SUM(x * bonus) WHEN priority <= 100
+```
+
+`DecideBinder::BindLocalWhenAggregate()` handles this form:
+
+1. **Aggregate binding**: Child 0 is bound as a DECIDE aggregate (`SUM`, `COUNT`, `AVG`, `MIN`, or `MAX` after normal validation).
+2. **Validation**: Child 1 must not reference decision variables.
+3. **Condition binding**: Child 1 is bound with the base `ExpressionBinder` and cast to BOOLEAN.
+4. **Output**: The condition is stored on the resulting `BoundAggregateExpression::filter`. Downstream physical analysis copies that filter onto each extracted term from that aggregate.
+
+The constraint and objective binders dispatch top-level `WHEN_CONSTRAINT_TAG` to expression-level WHEN binding, and nested `WHEN_CONSTRAINT_TAG` to aggregate-local binding. A global expression-level `WHEN` whose child already contains aggregate-local `WHEN` is rejected to avoid ambiguous double-filter semantics.
+
+### 5.4 PER Constraint Validation
 
 - PER expressions must reference a table column (not a decision variable, not a constant).
 - PER is only valid on aggregate constraints (constraints using SUM/COUNT/AVG).
 - The PER column creates one constraint per distinct value of that column.
-- Combined WHEN+PER: WHEN filters rows first, then PER groups the remaining rows.
+- Combined expression-level WHEN+PER: WHEN filters rows first, then PER groups the remaining rows.
 
 ## 6. Rewrite Passes (Now in Optimizer)
 
