@@ -26,6 +26,9 @@ Tests live in:
 | PER + equality MAX(=K) constraint (easy + hard combined per group) | `test_per_interactions.py::test_per_max_eq_constraint` | ✓ |
 | PER + ABS in aggregate constraint (ABS aux per group) | `test_per_interactions.py::test_per_abs_aggregate` | ✓ |
 | Multi-variable (BOOLEAN + INTEGER) + PER | `test_per_interactions.py::test_per_multi_variable` | ✓ |
+| WHEN + PER + multi-variable (BOOLEAN + INTEGER) — WHEN mask per group | `test_per_interactions.py::test_when_per_multi_variable` | ✓ |
+| COUNT(x INTEGER) + PER — Big-M indicators per group | `test_per_interactions.py::test_count_integer_per` | ✓ |
+| QP objective + PER constraint (flat MINIMIZE + SUM(x)>=5 PER grp) | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ (analytical) |
 
 ### PER on objectives (nested aggregate syntax)
 
@@ -74,3 +77,6 @@ All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per
 | PER | hard MIN/MAX constraints (Big-M per group) | ✓ (`test_per_interactions.py`) |
 | PER | ABS in aggregate constraint | ✓ (`test_per_interactions.py`) |
 | PER | multi-variable (BOOLEAN + INTEGER) | ✓ (`test_per_interactions.py`) |
+| PER | WHEN + multi-variable (WHEN mask per group per variable) | ✓ (`test_per_interactions.py::test_when_per_multi_variable`) |
+| PER | COUNT (INTEGER) — Big-M indicators scoped per group | ✓ (`test_per_interactions.py::test_count_integer_per`) |
+| PER | QP objective (flat QP + PER constraint) | ✓ (`test_per_interactions.py::test_qp_objective_per_constraint`) |

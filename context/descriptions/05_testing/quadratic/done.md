@@ -21,6 +21,7 @@ variants.
 | Simple squared variable (`POWER(x, 2)`) | `test_quadratic.py` | ✓ |
 | Various coefficient forms | `test_quadratic.py` | ✓ |
 | QP + WHEN | `test_quadratic.py::test_qp_with_when` | ✓ |
+| QP objective + PER constraint (`SUM(x)>=5 PER grp` with `MINIMIZE SUM(POWER(x-t,2))`) | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ (analytical) |
 | MIQP (integer vars + QP) | `test_quadratic.py::test_qp_maximize_integer` | ✓ (gurobi-gated) |
 | QP + multiple variables | `test_quadratic.py::test_qp_multiple_variables` | ✓ |
 | TPC-H data QP | `test_quadratic.py` | ✓ |
@@ -72,3 +73,4 @@ variants.
 | QP | REAL | ✓ |
 | QP | entity-scoped | ✓ |
 | QP constraint | bilinear (mixed) | ✓ |
+| QP objective | PER constraint (flat MINIMIZE + SUM(x)>=K PER grp) | ✓ (`test_per_interactions.py::test_qp_objective_per_constraint`) |

@@ -10,40 +10,17 @@ Closed in `test_per_interactions.py` (Batch 1, 2026-04-15):
 - PER + ABS in aggregate constraint
 - Multiple variables + PER
 
+Closed in `test_per_interactions.py` (Batch 2, 2026-04-15):
+- WHEN + PER + multiple variables (`test_when_per_multi_variable`)
+- COUNT(x INTEGER) + PER (`test_count_integer_per`)
+- QP objective + PER constraint (`test_qp_objective_per_constraint`)
+
 ## Missing coverage
 
 ### HIGH: PER + bilinear
 
 See [bilinear/todo.md](../bilinear/todo.md) for full details. This gap is the
 single largest cross-feature hole.
-
-### HIGH: PER + COUNT(x INTEGER)
-
-See [count/todo.md](../count/todo.md). Big-M indicator variable creation +
-PER group partitioning.
-
-### HIGH: PER + QP objective
-
-See [quadratic/todo.md](../quadratic/todo.md). Q matrix construction with PER
-group auxiliaries.
-
-### HIGH: WHEN + PER + multiple variables (triple)
-
-Multi-variable coefficient paths under combined WHEN filtering + PER grouping. Each variable's coefficients in each group must respect the WHEN mask independently.
-
-```sql
--- Triple: WHEN + PER + multiple vars
-WITH data AS (
-    SELECT 1 AS id, 'A' AS grp, true AS active, 10 AS w, 5 AS v UNION ALL
-    SELECT 2, 'A', false, 5, 8 UNION ALL
-    SELECT 3, 'B', true, 8, 3 UNION ALL
-    SELECT 4, 'B', true, 3, 9
-)
-SELECT id, grp, x, y FROM data
-DECIDE x IS BOOLEAN, y IS INTEGER
-SUCH THAT SUM(x * w + y * v) <= 30 WHEN active PER grp
-MAXIMIZE SUM(x * w + y * v)
-```
 
 ### MEDIUM: Feasibility problem with PER
 
