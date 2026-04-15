@@ -99,17 +99,18 @@ Here `keepN` has one value per nurse entity, while `scheduleHours` has one value
 
 ---
 
-## Linearity Constraint
+## Linearity / Non-Linearity
 
-All expressions involving decision variables must be linear:
+Linear expressions are always supported. PackDB additionally supports two classes of non-linear terms — bilinear (`x * y`) and quadratic (`x * x`, `POWER(x, 2)`) — via dedicated optimizer rewrites and solver paths:
 
 | Expression | Status |
 |---|---|
-| `x * 5` — variable times constant | OK |
-| `x * column` — variable times table column (constant per row) | OK |
-| `x + y` — sum of variables | OK |
-| `x * y` — variable times variable | **ERROR** (non-linear) |
-| `x * x` — variable squared | **ERROR** (non-linear) |
+| `x * 5` — variable times constant | OK (linear) |
+| `x * column` — variable times table column (constant per row) | OK (linear) |
+| `x + y` — sum of variables | OK (linear) |
+| `x * y` — variable times variable (bilinear) | OK — McCormick when one factor is Boolean (both solvers); non-convex QCQP otherwise (Gurobi only). See `03_expressivity/bilinear/done.md`. |
+| `x * x` / `POWER(x, 2)` — variable squared (quadratic) | OK — convex QP on both solvers; non-convex QP on Gurobi only. See quadratic objectives in `syntax_reference.md`. |
+| `x * y * z` — triple product and higher | **ERROR** (rejected by binder at `decide_binder.cpp`) |
 
 ---
 
@@ -187,4 +188,4 @@ DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
   - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/logical_decide.hpp` — stores the table alias and entity column indices for each scoped variable
   - `VarIndexer`: `src/include/duckdb/packdb/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
   - Entity mapping (Phase 1.5): `src/execution/operator/decide/physical_decide.cpp` — scans result rows, extracts source-table columns, builds entity-to-variable mappings
-  - Physical index resolution: `src/execution/operator/decide/plan_decide.cpp` — resolves table-scoped column references to physical indices in the execution plan
+  - Physical index resolution: `src/execution/physical_plan/plan_decide.cpp` — resolves table-scoped column references to physical indices in the execution plan

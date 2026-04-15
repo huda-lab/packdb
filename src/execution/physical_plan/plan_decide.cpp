@@ -31,6 +31,19 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Only include columns that survived DuckDB's column pruning.
     if (!op.entity_scopes.empty()) {
         auto child_bindings = op.children[0]->GetColumnBindings();
+        // Refresh entity_key_bindings from entity_key_expressions: the column
+        // pruner rebinds the expressions alongside other columns, but the stale
+        // bindings on EntityScopeInfo are not updated.
+        idx_t expr_cursor = 0;
+        for (auto &scope : op.entity_scopes) {
+            for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
+                if (expr_cursor < op.entity_key_expressions.size()) {
+                    auto &colref = op.entity_key_expressions[expr_cursor]->Cast<BoundColumnRefExpression>();
+                    scope.entity_key_bindings[k] = colref.binding;
+                    expr_cursor++;
+                }
+            }
+        }
         for (auto &scope : op.entity_scopes) {
             scope.entity_key_physical_indices.clear();
             vector<LogicalType> surviving_types;

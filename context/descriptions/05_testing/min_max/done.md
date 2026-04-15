@@ -4,6 +4,7 @@ Tests live in:
 - `test/decide/tests/test_min_max.py` — primary MIN/MAX test file
 - `test/decide/tests/test_per_objective.py` — nested aggregate PER objectives
 - `test/decide/tests/test_aggregate_local_when.py` — aggregate-local WHEN with MAX
+- `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints with PER (per-group Big-M)
 
 MIN/MAX linearization is performed by `DecideOptimizer::RewriteMinMax`. It
 classifies each occurrence as **easy** (naturally per-row, no Big-M) or
@@ -32,6 +33,9 @@ classifies each occurrence as **easy** (naturally per-row, no Big-M) or
 | `MAX(expr) = K` (equality) | `test_min_max.py` | ✓ |
 | `MIN(expr) = K` (equality) | `test_min_max.py` | ✓ |
 | `MAX >= K` with entity-scoped | `test_entity_scope.py::test_entity_scoped_max_hard_case` | ✓ |
+| `MAX(expr) >= K PER col` (Big-M per group) | `test_per_interactions.py::test_per_max_geq_constraint` | ✓ |
+| `MIN(expr) <= K PER col` (Big-M per group) | `test_per_interactions.py::test_per_min_leq_constraint` | ✓ |
+| `MAX(expr) = K PER col` (easy + hard combined per group) | `test_per_interactions.py::test_per_max_eq_constraint` | ✓ |
 
 ### Objectives
 
@@ -75,3 +79,4 @@ Tests in `test_per_objective.py` cover all 4 × 4 nesting combinations of inner/
 | MIN/MAX (hard) | entity-scoped | ✓ |
 | MIN/MAX | INTEGER variables | ✓ |
 | MIN/MAX (aggregate-local WHEN, easy) | — | ✓ |
+| MIN/MAX (hard) | PER (per-group Big-M) | ✓ (`test_per_interactions.py`) |

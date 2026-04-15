@@ -42,20 +42,4 @@ Extract common sub-expressions from PER-generated constraints. When PER creates 
 
 ---
 
-## 3. Binder-to-Optimizer Migration
-
-**Status**: Complete (all major rewrites migrated)
-
-All DECIDE algebraic rewrites have been migrated from the binder to the `DecideOptimizer` pass:
-- `RewriteAbs` — ABS linearization (detect, replace, generate constraints)
-- `RewriteMinMax` — MIN/MAX easy/hard classification, indicator creation, objective handling (flat + nested PER)
-- `RewriteNotEqual` — `<>` indicator variable creation
-- `RewriteCountToSum` — COUNT→SUM with indicator variables for INTEGER
-- `RewriteAvgToSum` — AVG→SUM with alias tagging for execution-time coefficient scaling
-
-The only remaining binder-level rewrite is `RewriteInDomain` (IN domain constraints → indicator variables). This operates on `ParsedExpression` and creates auxiliary variables at bind time.
-
-**Benefits achieved**:
-- **Reduced DuckDB core modifications**: Rewrites now live in PackDB-specific optimizer code
-- **Better composability**: Optimizer passes can be reordered, enabled/disabled, and tested independently
-- **Unified framework**: All DECIDE rewrites in one place (`DecideOptimizer`)
+*(The binder-to-optimizer migration is complete — see `done.md` for the current rewrite inventory.)*

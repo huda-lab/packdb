@@ -54,7 +54,7 @@ The `duckdb_extension_config.cmake` file separately configures extensions for CM
 HiGHS is compiled directly into the wheel — there is no external dependency or system library required.
 
 - **Sources**: `package_build.third_party_sources()` includes `third_party/highs`, which causes all HiGHS `.cpp`, `.cc`, and `.c` files to be gathered recursively.
-- **Includes**: `package_build.third_party_includes()` lists all HiGHS subdirectories (lines 42–62 in `package_build.py`): root, `highs/`, `extern/`, `extern/filereaderlp`, `extern/pdqsort`, and every HiGHS module directory (`interfaces`, `io`, `ipm`, `ipm/ipx`, `ipm/basiclu`, `lp_data`, `mip`, `model`, `parallel`, `pdlp`, `pdlp/cupdlp`, `presolve`, `qpsolver`, `simplex`, `test_kkt`, `util`).
+- **Includes**: `package_build.third_party_includes()` lists all HiGHS subdirectories (lines 42–62 in `scripts/package_build.py`): root, `highs/`, `extern/`, `extern/filereaderlp`, `extern/pdqsort`, and every HiGHS module directory (`interfaces`, `io`, `ipm`, `ipm/ipx`, `ipm/basiclu`, `lp_data`, `mip`, `model`, `parallel`, `pdlp`, `pdlp/cupdlp`, `presolve`, `qpsolver`, `simplex`, `test_kkt`, `util`).
 - **CMake build**: `third_party/highs/CMakeLists.txt` builds `duckdb_highs` as a static library. `src/CMakeLists.txt` links both `duckdb` and `duckdb_static` against `duckdb_highs`.
 
 ## 5. Package Structure

@@ -329,6 +329,13 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
         for (auto &var : decide.decide_variables) {
             VisitExpression(&var);
         }
+        // Entity-scoped variables: visit the bound column references for each
+        // entity-key column so the column pruner rebinds them alongside other
+        // columns. Without this, entity-key columns would be pruned from the
+        // scan, collapsing distinct entities.
+        for (auto &expr : decide.entity_key_expressions) {
+            VisitExpression(&expr);
+        }
         everything_referenced = true;
         break;
 	}

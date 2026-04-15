@@ -167,7 +167,7 @@ x * weight         -- OK: variable * column (constant per row)
 SUM(x * weight)    -- OK: aggregate of linear product
 ```
 
-`x * y` (variable x variable) is **not supported** (non-linear).
+`x * y` (variable times variable) **is supported** as a bilinear term via `DecideOptimizer::RewriteBilinear` (McCormick envelopes when one factor is Boolean; non-convex Gurobi QCQP otherwise). `x * x` / `POWER(x, 2)` is supported as a quadratic (QP) term. See `03_expressivity/bilinear/done.md` and the Quadratic Objectives section of `syntax_reference.md` for solver eligibility.
 
 ### Addition / Subtraction (`+`, `-`)
 
@@ -182,7 +182,7 @@ SUM(x * a + y * b) -- OK: linear combination in aggregate
 
 ### =, <, <=, >, >=
 
-Five standard comparison operators are supported in constraints.
+Six standard comparison operators are supported in constraints (including `<>`, documented below).
 
 ```sql
 SUCH THAT x <= 1
@@ -267,6 +267,8 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | Yes (global aux / Big-M) | N/A |
 | `ABS()` over dec. vars | Yes (linearized) | Yes (linearized) | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
+| `*` (var x var, bilinear) | Yes (McCormick / Gurobi QCQP) | Yes (McCormick / Gurobi non-convex) | N/A |
+| `POWER(expr, 2)` / `expr ** 2` (QP) | N/A | Yes (convex: both solvers; non-convex: Gurobi) | N/A |
 | `+`, `-` | Yes | Yes | Yes |
 | `=`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |
 | `<>` (not-equal) | Yes (Big-M) | N/A | Yes |

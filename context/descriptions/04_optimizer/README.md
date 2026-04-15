@@ -48,7 +48,7 @@ This folder documents the optimization strategies for Constrained Optimization P
 | Partition-solve (PER decomposition) | **Planned** (foundation ready) | `partition_solve/todo.md` |
 | Constraint push-down | **Planned** | `rewrite_passes/todo.md` |
 | Constraint pull-out | **Planned** | `rewrite_passes/todo.md` |
-| Binder-to-optimizer migration | **Planned** | `rewrite_passes/todo.md` |
+| Binder-to-optimizer migration | **Implemented** | `rewrite_passes/done.md` |
 | Skyband indexing | **Future** | `future_work/todo.md` |
 | Progressive Shading | **Future** | `future_work/todo.md` |
 | LP relaxation + rounding | **Future** | `future_work/todo.md` |

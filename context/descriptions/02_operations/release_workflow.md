@@ -206,7 +206,7 @@ All uploaded artifacts are retained for **7 days** (`retention-days: 7`).
 
 ### What `make` Does Internally
 
-When the workflow runs `make`, it executes the `release` target from the root Makefile (lines 322-326):
+When the workflow runs `make`, it executes the `release` target from the root Makefile (around line 329):
 
 ```makefile
 release:

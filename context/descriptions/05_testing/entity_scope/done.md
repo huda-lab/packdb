@@ -36,6 +36,32 @@ satisfaction but not optimality.
 | `test_entity_scoped_var_in_when_condition_error` | Error: DECIDE var in WHEN condition | — (error test) |
 | `test_entity_scoped_when_entity_invisible` | WHEN filters all rows for some entities | ✓ |
 | `test_entity_scoped_equality_constraint` | Equality (=) constraint + entity-scoped | constraint only |
+| `test_entity_scoped_is_real` | IS REAL entity-scoped, single-table, DOUBLE readback | ✓ |
+| `test_entity_scoped_hard_min_max` | MIN <= K hard case + entity-scoped INTEGER | ✓ |
+| `test_entity_scoped_abs` | ABS linearization + entity-scoped (per-row aux → entity) | ✓ |
+| `test_entity_scoped_when_min_max_triple` | Entity-scoped + WHEN + hard MAX (triple interaction) | ✓ |
+| `test_entity_scoped_ne_oracle` | Entity-scoped + `<>` (NE) Big-M with objective verification | ✓ |
+
+## Silent-correctness bug fixed (2026-04-15)
+
+While writing `test_entity_scoped_is_real` we found that entity-key columns
+not otherwise referenced (SELECT/WHERE/constraints/objective) were pruned
+from the table scan by the binder. A partial key survived and silently
+collapsed distinct entities into region groups. Fix:
+`TableBinding::GetColumnBinding` is now used at bind time to register every
+entity-key column in the scan's column_ids; `LogicalDecide` stores a
+`entity_key_expressions` vector of `BoundColumnRefExpression`s so the
+column pruner's `VisitExpression` path rebinds them alongside other columns.
+`plan_decide.cpp` refreshes `entity_scopes[...].entity_key_bindings` from
+these expressions before resolving physical indices.
+
+Files: `src/planner/binder/query_node/bind_select_node.cpp`,
+`src/include/duckdb/planner/operator/logical_decide.hpp`,
+`src/include/duckdb/planner/query_node/bound_select_node.hpp`,
+`src/planner/binder/query_node/plan_select_node.cpp`,
+`src/optimizer/remove_unused_columns.cpp`,
+`src/execution/physical_plan/plan_decide.cpp`,
+`src/include/duckdb/planner/table_binding.hpp`.
 
 ## Feature interactions covered
 

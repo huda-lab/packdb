@@ -118,8 +118,9 @@ public:
 	ErrorData ColumnNotFoundError(const string &column_name) const override;
 	// These are columns that are present in the name_map, appearing in the order that they're bound
 	const vector<ColumnIndex> &GetBoundColumnIds() const;
-
-protected:
+	//! Registers column_index in bound_column_ids (if not already present) and returns the
+	//! ColumnBinding (table_index, position-in-bound_column_ids). Exposed for entity-scoped
+	//! variable binding in DECIDE clauses which must force entity-key columns into the scan.
 	ColumnBinding GetColumnBinding(column_t column_index);
 };
 

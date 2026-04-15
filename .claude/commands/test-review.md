@@ -34,20 +34,33 @@ Also read `context/descriptions/04_optimizer/rewrite_passes/done.md` to understa
 
 If scoped to a specific feature, only read the relevant subset.
 
-### 3. Gather current test coverage
+### 2.5. Gather the prior coverage audit
 
-Read the test files to understand what IS tested:
+`context/descriptions/05_testing/` is the canonical tracker of what is and isn't tested. Read it before touching the test files — it captures prior audits so you don't redo work or re-report known gaps.
 
+Always read:
+- `context/descriptions/05_testing/README.md` — area index, coverage quality levels (oracle / constraint-only / xfail / error), risk definitions, audit history
+
+Then, for the scoped feature (or every area if scope is empty), read:
+- `context/descriptions/05_testing/<area>/done.md` — what the prior audit *claims* is tested. Verify before trusting; it can go stale as tests are renamed or removed.
+- `context/descriptions/05_testing/<area>/todo.md` — known gaps. Do NOT re-report these as new findings; instead, confirm they are still valid and note any that have since been addressed.
+
+Map area names ↔ test files via the table in `05_testing/README.md`.
+
+### 3. Verify prior coverage against actual test files
+
+This step is a *cross-check*, not a from-scratch catalog. For each entry in the relevant `done.md`:
+
+- Find the matching test in `test/decide/tests/`. If none exists, flag as a **stale `done.md` entry**.
+- If the test exists but covers something different from what `done.md` claims, flag as **misdescribed coverage**.
+
+Then scan `test/decide/tests/` for any test not represented in `done.md` — that is **undocumented coverage** worth folding back into the tracker.
+
+Also read:
 - `test/decide/pytest.ini` — markers (coverage categories)
 - `test/decide/conftest.py` — fixtures and infrastructure
-- All test files in `test/decide/tests/` — read each one to catalog every test case
 
-For each test, extract:
-- **What feature(s)** it exercises (variable type, constraint type, objective type, WHEN, PER, etc.)
-- **What scenario** it covers (basic usage, edge case, error case, interaction)
-- **What data shape** it uses (single row, many rows, multiple groups, empty groups, etc.)
-
-Build a coverage matrix mentally — features on one axis, scenario types on the other.
+Only after this verification pass do you have a trustworthy view of current coverage to compare against the expressivity surface.
 
 ### 4. Spawn parallel audit agents
 
@@ -59,7 +72,9 @@ Launch up to 3 agents in parallel.
 
 > You are auditing PackDB's DECIDE test suite for **gaps in single-feature coverage**. For each DECIDE feature, check whether all documented behaviors are tested.
 >
-> **Read the expressivity docs** (listed above) to understand every feature's documented behavior. Then **read every test file** in `test/decide/tests/` to see what's actually tested. For each feature, check:
+> **Start with the prior audit**: read `context/descriptions/05_testing/README.md` and the relevant area's `done.md` + `todo.md`. Treat `done.md` as the prior claim of coverage (verify against test files before trusting), and `todo.md` as known gaps — don't re-report these as new findings, only confirm they still apply.
+>
+> **Then read the expressivity docs** (listed above) to understand every feature's documented behavior, and **read the relevant test files** in `test/decide/tests/`. Report only *new* gaps not already in `todo.md`, plus any `done.md` entries that appear stale. For each feature, check:
 >
 > 1. **Variable types**:
 >    - IS BOOLEAN: tested with all constraint types? With objectives? With WHEN? With PER?
@@ -115,9 +130,12 @@ Launch up to 3 agents in parallel.
 >
 > ### [Feature Name]
 > **Tested**: [summary of what IS tested]
-> **Missing**:
+> **New gaps** (not in `todo.md`):
 > - [scenario not tested] — why it matters: [what could break undetected]
-> - [scenario not tested] — why it matters: [what could break undetected]
+> **Stale `done.md` entries** (claim coverage but no test found):
+> - [entry] — claimed in `05_testing/[area]/done.md`, no matching test in `[file]`
+> **`todo.md` entries to retire** (now actually covered):
+> - [entry] — covered by `[test_file::test_name]`
 > ```
 
 ---
@@ -126,7 +144,9 @@ Launch up to 3 agents in parallel.
 
 > You are auditing PackDB's DECIDE test suite for **cross-feature interaction gaps**. Many bugs live at the intersection of two features. Your job is to find feature combinations that are NOT tested together.
 >
-> **Read the test files** in `test/decide/tests/` and **read the expressivity docs** to understand all features. Then systematically check the following interaction matrix:
+> **Start with the prior audit**: read `context/descriptions/05_testing/README.md` and the `done.md` + `todo.md` for each area touched by the interaction matrix below. `done.md` lists prior-claimed coverage (verify before trusting); `todo.md` lists known gaps — don't re-report those, only confirm they still apply.
+>
+> **Then read the relevant test files** in `test/decide/tests/` and **the expressivity docs** to understand all features. Report only *new* interaction gaps not already in any `todo.md`, plus any `done.md` interaction claims that are stale. Then systematically check the following interaction matrix:
 >
 > For each pair of features, check if there is at least one test that combines them:
 >
@@ -187,6 +207,10 @@ Launch up to 3 agents in parallel.
 > ### TRIPLE INTERACTIONS
 > | Features | Tested? | Risk |
 > |----------|---------|------|
+>
+> ### Stale `done.md` entries (claim coverage but no test found)
+> | Area | Claim | File checked |
+> |------|-------|--------------|
 > ```
 
 ---
@@ -195,7 +219,9 @@ Launch up to 3 agents in parallel.
 
 > You are auditing PackDB's DECIDE test suite for **edge cases and unusual data shapes** that could expose bugs. Your focus is on boundary conditions, degenerate inputs, and realistic usage patterns that are easy to overlook.
 >
-> **Read the test files** in `test/decide/tests/` (especially `test_edge_cases.py`) and the expressivity docs. Then check if these scenarios are tested:
+> **Start with the prior audit**: read `context/descriptions/05_testing/README.md`, `05_testing/edge_cases/done.md` and `05_testing/edge_cases/todo.md` (plus any other area `done.md`/`todo.md` whose edge cases overlap your scope). `done.md` claims prior coverage; `todo.md` tracks known gaps — don't re-report those.
+>
+> **Then read the test files** in `test/decide/tests/` (especially `test_edge_cases.py`) and the expressivity docs. Report only *new* gaps not in `todo.md`, plus any `done.md` entries that look stale. Then check if these scenarios are tested:
 >
 > **Boundary conditions**:
 > - Zero rows matching (empty result after WHERE or WHEN filters everything)
@@ -248,6 +274,12 @@ Launch up to 3 agents in parallel.
 >
 > ### UNCLEAR (couldn't determine)
 > - [scenario] — [why it's unclear]
+>
+> ### Stale `done.md` entries
+> - [entry] — claimed in `05_testing/[area]/done.md`, no matching test
+>
+> ### `todo.md` entries to retire (now actually covered)
+> - [entry] — covered by `[test_file::test_name]`
 > ```
 
 ---
@@ -258,10 +290,7 @@ Once all three agents return, merge their results:
 
 1. **Collect** all gaps from all agents
 2. **Deduplicate**: if two agents flag the same missing scenario, merge
-3. **Prioritize** by risk:
-   - **HIGH** — Missing test for a rewrite or linearization (silent math errors), a feature interaction that touches the optimizer (rewrites can interfere), or a boundary condition that could crash
-   - **MEDIUM** — Missing test for a documented feature used standalone, or an error case that should be rejected
-   - **LOW** — Missing edge case that's unlikely in practice, or a style/organization issue
+3. **Prioritize** by risk using the tier definitions in `context/descriptions/05_testing/README.md` (§ "Risk priorities for gaps"). Use the same HIGH/MEDIUM/LOW vocabulary the tracker uses so the report and the `todo.md` files stay in sync.
 4. **Group** by feature area for easy navigation
 
 ### 6. Present the report
@@ -313,12 +342,24 @@ Edge cases and unlikely scenarios.
 3. ...
 ```
 
+### 6.5. Offer to update the tracker
+
+Before writing any tests, offer to fold this audit's findings back into `context/descriptions/05_testing/`:
+
+- Append newly found gaps to the relevant `<area>/todo.md` files, grouped by the same HIGH/MEDIUM/LOW tiers used in the report.
+- Remove or correct any stale entries flagged in `<area>/done.md`.
+- Move any `todo.md` items confirmed as now-covered into `done.md`.
+- Add a new line to the audit history at the bottom of `05_testing/README.md` with today's date and a one-line summary of scope + headline finding.
+
+Ask the user before writing — if they decline, the report still stands as an ephemeral artifact and the tracker is left untouched.
+
 ### 7. Offer to write tests
 
-After presenting the report, ask: "Want me to write these tests? I'll start with the high-risk gaps and work down."
+After (optionally) updating the tracker, ask: "Want me to write these tests? I'll start with the high-risk gaps and work down."
 
 If the user says yes, write the tests following the existing pattern:
 - Use the oracle comparison pattern from existing tests (PackDB subprocess → oracle solver → compare)
 - Follow naming conventions: `test_<feature>_<scenario>`
 - Add appropriate pytest markers
 - Place in the correct test file (or create a new one if a new category)
+- After each test passes, move the corresponding entry from `<area>/todo.md` → `<area>/done.md` in the same session so the tracker stays in sync.

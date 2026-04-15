@@ -1,10 +1,14 @@
 # PER Clause Test Coverage — Todo
 
-PER is the weakest interaction partner in the test suite: its combinations with
-bilinear, ABS (aggregate constraint), COUNT(INTEGER), and QP objectives all have
-zero coverage. Each involves auxiliary variable / indicator creation that must
-be correctly partitioned by group — a class of bugs that would produce silent
-wrong results.
+PER's remaining gaps cluster in its combinations with bilinear, COUNT(INTEGER),
+and QP objectives. Each involves auxiliary variable / indicator creation that
+must be correctly partitioned by group — a class of bugs that would produce
+silent wrong results.
+
+Closed in `test_per_interactions.py` (Batch 1, 2026-04-15):
+- PER + hard MIN/MAX constraints (MAX>=K, MIN<=K, equality)
+- PER + ABS in aggregate constraint
+- Multiple variables + PER
 
 ## Missing coverage
 
@@ -12,11 +16,6 @@ wrong results.
 
 See [bilinear/todo.md](../bilinear/todo.md) for full details. This gap is the
 single largest cross-feature hole.
-
-### HIGH: PER + ABS in aggregate constraint
-
-See [abs/todo.md](../abs/todo.md). ABS auxiliary variables must be partitioned
-by PER group.
 
 ### HIGH: PER + COUNT(x INTEGER)
 
@@ -27,29 +26,6 @@ PER group partitioning.
 
 See [quadratic/todo.md](../quadratic/todo.md). Q matrix construction with PER
 group auxiliaries.
-
-### HIGH: PER + hard MIN/MAX constraints
-
-See [min_max/todo.md](../min_max/todo.md). Big-M indicators must be created
-per-group.
-
-### HIGH: Multiple variables + PER
-
-No test exercises multi-variable coefficient extraction with PER grouping. Each variable's coefficients must be correctly partitioned by group, and the variable-indexing layer must produce the right column mapping for each group's constraint.
-
-```sql
--- Multiple variables + PER
-WITH data AS (
-    SELECT 1 AS id, 'A' AS grp, 10 AS w UNION ALL
-    SELECT 2, 'A', 5 UNION ALL
-    SELECT 3, 'B', 8 UNION ALL
-    SELECT 4, 'B', 3
-)
-SELECT id, grp, x, y FROM data
-DECIDE x IS BOOLEAN, y IS INTEGER
-SUCH THAT SUM(x * w) <= 12 PER grp AND y <= 3 AND SUM(y) <= 8
-MAXIMIZE SUM(x * w + y)
-```
 
 ### HIGH: WHEN + PER + multiple variables (triple)
 

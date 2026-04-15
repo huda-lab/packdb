@@ -2,27 +2,6 @@
 
 ## Missing coverage
 
-### HIGH: Hard MIN/MAX constraints with PER
-
-Only easy-case PER stripping and PER on objectives are tested. Hard constraint cases with PER have zero coverage.
-
-**Risk**: Hard MIN/MAX constraints (`MAX(expr) >= K`, `MIN(expr) <= K`, equality) create Big-M indicator variables and linking constraints (`z <= expr`, `z >= expr - M*(1-y)`, `SUM(y) >= 1`). With PER, these must be created *per group* — one auxiliary `z_g` and one set of indicators per distinct PER value. If indicators are created globally, per-group semantics are lost and the solver sees the wrong problem.
-
-```sql
--- Hard MAX constraint with PER
-SELECT id, category, cost, profit, x
-FROM items
-DECIDE x IS BOOLEAN
-SUCH THAT MAX(x * cost) >= 50 PER category
-MAXIMIZE SUM(x * profit)
-
--- Hard MIN constraint with PER
-SUCH THAT MIN(x * hours) <= 4 PER empID
-
--- Equality with PER (both directions)
-SUCH THAT MAX(x * cost) = 100 PER category
-```
-
 ### MEDIUM: MIN/MAX with aggregate-local WHEN on hard cases
 
 The aggregate-local WHEN test only covers `MAX(x) <= K WHEN ...` (easy case). No test covers the hard direction with an aggregate-local filter: the Big-M indicators and linking constraints must respect the per-term mask.

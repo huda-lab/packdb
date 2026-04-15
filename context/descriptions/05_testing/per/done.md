@@ -4,6 +4,7 @@ Tests live in:
 - `test/decide/tests/test_per_clause.py` — basic PER on constraints
 - `test/decide/tests/test_per_multi_column.py` — multi-column PER
 - `test/decide/tests/test_per_objective.py` — PER on objectives (nested aggregates)
+- `test/decide/tests/test_per_interactions.py` — PER composed with auxiliary-variable features (hard MIN/MAX, ABS, multi-variable)
 
 ## Scenarios covered
 
@@ -20,6 +21,11 @@ Tests live in:
 | NULL group keys (excluded) | `test_per_clause.py::test_per_null_group_key` | ✓ |
 | Two PER constraints on different columns | `test_per_clause.py::test_per_different_grouping_columns` | ✓ |
 | WHEN filters out entire PER group | `test_per_multi_column.py::test_multi_column_per_when_eliminates_all_in_group` | ✓ |
+| PER + hard MAX(>=K) constraint (Big-M per group) | `test_per_interactions.py::test_per_max_geq_constraint` | ✓ |
+| PER + hard MIN(<=K) constraint (Big-M per group) | `test_per_interactions.py::test_per_min_leq_constraint` | ✓ |
+| PER + equality MAX(=K) constraint (easy + hard combined per group) | `test_per_interactions.py::test_per_max_eq_constraint` | ✓ |
+| PER + ABS in aggregate constraint (ABS aux per group) | `test_per_interactions.py::test_per_abs_aggregate` | ✓ |
+| Multi-variable (BOOLEAN + INTEGER) + PER | `test_per_interactions.py::test_per_multi_variable` | ✓ |
 
 ### PER on objectives (nested aggregate syntax)
 
@@ -65,3 +71,6 @@ All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per
 | PER | WHEN + entity-scoped (triple) | ✓ |
 | PER | WHEN + MIN/MAX (triple) | ✓ |
 | PER | WHEN + AVG (triple) | ✓ |
+| PER | hard MIN/MAX constraints (Big-M per group) | ✓ (`test_per_interactions.py`) |
+| PER | ABS in aggregate constraint | ✓ (`test_per_interactions.py`) |
+| PER | multi-variable (BOOLEAN + INTEGER) | ✓ (`test_per_interactions.py`) |

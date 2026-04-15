@@ -56,7 +56,7 @@ PackDB supports both **uncorrelated and correlated scalar subqueries** in constr
   - **Correlated**: Decorrelated into joins, producing per-row values.
 - **Validation**:
   - Only scalar subqueries are supported (non-scalar returns an error).
-  - Subqueries cannot reference DECIDE variables (checked via `ExpressionContainsDecideVariable` at `decide_binder.cpp:246`).
+  - Subqueries cannot reference DECIDE variables (checked via `ExpressionContainsDecideVariable`, defined in `decide_binder.cpp` and invoked at multiple subquery/WHEN call sites).
   - For aggregate constraints (`SUM`, `AVG`), the RHS must be a scalar (same value for all rows). This is validated at execution time in `ilp_model_builder.cpp` — if the correlated subquery produces different values per row, an error is thrown.
 
 ### 3.3 Operator Restrictions
@@ -160,4 +160,4 @@ When rewrite passes create auxiliary variables (COUNT indicators, ABS auxiliary 
 
 - **`num_auxiliary_vars`**: Count of auxiliary variables appended after user-declared variables.
 - **`count_indicator_links`**: Vector of `(indicator_var_index, original_var_index)` pairs used at execution time to generate Big-M linking constraints.
-- **Hiding from SELECT ***: Auxiliary variables are pruned from the bind context (lines ~748-758 of `bind_select_node.cpp`) so they don't appear in query results. They exist only in the solver's variable space.
+- **Hiding from SELECT ***: Auxiliary variables are pruned from the bind context (lines ~887-897 of `bind_select_node.cpp`) so they don't appear in query results. They exist only in the solver's variable space.

@@ -109,6 +109,14 @@ private:
 	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                            vector<LogicalDecide::BilinearLink> &links);
 
+	//! Helper: walk a multiplication chain shaped as `coeff * ... * decide_var * ... * coeff`
+	//! around the decide variable with index `var_idx`, and combine all non-variable factors
+	//! into `coef_out`. Returns true if `expr` matches that shape (a single decide variable
+	//! buried under zero or more multiplicative data coefficients). `coef_out` is null when
+	//! `expr` is a bare variable reference.
+	bool ExtractMultiplicativeCoefficient(const Expression &expr, idx_t decide_index,
+	                                       idx_t var_idx, unique_ptr<Expression> &coef_out);
+
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect (aux_idx, inner_expr) pairs.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,

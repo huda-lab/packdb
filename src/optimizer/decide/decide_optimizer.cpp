@@ -791,6 +791,53 @@ static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, 
 	});
 }
 
+bool DecideOptimizer::ExtractMultiplicativeCoefficient(const Expression &expr, idx_t decide_index,
+                                                        idx_t var_idx, unique_ptr<Expression> &coef_out) {
+	coef_out = nullptr;
+	// Bare variable reference (possibly CAST-wrapped — GetSingleDecideVarIdx unwraps casts).
+	idx_t found = GetSingleDecideVarIdx(expr, decide_index);
+	if (found == var_idx) {
+		return true;
+	}
+	// Unwrap CAST nodes — the binder inserts implicit casts around mixed-type
+	// multiplications (e.g. `cost * b` becomes `CAST(CAST(cost) * CAST(b))`).
+	// Walk through the cast to reach the underlying multiplication.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		return ExtractMultiplicativeCoefficient(*cast.child, decide_index, var_idx, coef_out);
+	}
+	// Multiplication chain: walk down the side that contains the variable, multiply
+	// coefficients harvested from the other side at each level.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (StringUtil::Lower(func.function.name) == "*" && func.children.size() == 2) {
+			vector<idx_t> left_vars, right_vars;
+			CollectDecideVarIndices(*func.children[0], decide_index, left_vars);
+			CollectDecideVarIndices(*func.children[1], decide_index, right_vars);
+			int var_side = -1;
+			if (left_vars.size() == 1 && left_vars[0] == var_idx && right_vars.empty()) {
+				var_side = 0;
+			} else if (right_vars.size() == 1 && right_vars[0] == var_idx && left_vars.empty()) {
+				var_side = 1;
+			} else {
+				return false;
+			}
+			unique_ptr<Expression> sub_coef;
+			if (!ExtractMultiplicativeCoefficient(*func.children[var_side], decide_index, var_idx, sub_coef)) {
+				return false;
+			}
+			auto outer_coef = func.children[1 - var_side]->Copy();
+			if (sub_coef) {
+				coef_out = optimizer.BindScalarFunction("*", std::move(outer_coef), std::move(sub_coef));
+			} else {
+				coef_out = std::move(outer_coef);
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                               vector<LogicalDecide::BilinearLink> &links) {
 	if (!expr) return;
@@ -849,14 +896,16 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 
 				// Decide which side is the Boolean (b) and which is the other (x)
 				idx_t bool_var_idx, other_var_idx;
-				Expression *other_expr;
+				Expression *bool_expr, *other_expr;
 				if (left_is_bool) {
 					bool_var_idx = left_single;
 					other_var_idx = right_single; // may be INVALID_INDEX if right is complex
+					bool_expr = func.children[0].get();
 					other_expr = func.children[1].get();
 				} else {
 					bool_var_idx = right_single;
 					other_var_idx = left_single; // may be INVALID_INDEX if left is complex
+					bool_expr = func.children[1].get();
 					other_expr = func.children[0].get();
 				}
 
@@ -916,34 +965,32 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				} else {
 					// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
 					// w <= U*b and w >= x - U*(1-b) generated at execution time via BilinearLink
-					auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
 
-					// w <= x  (structural constraint, no Big-M needed)
-					auto c_struct = make_uniq<BoundComparisonExpression>(
-					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
-					    other_expr->Copy());
-					AppendConstraint(decide, std::move(c_struct));
-
-					// Record link for execution-time Big-M generation
-					// other_var_idx might be INVALID_INDEX if other_expr is a complex expression.
-					// In that case, we need the single variable index from the other side.
+					// Resolve other_var_idx if other_expr is a complex single-variable expression.
 					if (other_var_idx == DConstants::INVALID_INDEX) {
-						// Complex expression on the other side — get the first decide var
-						// For now, only support simple variable references for McCormick
 						vector<idx_t> other_vars;
 						CollectDecideVarIndices(*other_expr, decide.decide_index, other_vars);
 						if (other_vars.size() == 1) {
 							other_var_idx = other_vars[0];
 						} else {
-							// Multi-variable expression × Boolean — can't do simple McCormick
-							// Leave it for Q matrix path (the auxiliary variable is already created,
-							// but we need to undo this — for now, throw)
 							throw BinderException(
 							    "Bilinear product of a Boolean variable with a multi-variable expression "
 							    "is not yet supported. Use a simple variable reference (e.g., b * x, not b * (x + y)).");
 						}
 					}
+
+					auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
+					auto &other_var_ref = decide.decide_variables[other_var_idx]->Cast<BoundColumnRefExpression>();
+
+					// w <= x  (structural constraint, no Big-M needed). Use the bare other-variable
+					// reference even when the source had a coefficient: the McCormick relation
+					// w = b*x must be tight, and any coefficient gets folded into the replacement
+					// expression below.
+					auto c_struct = make_uniq<BoundComparisonExpression>(
+					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
+					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
+					    make_uniq<BoundColumnRefExpression>(other_var_ref.alias, other_var_ref.return_type, other_var_ref.binding));
+					AppendConstraint(decide, std::move(c_struct));
 
 					LogicalDecide::BilinearLink link;
 					link.aux_idx = aux_idx;
@@ -952,10 +999,32 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					links.push_back(link);
 				}
 
-				// Replace the bilinear product with the auxiliary variable reference
+				// Replace the bilinear product with the auxiliary variable reference,
+				// folding in any data coefficients that were attached to either factor
+				// (e.g., `cost * b * x` parses as `(cost*b)*x` — without folding, `cost`
+				// would be silently dropped).
+				unique_ptr<Expression> bool_coef, other_coef;
+				ExtractMultiplicativeCoefficient(*bool_expr, decide.decide_index, bool_var_idx, bool_coef);
+				ExtractMultiplicativeCoefficient(*other_expr, decide.decide_index, other_var_idx, other_coef);
+
 				auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
-				expr = make_uniq<BoundColumnRefExpression>(
+				auto w_replacement = make_uniq<BoundColumnRefExpression>(
 				    w_ref.alias, w_ref.return_type, w_ref.binding);
+
+				unique_ptr<Expression> combined_coef;
+				if (bool_coef && other_coef) {
+					combined_coef = optimizer.BindScalarFunction("*", std::move(bool_coef), std::move(other_coef));
+				} else if (bool_coef) {
+					combined_coef = std::move(bool_coef);
+				} else if (other_coef) {
+					combined_coef = std::move(other_coef);
+				}
+
+				if (combined_coef) {
+					expr = optimizer.BindScalarFunction("*", std::move(combined_coef), std::move(w_replacement));
+				} else {
+					expr = std::move(w_replacement);
+				}
 				return;
 			}
 		}

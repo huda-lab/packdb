@@ -687,17 +687,30 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                     scope_idx = scope_it->second;
                     entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
                 } else {
-                    // Create new EntityScopeInfo for this table
+                    // Create new EntityScopeInfo for this table.
+                    // Register every source-table column in the TableBinding's
+                    // bound_column_ids via GetColumnBinding. This forces the
+                    // columns into the scan's column_ids and returns the correct
+                    // ColumnBinding (table_index, position-in-col_ids). Refinement
+                    // below may drop some; whatever survives gets its columns
+                    // kept in the scan via entity_key_expressions.
                     EntityScopeInfo scope_info;
                     scope_info.table_alias = table_name;
                     scope_info.source_table_index = binding->index;
-                    // Store column bindings for ALL columns of the source table.
-                    // Physical indices are resolved later in plan_decide.cpp
-                    // where the child's column bindings are available.
-                    for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-                        scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-                        scope_info.entity_key_bindings.push_back(
-                            ColumnBinding(binding->index, col_idx));
+                    if (binding->binding_type == BindingType::TABLE) {
+                        auto &tbl_binding = binding->Cast<TableBinding>();
+                        for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
+                            scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
+                            scope_info.entity_key_bindings.push_back(
+                                tbl_binding.GetColumnBinding(col_idx));
+                        }
+                    } else {
+                        // Non-base table (e.g., subquery): fall back to raw bindings.
+                        for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
+                            scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
+                            scope_info.entity_key_bindings.push_back(
+                                ColumnBinding(binding->index, col_idx));
+                        }
                     }
                     scope_info.scoped_variable_indices.push_back(var_idx);
                     scope_idx = entity_scopes.size();
@@ -872,6 +885,23 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                     scope.entity_key_bindings = std::move(refined_bindings);
                     scope.entity_key_column_types = std::move(refined_types);
                 }
+            }
+        }
+
+        // Create BoundColumnRefExpressions for entity-key columns.
+        // These are stored on LogicalDecide so that DuckDB's binder column-reference
+        // tracking (used by the initial Get column_id selection AND by the column
+        // pruner's rebinding pass) treats entity-key columns as live. Without this,
+        // entity-key columns that don't also appear in SELECT/WHERE/constraints/
+        // objective get pruned by the Binder, leaving the VarIndexer with a
+        // degenerate key set that silently collapses distinct entities.
+        for (auto &scope : entity_scopes) {
+            for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
+                result->entity_key_expressions.push_back(
+                    make_uniq<BoundColumnRefExpression>(
+                        "entity_key_" + scope.table_alias,
+                        scope.entity_key_column_types[k],
+                        scope.entity_key_bindings[k]));
             }
         }
 

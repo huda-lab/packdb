@@ -37,9 +37,10 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 - Parser/Symbolic: `src/packdb/symbolic/decide_symbolic.cpp`
 - Binder: `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp`
 - Logical operator: `src/planner/operator/logical_decide.cpp`
-- Optimizer: `src/optimizer/decide/decide_optimizer.cpp` (algebraic rewrites: COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators)
+- Optimizer: `src/optimizer/decide/decide_optimizer.cpp` (algebraic rewrites: COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators, bilinear McCormick linearization)
 - Physical execution + solver integration (Gurobi/HiGHS): `src/execution/operator/decide/physical_decide.cpp`
-- Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, etc.)
+- Solver integration: `src/packdb/utility/ilp_model_builder.cpp` (SolverInput → SolverModel, VarIndexer, PER STRICT empty-group handling, quadratic constraint emission), `src/packdb/utility/ilp_solver.cpp` (facade), `src/packdb/gurobi/gurobi_solver.cpp` (Gurobi backend), `src/packdb/naive/deterministic_naive.cpp` (HiGHS backend)
+- Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, `packdb/solver_input.hpp`, `packdb/ilp_model.hpp`, etc.)
 
 ## DECIDE Syntax (Quick Reference)
 

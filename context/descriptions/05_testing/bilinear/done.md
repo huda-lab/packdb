@@ -3,6 +3,10 @@
 Tests live in `test/decide/tests/test_bilinear.py` plus interactions in
 `test_aggregate_local_when.py` and `test_quadratic_constraints.py`.
 
+Cross-feature interaction tests (oracle-compared) at the bottom of
+`test_bilinear.py` cover bilinear × {PER, WHEN+PER, entity_scope}, the
+MINIMIZE direction, and Bool×Real in constraints.
+
 Bilinear terms (`x * y`, two different DECIDE variables) split into two
 categories:
 
@@ -23,6 +27,11 @@ categories:
 | Data coefficient scaling (`profit * b * x`) | `test_bilinear.py` | ✓ |
 | Bilinear in Bool × Bool constraints | `test_bilinear.py` | ✓ |
 | Bilinear + WHEN | `test_bilinear.py::test_bilinear_with_when` | ✓ |
+| Bilinear + PER (per-group McCormick aux) | `test_bilinear.py::test_bilinear_per_group` | ✓ |
+| Bilinear + WHEN + PER (triple) | `test_bilinear.py::test_bilinear_when_per_triple` | ✓ |
+| Entity-scoped Bool × row-scoped Real | `test_bilinear.py::test_bilinear_entity_scoped` | ✓ |
+| Bool × Real in constraint (McCormick feasibility) | `test_bilinear.py::test_bilinear_bool_real_constraint` | ✓ |
+| Bilinear MINIMIZE with data coefficient | `test_bilinear.py::test_bilinear_minimize_objective` | ✓ |
 | Aggregate-local WHEN on bilinear constraint | `test_aggregate_local_when.py::test_bilinear_aggregate_local_when_constraint` | ✓ |
 | Aggregate-local WHEN on bilinear objective | `test_aggregate_local_when.py::test_bilinear_aggregate_local_when_objective` | ✓ |
 | Backward compatibility (existing linear tests still pass) | `test_bilinear.py` | ✓ |
@@ -56,7 +65,11 @@ categories:
 | Bilinear | Int × Real (Gurobi Q) | ✓ |
 | Bilinear | WHEN (expression-level) | ✓ |
 | Bilinear | WHEN (aggregate-local) | ✓ |
+| Bilinear | PER | ✓ |
+| Bilinear | WHEN + PER (triple) | ✓ |
+| Bilinear | Entity-scoped Boolean factor | ✓ |
 | Bilinear | MAXIMIZE objective | ✓ |
-| Bilinear | constraint | ✓ (Bool × Bool only) |
+| Bilinear | MINIMIZE objective (with data coefficient) | ✓ |
+| Bilinear | constraint | ✓ (Bool × Bool and Bool × Real) |
 | Bilinear | linear terms (mixed) | ✓ |
 | Bilinear | QP self-product (mixed) | ✓ |

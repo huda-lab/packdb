@@ -111,6 +111,17 @@ public:
     //! otherwise index into entity_scopes.
     vector<idx_t> variable_entity_scope;
 
+    //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
+    //! These live here so that DuckDB's binder initial column_id selection AND the
+    //! RemoveUnusedColumns pruner track them as live references. Without them,
+    //! entity-key columns that aren't referenced elsewhere (SELECT/WHERE/
+    //! constraints/objective) would be pruned from the table scan, silently
+    //! collapsing distinct entities into whatever grouping happens to survive.
+    //! plan_decide.cpp reads refreshed bindings from these expressions (kept in
+    //! sync by the pruner's rebinding pass) and copies them back into
+    //! entity_scopes.entity_key_bindings.
+    vector<unique_ptr<Expression>> entity_key_expressions;
+
 public:
     // --- Implement virtual functions ---
 
