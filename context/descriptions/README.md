@@ -25,6 +25,7 @@ This makes it trivial to determine what exists vs. what needs building.
 | `02_operations/`       | Testing methodology, release workflow, benchmarking, and known limitations                                         | You need to run tests, cut a release, benchmark performance, or check whether a feature is supported |
 | `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md. Also includes `problem_types/` for LP/ILP/QP classification. | You want to know if a construct is valid, or are implementing a new keyword   |
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
+| `05_testing/`          | Test coverage tracking — which scenarios are oracle-verified vs. feasibility-only, and what gaps remain            | You are adding tests, auditing coverage, or debugging a suspected correctness regression |
 
 ---
 
