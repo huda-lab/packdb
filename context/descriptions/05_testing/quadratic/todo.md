@@ -1,28 +1,16 @@
 # Quadratic Programming Test Coverage — Todo
 
+## Closed
+
+- **QP objective + PER constraint** — `test_per_interactions.py::test_qp_objective_per_constraint` (2026-04-15): flat `MINIMIZE SUM(POWER(x-t,2))` with `SUM(x)>=5 PER grp`. Targets=0.5 so PER floor binds (x→2.5, obj=16). The nested PER objective form (`SUM(SUM(POWER(x-t,2))) PER col`) remains untested (see Batch 3).
+
 ## Missing coverage
 
-### HIGH: QP objective with PER
+### HIGH: QP objective with nested PER (SUM of per-group QP)
 
-Quadratic *constraints* with PER are tested; quadratic *objectives* with PER have zero coverage.
-
-**Risk**: Q matrix construction with PER group auxiliaries. With nested PER objectives (`SUM(SUM(POWER(x - t, 2))) PER col`), inner creates per-group Q matrices, outer creates a global sum across groups. A bug here produces wrong optimal values without raising any error.
+The flat form is now tested. The nested form `MINIMIZE SUM(SUM(POWER(x - t, 2))) PER col` (outer SUM of inner per-group QP) creates per-group Q matrices with auxiliaries. That code path has zero coverage.
 
 ```sql
--- QP objective with PER
-WITH data AS (
-    SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
-    SELECT 2, 'A', 15.0 UNION ALL
-    SELECT 3, 'B', 20.0 UNION ALL
-    SELECT 4, 'B', 25.0
-)
-SELECT id, grp, ROUND(x, 4) AS x
-FROM data
-DECIDE x IS REAL
-SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 5 PER grp
-MINIMIZE SUM(POWER(x - target, 2))
-
--- Explicit nested form
 MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
 ```
 

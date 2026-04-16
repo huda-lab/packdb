@@ -11,11 +11,14 @@ auxiliary-variable bug would relax the per-group constraints, producing a
 better objective for MAXIMIZE / worse for MINIMIZE than the correct value.
 
 Covered:
-  - test_per_max_geq_constraint:  PER + hard MAX(>=K) — Big-M per group
-  - test_per_min_leq_constraint:  PER + hard MIN(<=K) — Big-M per group
-  - test_per_max_eq_constraint:   PER + equality MAX(=K) — easy + hard combined
-  - test_per_abs_aggregate:       PER + SUM(ABS(...)) — ABS aux per group
-  - test_per_multi_variable:      PER + (BOOLEAN + INTEGER) — multi-var indexing
+  - test_per_max_geq_constraint:     PER + hard MAX(>=K) — Big-M per group
+  - test_per_min_leq_constraint:     PER + hard MIN(<=K) — Big-M per group
+  - test_per_max_eq_constraint:      PER + equality MAX(=K) — easy + hard combined
+  - test_per_abs_aggregate:          PER + SUM(ABS(...)) — ABS aux per group
+  - test_per_multi_variable:         PER + (BOOLEAN + INTEGER) — multi-var indexing
+  - test_when_per_multi_variable:    WHEN + PER + (BOOLEAN + INTEGER) — WHEN mask per group per variable
+  - test_count_integer_per:          COUNT(x INTEGER) + PER — Big-M indicators scoped per group
+  - test_qp_objective_per_constraint: QP objective + PER constraint — QP path alongside PER
 """
 
 import time
@@ -557,5 +560,265 @@ def test_per_multi_variable(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         "per_multi_var", packdb_time, build_time,
         result.solve_time_seconds, n, n * 2, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+# ============================================================================
+# 1.4 — WHEN + PER + multi-variable
+# ============================================================================
+
+@pytest.mark.per_clause
+@pytest.mark.when_constraint
+@pytest.mark.var_multi
+@pytest.mark.var_boolean
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_when_per_multi_variable(packdb_cli, perf_tracker):
+    """WHEN + PER + two decision variables (BOOLEAN x, INTEGER y).
+
+    The WHEN filter applies to the per-group aggregate constraint — only
+    active rows contribute to each group's sum. The objective includes all
+    rows (no WHEN). A shared coefficient accumulator bug would mix WHEN-masked
+    rows of one variable with unmasked rows of the other, silently corrupting
+    the per-group aggregate.
+
+    Data layout (row 2 is inactive in group A):
+      id=1 grp=A active=T  w=10 v=5  → in WHEN constraint for A
+      id=2 grp=A active=F  w=6  v=3  → only in objective (no constraint from WHEN)
+      id=3 grp=B active=T  w=8  v=4  → in WHEN constraint for B
+      id=4 grp=B active=T  w=7  v=2  → in WHEN constraint for B
+
+    Analytical oracle (obj=54):
+      Group A constraint (active row 1 only): 10*x_1 + 5*y_1 <= 18
+        Max contribution from row 1 = 15 (e.g. x=0,y=3 or x=1,y=1).
+        Row 2 (inactive): unconstrained, x=1,y=5 → 6+15=21.
+        Group A obj = 15 + 21 = 36.
+      Group B constraint (rows 3,4 both active): 8*x_3+4*y_3+7*x_4+2*y_4 <= 18.
+        Objective = constraint LHS (all B rows active), so max group B obj = 18.
+      Total = 36 + 18 = 54.
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 'A' AS grp, true  AS active, 10 AS w, 5 AS v UNION ALL
+            SELECT 2, 'A', false, 6, 3 UNION ALL
+            SELECT 3, 'B', true,  8, 4 UNION ALL
+            SELECT 4, 'B', true,  7, 2
+        )
+        SELECT id, grp, w, v, x, y FROM data
+        DECIDE x IS BOOLEAN, y IS INTEGER
+        SUCH THAT y <= 5 AND SUM(x * w + y * v) <= 18 WHEN active PER grp
+        MAXIMIZE SUM(x * w + y * v)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    EXPECTED_OBJ = 54
+
+    ci = {name: j for j, name in enumerate(packdb_cols)}
+    packdb_obj = sum(
+        int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]]) * int(row[ci["v"]])
+        for row in packdb_result
+    )
+    assert packdb_obj == EXPECTED_OBJ, (
+        f"Objective mismatch: got {packdb_obj}, expected {EXPECTED_OBJ}"
+    )
+
+    # Sanity: per-group WHEN-filtered aggregate constraint must hold
+    # Inline data: (id, grp, active, w, v)
+    data = [
+        (1, 'A', True,  10, 5),
+        (2, 'A', False,  6, 3),
+        (3, 'B', True,   8, 4),
+        (4, 'B', True,   7, 2),
+    ]
+    row_by_id = {int(row[ci["id"]]): row for row in packdb_result}
+    by_grp_active: dict[str, float] = {}
+    for row_id, grp, active, w, v in data:
+        if active:
+            row = row_by_id[row_id]
+            contrib = int(row[ci["x"]]) * w + int(row[ci["y"]]) * v
+            by_grp_active[grp] = by_grp_active.get(grp, 0.0) + contrib
+    for g, total in by_grp_active.items():
+        assert total <= 18 + 1e-9, (
+            f"Group {g} WHEN-filtered SUM(x*w+y*v)={total} > 18 — constraint violated"
+        )
+
+    perf_tracker.record(
+        "when_per_multi_var", packdb_time, 0.0, 0.0,
+        4, 4 * 2, 2,
+        float(EXPECTED_OBJ), "analytical",
+        comparison_status="optimal",
+    )
+
+
+# ============================================================================
+# 1.5 — COUNT(x INTEGER) + PER
+# ============================================================================
+
+@pytest.mark.per_clause
+@pytest.mark.count_rewrite
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_count_integer_per(packdb_cli, perf_tracker):
+    """COUNT(x INTEGER) >= 1 PER grp — Big-M indicator variables must be
+    scoped per group.
+
+    PackDB rewrites COUNT(x) to a binary indicator z_i with constraints
+    z_i <= x_i and x_i <= M*z_i, then enforces SUM(z_i) >= 1 per group.
+    A global-scoping bug would allow a non-zero x in group A to satisfy the
+    COUNT requirement in group B, yielding an overly relaxed problem.
+
+    The global budget SUM(x) <= 10 is the key stress: without it, x=10
+    everywhere makes every z=1, so scoping doesn't matter. With the budget,
+    the optimizer wants to concentrate budget in group A (higher val). If the
+    COUNT per-group scoping is wrong, it can zero out group B entirely and
+    score 100 (x_A=10). The correctly scoped result is forced to keep at least
+    one non-zero x in group B, yielding obj=98 (x_A=9, x_B=1 with val_B=8).
+
+    Analytical oracle: greedily assign budget to highest-val rows while
+    satisfying COUNT >= 1 per group.
+      Group A best: id=1 val=10 → get 9 units (1 reserved for group B)
+      Group B min:  id=3 val=8 → get 1 unit
+      Objective = 9*10 + 1*8 = 98
+
+    Data: 2 rows in group A (val=10,5), 2 rows in group B (val=8,3).
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 'A' AS grp, 10 AS val UNION ALL
+            SELECT 2, 'A', 5 UNION ALL
+            SELECT 3, 'B', 8 UNION ALL
+            SELECT 4, 'B', 3
+        )
+        SELECT id, grp, val, x FROM data
+        DECIDE x IS INTEGER
+        SUCH THAT x <= 10 AND SUM(x) <= 10 AND COUNT(x) >= 1 PER grp
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    # Analytical oracle: 98 (see docstring).
+    # A globally-scoped COUNT would yield 100 (x_A=10, group B COUNT "satisfied"
+    # by group A's indicator), which is > 98 and fails the assertion.
+    EXPECTED_OBJ = 98
+
+    ci = {name: j for j, name in enumerate(packdb_cols)}
+    packdb_obj = sum(
+        int(row[ci["x"]]) * int(row[ci["val"]]) for row in packdb_result
+    )
+    assert packdb_obj == EXPECTED_OBJ, (
+        f"Objective mismatch: got {packdb_obj}, expected {EXPECTED_OBJ} — "
+        f"if {packdb_obj} > {EXPECTED_OBJ} the COUNT scoping is global not per-group"
+    )
+
+    # Sanity: each group has at least one non-zero x (COUNT >= 1 per group)
+    by_grp: dict[str, list[int]] = {}
+    for row in packdb_result:
+        g = str(row[ci["grp"]])
+        by_grp.setdefault(g, []).append(int(row[ci["x"]]))
+    for g, vals in by_grp.items():
+        assert any(v > 0 for v in vals), (
+            f"Group {g} has no non-zero x — COUNT(x)>=1 per group violated"
+        )
+
+    # Sanity: global budget respected
+    total_x = sum(int(row[ci["x"]]) for row in packdb_result)
+    assert total_x <= 10, f"Global SUM(x)={total_x} > 10 — budget violated"
+
+    perf_tracker.record(
+        "count_integer_per", packdb_time, 0.0, 0.0,
+        4, 4, 4 * 2 + 1 + 2,
+        float(EXPECTED_OBJ), "analytical",
+        comparison_status="optimal",
+    )
+
+
+# ============================================================================
+# 1.6 — QP objective + PER constraint
+# ============================================================================
+
+@pytest.mark.per_clause
+@pytest.mark.quadratic
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_objective_per_constraint(packdb_cli, perf_tracker):
+    """QP objective (MINIMIZE SUM(POWER(x - target, 2))) with a linear PER
+    constraint (SUM(x) >= 5 PER grp).
+
+    Both the QP objective path and the PER constraint path must fire together.
+    Targets are 0.5 per row, so the unconstrained QP optimum (x=0.5) gives
+    SUM(x)=1 per group, violating SUM(x)>=5. The PER constraint forces
+    x to 2.5 per row (by symmetry), making obj=4*(2.5-0.5)^2=16.
+
+    If the PER path is silently dropped: x_i=0.5, obj=0 (fails the ~16 check).
+    If the QP path is silently dropped: solver finds any feasible point, which
+    would not minimise the sum of squared deviations to 16.
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 'A' AS grp, 0.5 AS target UNION ALL
+            SELECT 2, 'A', 0.5 UNION ALL
+            SELECT 3, 'B', 0.5 UNION ALL
+            SELECT 4, 'B', 0.5
+        )
+        SELECT id, grp, target, ROUND(x::DOUBLE, 6) AS x
+        FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 5 PER grp
+        MINIMIZE SUM(POWER(x - target, 2))
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    # Analytical oracle:
+    #   Each group: minimize (x_1-0.5)^2 + (x_2-0.5)^2 s.t. x_1+x_2 >= 5, x_i >= 0
+    #   Lagrangian: by symmetry x_1=x_2=2.5, group_obj = 2*(2.5-0.5)^2 = 8
+    #   Total: 2 groups × 8 = 16
+    EXPECTED_OBJ = 16.0
+    EXPECTED_X = 2.5  # each row
+
+    ci = {name: j for j, name in enumerate(packdb_cols)}
+    packdb_obj = sum(
+        (float(row[ci["x"]]) - float(row[ci["target"]])) ** 2
+        for row in packdb_result
+    )
+    assert abs(packdb_obj - EXPECTED_OBJ) <= 1e-4, (
+        f"QP+PER objective mismatch: got {packdb_obj:.6f}, expected ~{EXPECTED_OBJ} "
+        f"(if ~0: PER constraint was silently dropped; targets were not pushed to 2.5)"
+    )
+
+    # Sanity: each x_i ≈ 2.5 (the per-group optimum under SUM(x)>=5)
+    for row in packdb_result:
+        x_val = float(row[ci["x"]])
+        assert abs(x_val - EXPECTED_X) <= 1e-4, (
+            f"id={row[ci['id']]} x={x_val:.6f} should be ~{EXPECTED_X} "
+            f"(PER-constrained QP optimum)"
+        )
+
+    # Sanity: per-group SUM(x) >= 5
+    by_grp: dict[str, float] = {}
+    for row in packdb_result:
+        g = str(row[ci["grp"]])
+        by_grp[g] = by_grp.get(g, 0.0) + float(row[ci["x"]])
+    for g, total in by_grp.items():
+        assert total >= 5 - 1e-6, (
+            f"Group {g} SUM(x)={total:.4f} < 5 — PER constraint violated"
+        )
+
+    perf_tracker.record(
+        "qp_objective_per", packdb_time, 0.0, 0.0,
+        4, 4, 2 + 4 * 2,
+        EXPECTED_OBJ, "analytical",
         comparison_status="optimal",
     )
