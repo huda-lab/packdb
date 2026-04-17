@@ -1,11 +1,10 @@
 # Entity-Scope Test Coverage — Todo
 
-## Missing coverage
+No open gaps.
 
-### MEDIUM: NULL-semantics divergence between entity_scope and PER
-
-NULL-keyed rows are handled *differently* by the two features:
-- **Entity scope**: NULL entity-key columns collapse into a single shared "NULL entity" variable (covered by `test_entity_scoped_null_key`).
-- **PER**: NULL-keyed rows are *excluded* from every group (see `_oracle_helpers.group_indices` and the PER grouping path in `physical_decide.cpp`).
-
-Both behaviours are individually tested and internally consistent, but they diverge from each other. Decide whether the two should be aligned; if so, a test comparing them side-by-side on the same NULL-keyed dataset would catch regressions in whichever behaviour is chosen. See also [per/todo.md](../per/todo.md).
+The previously listed NULL-semantics divergence is now covered by
+`test_entity_scope.py::test_entity_scoped_vs_per_null_semantics`, which runs
+the same dataset through both an entity-scope query and a row-scope+PER query
+and oracle-verifies each side independently, asserting the two optima differ
+in the documented direction (entity-scope shares one variable across NULL
+rows; PER excludes NULL-keyed rows from groups).

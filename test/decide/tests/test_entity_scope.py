@@ -2606,3 +2606,241 @@ def test_entity_scoped_three_way_join_per_region(
     assert abs(packdb_obj - res.objective_value) < 1e-4, (
         f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Entity-scope over a subquery / CTE that wraps a base table
+# ---------------------------------------------------------------------------
+# Regression: plan_decide.cpp used to read child bindings AFTER calling
+# CreatePlan on the child, but LogicalProjection::CreatePlan std::moves its
+# `expressions` vector into the physical op, which leaves GetColumnBindings()
+# empty. The resulting entity_key_physical_indices stayed empty, collapsing
+# all rows into a single entity and silently producing all-zero decisions.
+# Fix: capture child_bindings before CreatePlan.
+
+
+@pytest.mark.correctness
+def test_entity_scoped_over_subquery_of_base_table(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """Entity-scoped variable sourced from a subquery that wraps a base table.
+
+    Regression for a bug where `FROM (SELECT ... FROM base) t DECIDE t.x ...`
+    silently collapsed every row into a single shared entity (all keep=0).
+    """
+    sql = """
+        SELECT t.rk, t.val, keep
+        FROM (
+            SELECT n_nationkey AS rk, CAST(n_nationkey AS DOUBLE) AS val
+            FROM nation
+        ) t
+        DECIDE t.keep IS BOOLEAN
+        SUCH THAT SUM(keep) <= 5
+        MAXIMIZE SUM(keep * t.val)
+    """
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+
+    data = duckdb_conn.execute(
+        "SELECT CAST(n_nationkey AS BIGINT), CAST(n_nationkey AS DOUBLE) FROM nation"
+    ).fetchall()
+    rks = sorted({int(row[0]) for row in data})
+
+    oracle_solver.create_model("entity_scope_subquery_of_base")
+    vnames = {rk: f"keep_{rk}" for rk in rks}
+    for rk in rks:
+        oracle_solver.add_variable(vnames[rk], VarType.BINARY)
+    oracle_solver.add_constraint(
+        {vnames[rk]: 1.0 for rk in rks}, "<=", 5.0, name="sum_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[rk]: float(rk) for rk in rks}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    keep_idx = packdb_cols.index("keep")
+    val_idx = packdb_cols.index("val")
+    rk_idx = packdb_cols.index("rk")
+    packdb_obj = sum(
+        int(row[keep_idx]) * float(row[val_idx]) for row in packdb_rows
+    )
+    assert packdb_obj == pytest.approx(res.objective_value), (
+        f"PackDB obj={packdb_obj}, oracle obj={res.objective_value}"
+    )
+    # Entity consistency: rows with the same rk share the same keep value.
+    per_rk = {}
+    for row in packdb_rows:
+        rk = int(row[rk_idx])
+        keep = int(row[keep_idx])
+        if rk in per_rk:
+            assert per_rk[rk] == keep, f"rk={rk}: inconsistent keep"
+        else:
+            per_rk[rk] = keep
+
+
+@pytest.mark.correctness
+def test_entity_scoped_over_cte_of_base_table(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """Same regression shape as the subquery form, but via a WITH-CTE."""
+    sql = """
+        WITH t(rk, val) AS (
+            SELECT n_nationkey, CAST(n_nationkey AS DOUBLE) FROM nation
+        )
+        SELECT t.rk, t.val, keep
+        FROM t
+        DECIDE t.keep IS BOOLEAN
+        SUCH THAT SUM(keep) <= 5
+        MAXIMIZE SUM(keep * t.val)
+    """
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+
+    data = duckdb_conn.execute(
+        "SELECT CAST(n_nationkey AS BIGINT) FROM nation"
+    ).fetchall()
+    rks = sorted({int(row[0]) for row in data})
+
+    oracle_solver.create_model("entity_scope_cte_of_base")
+    vnames = {rk: f"keep_{rk}" for rk in rks}
+    for rk in rks:
+        oracle_solver.add_variable(vnames[rk], VarType.BINARY)
+    oracle_solver.add_constraint(
+        {vnames[rk]: 1.0 for rk in rks}, "<=", 5.0, name="sum_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[rk]: float(rk) for rk in rks}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    keep_idx = packdb_cols.index("keep")
+    val_idx = packdb_cols.index("val")
+    packdb_obj = sum(
+        int(row[keep_idx]) * float(row[val_idx]) for row in packdb_rows
+    )
+    assert packdb_obj == pytest.approx(res.objective_value), (
+        f"PackDB obj={packdb_obj}, oracle obj={res.objective_value}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# NULL-semantics divergence: entity-scope vs PER
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.per_clause
+def test_entity_scoped_vs_per_null_semantics(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """Side-by-side: NULLs collapse into one entity, but PER drops NULL groups.
+
+    Two queries over the same synthetic-NULL shape. The entity-scope form
+    shares a single variable across all NULL-key rows (so turning it on
+    costs `num_null_rows` against the count cap). The PER form excludes
+    NULL-keyed rows from groups entirely, letting them float free.
+    """
+    base_cte = """
+        WITH t(rk, val) AS (
+            SELECT NULLIF(n_regionkey, 0)::INTEGER,
+                   CAST(n_nationkey AS DOUBLE)
+            FROM nation
+        )
+    """
+
+    # --- (A) Entity-scope: one variable per distinct rk (NULLs share) ---
+    sql_entity = base_cte + """
+        SELECT t.rk, t.val, keep
+        FROM t
+        DECIDE t.keep IS BOOLEAN
+        SUCH THAT SUM(keep) <= 5
+        MAXIMIZE SUM(keep * t.val)
+    """
+    rows_entity, cols_entity = packdb_cli.execute(sql_entity)
+
+    data = duckdb_conn.execute("""
+        SELECT NULLIF(n_regionkey, 0),
+               CAST(n_nationkey AS DOUBLE)
+        FROM nation
+    """).fetchall()
+    # Collapse NULL rk into one entity key
+    def _key(rk):
+        return "NULL" if rk is None else f"r{int(rk)}"
+    entities = {}
+    counts = {}
+    coeffs = {}
+    for rk, val in data:
+        k = _key(rk)
+        entities.setdefault(k, True)
+        counts[k] = counts.get(k, 0) + 1
+        coeffs[k] = coeffs.get(k, 0.0) + float(val)
+    keys = sorted(entities)
+    oracle_solver.create_model("entity_null_vs_per_A")
+    vnames = {k: f"keep_{k}" for k in keys}
+    for k in keys:
+        oracle_solver.add_variable(vnames[k], VarType.BINARY)
+    oracle_solver.add_constraint(
+        {vnames[k]: float(counts[k]) for k in keys}, "<=", 5.0, name="cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[k]: coeffs[k] for k in keys}, ObjSense.MAXIMIZE,
+    )
+    res_a = oracle_solver.solve()
+    assert res_a.status == SolverStatus.OPTIMAL
+
+    keep_idx = cols_entity.index("keep")
+    val_idx = cols_entity.index("val")
+    rk_idx = cols_entity.index("rk")
+    obj_a = sum(int(r[keep_idx]) * float(r[val_idx]) for r in rows_entity)
+    assert obj_a == pytest.approx(res_a.objective_value), (
+        f"(A) entity-scope: PackDB obj={obj_a}, oracle={res_a.objective_value}"
+    )
+    # NULL rows must all share the same keep value.
+    null_keeps = [int(r[keep_idx]) for r in rows_entity if r[rk_idx] is None]
+    assert null_keeps and len(set(null_keeps)) == 1, (
+        f"(A) NULL-keyed rows should share an entity, got: {null_keeps}"
+    )
+
+    # --- (B) Row-scope + PER rk: one picked row per non-NULL group; NULLs free ---
+    sql_per = base_cte + """
+        SELECT t.rk, t.val, keep
+        FROM t
+        DECIDE keep IS BOOLEAN
+        SUCH THAT SUM(keep) <= 1 PER rk
+        MAXIMIZE SUM(keep * t.val)
+    """
+    rows_per, cols_per = packdb_cli.execute(sql_per)
+
+    # Oracle for (B): one variable per row. NULL rows are free of the PER cap.
+    oracle_solver.create_model("entity_null_vs_per_B")
+    row_vars = []
+    for i, (rk, val) in enumerate(data):
+        vn = f"keep_row_{i}"
+        oracle_solver.add_variable(vn, VarType.BINARY)
+        row_vars.append((vn, rk, float(val)))
+    # PER rk excludes NULL rows; one SUM<=1 per non-NULL rk
+    non_null_rks = sorted({rk for _, rk, _ in row_vars if rk is not None})
+    for rk in non_null_rks:
+        oracle_solver.add_constraint(
+            {vn: 1.0 for vn, r, _ in row_vars if r == rk},
+            "<=", 1.0, name=f"cap_r{rk}",
+        )
+    oracle_solver.set_objective(
+        {vn: c for vn, _, c in row_vars}, ObjSense.MAXIMIZE,
+    )
+    res_b = oracle_solver.solve()
+    assert res_b.status == SolverStatus.OPTIMAL
+
+    keep_idx_b = cols_per.index("keep")
+    val_idx_b = cols_per.index("val")
+    obj_b = sum(int(r[keep_idx_b]) * float(r[val_idx_b]) for r in rows_per)
+    assert obj_b == pytest.approx(res_b.objective_value), (
+        f"(B) PER: PackDB obj={obj_b}, oracle={res_b.objective_value}"
+    )
+
+    # Divergence check: the two semantics should give different optima on
+    # this shape (NULL rows free in PER, constrained in entity-scope).
+    assert obj_b > obj_a, (
+        f"Expected PER obj > entity-scope obj (NULL rows free under PER), "
+        f"got entity={obj_a}, per={obj_b}"
+    )
+

@@ -1,6 +1,6 @@
 # AVG Aggregate Test Coverage — Done
 
-Tests live in `test/decide/tests/test_avg.py` (9 tests) plus interactions in
+Tests live in `test/decide/tests/test_avg.py` (11 tests) plus interactions in
 `test_aggregate_local_when.py` and `test_per_objective.py`.
 
 ## Scenarios covered
@@ -15,8 +15,8 @@ Tests live in `test/decide/tests/test_avg.py` (9 tests) plus interactions in
 | AVG with BOOLEAN variables | `test_avg.py` | ✓ |
 | AVG with INTEGER variables | `test_avg.py` | ✓ |
 | AVG in bilinear constraint | `test_avg.py` | ✓ |
-| AVG(x) `<>` K (Big-M + RHS scaling) | `test_avg.py::test_avg_not_equal_boolean` | xfail |
-| AVG(x) `<>` K + WHEN | `test_avg.py::test_avg_not_equal_with_when` | xfail |
+| AVG(x) `<>` K (Big-M + RHS scaling) | `test_avg.py::test_avg_not_equal_boolean` | ✓ |
+| AVG(x) `<>` K + WHEN | `test_avg.py::test_avg_not_equal_with_when` | ✓ |
 | AVG with no decide variable (passthrough) | `test_avg.py` | — |
 | Aggregate-local WHEN on AVG | `test_aggregate_local_when.py` | ✓ |
 | Aggregate-local WHEN + AVG + PER | `test_aggregate_local_when.py` | ✓ |
@@ -37,5 +37,5 @@ Tests live in `test/decide/tests/test_avg.py` (9 tests) plus interactions in
 | AVG | WHEN + PER | ✓ |
 | AVG (inner) | SUM / MAX / MIN (outer) + PER | ✓ |
 | AVG | bilinear constraint | ✓ |
-| AVG | `<>` (NE Big-M) | xfail (see `todo.md` — rewrite leaves fractional coeffs on LHS) |
+| AVG | `<>` (NE Big-M) | ✓ (denominator hoisted to RHS at execution time; LHS stays integer-valued SUM — see `physical_decide.cpp` `ne_avg_rhs_scale` flag) |
 | AVG | entity-scoped | ✓ (`test_entity_scope.py::test_entity_scoped_with_avg`) |

@@ -28,6 +28,11 @@ struct EvaluatedConstraint {
     idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
     string minmax_agg_type;                    // "min" or "max" (empty if not minmax)
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
+    //! AVG(x) <> K path: original LHS was AVG; instead of dividing LHS coefficients by the
+    //! AVG denominator (which would produce fractional coefficients and trip the NE
+    //! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
+    //! inside the deferred NE expansion. Empty PER-STRICT groups keep the original K.
+    bool ne_avg_rhs_scale = false;
 
     //! Bilinear terms in this constraint (var_a * var_b with per-row coefficients)
     struct BilinearTerm {

@@ -443,13 +443,6 @@ def test_avg_bilinear_constraint(
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-@pytest.mark.xfail(
-    strict=True, raises=PackDBCliError,
-    reason="AVG(x) <> K: AVG→SUM rewrite distributes 1/N into LHS "
-    "coefficients, so the NE integer-step guard sees fractional coefficients "
-    "and rejects. Expected lowering is SUM(x) <> K*N (integer-valued LHS), "
-    "which would pass the guard. Un-xfail when the rewrite hoists 1/N to RHS.",
-)
 def test_avg_not_equal_boolean(
     packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
@@ -514,12 +507,6 @@ def test_avg_not_equal_boolean(
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-@pytest.mark.xfail(
-    strict=True, raises=PackDBCliError,
-    reason="AVG(x) <> K WHEN cond: same root cause as test_avg_not_equal_boolean, "
-    "but with N = count of WHEN-qualifying rows. Un-xfail when the AVG→SUM "
-    "rewrite hoists 1/N to RHS for the NE case.",
-)
 def test_avg_not_equal_with_when(
     packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):

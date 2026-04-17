@@ -2,11 +2,19 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
 namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
     D_ASSERT(op.children.size() == 1);
+    // Capture child column bindings BEFORE CreatePlan: several logical operators
+    // (notably LogicalProjection) move their `expressions` vector into the physical
+    // op during CreatePlan, which leaves GetColumnBindings() returning an empty
+    // vector afterward. LogicalGet isn't affected because its bindings come from
+    // column_ids, which is why base-table entity scopes worked and subquery /
+    // CTE-backed scopes silently collapsed to a single entity.
+    auto child_bindings = op.children[0]->GetColumnBindings();
     auto child_plan = CreatePlan(*op.children[0]);
     auto decide_op = make_uniq<PhysicalDecide>(
         op.types, op.estimated_cardinality, std::move(child_plan),
@@ -30,7 +38,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // (table_index, col_index) to physical chunk position.
     // Only include columns that survived DuckDB's column pruning.
     if (!op.entity_scopes.empty()) {
-        auto child_bindings = op.children[0]->GetColumnBindings();
         // Refresh entity_key_bindings from entity_key_expressions: the column
         // pruner rebinds the expressions alongside other columns, but the stale
         // bindings on EntityScopeInfo are not updated.

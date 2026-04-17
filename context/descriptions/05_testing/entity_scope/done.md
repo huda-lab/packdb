@@ -45,6 +45,9 @@ oracle-verified.
 | `test_entity_scoped_subquery_per_three_way` | Scalar uncorrelated subquery RHS + PER + entity-scoped (three-way) | ✓ |
 | `test_entity_scoped_null_key` | NULL in entity-key column groups into a single shared entity | ✓ |
 | `test_entity_scoped_three_way_join_per_region` | customer × nation × region fan-out, entity variable on nation, PER on outer-table column | ✓ |
+| `test_entity_scoped_over_subquery_of_base_table` | Regression: `FROM (SELECT ... FROM base) t DECIDE t.x ...` — used to silently collapse to one entity because child bindings were read after CreatePlan moved projection expressions out (`plan_decide.cpp`) | ✓ |
+| `test_entity_scoped_over_cte_of_base_table` | Same regression shape via WITH-CTE | ✓ |
+| `test_entity_scoped_vs_per_null_semantics` | Side-by-side divergence: entity-scope collapses NULL keys into one shared entity; PER excludes NULL-keyed rows from groups (rows float free of the cap) | ✓ |
 
 ## Feature interactions covered
 
@@ -78,4 +81,6 @@ oracle-verified.
 | entity_scope | uncorrelated scalar subquery RHS + PER (three-way) | ✓ |
 | entity_scope | NULL in entity-key column (single shared entity) | ✓ |
 | entity_scope | three-table fan-out JOIN + PER on outer table | ✓ |
+| entity_scope | source is subquery / CTE wrapping a base table | ✓ (regression for `plan_decide.cpp` child-bindings-after-CreatePlan bug) |
+| entity_scope vs PER | NULL-key semantics divergence (shared entity vs group exclusion) | ✓ |
 | row-scoped (not entity-scoped) | 1-to-many fan-out JOIN | ✓ |

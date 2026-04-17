@@ -2090,6 +2090,31 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         };
 
+        // AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator
+        // produces fractional coefficients, which the NE integer-step guard rejects.
+        // For pure linear LHS where every term is AVG-scaled, hoist the denominator to
+        // the RHS instead — keep LHS as SUM and multiply per-group RHS by group size
+        // in the deferred NE expansion. Mixed AVG/non-AVG terms or bilinear/quadratic
+        // LHS fall through to the existing path (which may still reject).
+        bool ne_avg_hoist = false;
+        if (constraint->ne_indicator_idx != DConstants::INVALID_INDEX &&
+            constraint->lhs_is_aggregate && !constraint->has_bilinear && !constraint->has_quadratic &&
+            !constraint->lhs_terms.empty()) {
+            ne_avg_hoist = true;
+            for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+                if (!term_filters[term_idx].avg_scale) {
+                    ne_avg_hoist = false;
+                    break;
+                }
+            }
+        }
+        if (ne_avg_hoist) {
+            eval_const.ne_avg_rhs_scale = true;
+            for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+                term_filters[term_idx].avg_scale = false;
+            }
+        }
+
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             if (term_filters[term_idx].avg_scale) {
                 ScaleAvgRowCoefficients(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
@@ -3047,7 +3072,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        double rhs = ec.rhs_values[0];
+        // Base (unscaled) RHS. For AVG(x) <> K we store the original K in rhs_values and
+        // multiply by group size per non-empty group below. Empty PER-STRICT groups keep
+        // the original K (AVG over ∅ degenerates to 0 <> K, matching SUM semantics).
+        double base_rhs = ec.rhs_values[0];
 
         for (idx_t g = 0; g < num_groups_to_process; g++) {
             if (group_rows[g].empty()) {
@@ -3057,13 +3085,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // PER STRICT + NE + empty group: SUM(∅) <> K means 0 <> K
                 // If K != 0: trivially true (no constraint needed)
                 // If K == 0: infeasible — emit 0 >= 1
-                if (std::abs(rhs) < 1e-15) {
+                if (std::abs(base_rhs) < 1e-15) {
                     SolverInput::RawConstraint rc;
                     rc.sense = '>';
                     rc.rhs = 1.0;
                     solver_input.global_constraints.push_back(std::move(rc));
                 }
                 continue;
+            }
+
+            double rhs = base_rhs;
+            if (ec.ne_avg_rhs_scale) {
+                rhs *= static_cast<double>(group_rows[g].size());
             }
 
             // Allocate one global binary z for this group
