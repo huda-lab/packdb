@@ -1202,9 +1202,23 @@ static bool SumInnerIsQuadratic(const ParsedExpression &inner,
     if (SumInnerIsQuadraticCore(inner, decide_variables)) {
         return true;
     }
-    // Scaled quadratic: -(POWER(expr, 2)) or K * POWER(expr, 2)
     if (inner.GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &func = inner.Cast<FunctionExpression>();
+        // Nested aggregate-of-quadratic: SUM/AVG/MIN/MAX(quadratic). Preserve
+        // raw AST so the post-bind optimizer strip (decide_optimizer.cpp:634)
+        // can flatten OUTER(INNER(expr)) without symbolic expansion destroying
+        // the POWER node (which would leak a __SUM__ placeholder past the
+        // nested-SUM validator in decide_binder.cpp:281).
+        if (!func.is_operator && func.children.size() == 1) {
+            string inner_name = StringUtil::Lower(func.function_name);
+            if (inner_name == "sum" || inner_name == "avg" ||
+                inner_name == "min" || inner_name == "max") {
+                if (SumInnerIsQuadratic(*func.children[0], decide_variables)) {
+                    return true;
+                }
+            }
+        }
+        // Scaled quadratic: -(POWER(expr, 2)) or K * POWER(expr, 2)
         // Unary negation: -(quadratic)
         if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
             return SumInnerIsQuadraticCore(*func.children[0], decide_variables);
