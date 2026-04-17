@@ -214,6 +214,16 @@ public:
     //! Check if expression contains a specific DECIDE variable
     bool ContainsVariable(const Expression &expr, idx_t var_idx) const;
 
+    //! Returns true iff `expr` is linear (degree ≤ 1) in the DECIDE variables.
+    //! Used as a precondition when routing subtrees into quadratic / bilinear
+    //! slots: the "inner" of POWER(inner, 2) and each side of a bilinear x*y
+    //! must be linear, otherwise the total degree would exceed 2 and the Q
+    //! matrix would be silently wrong. Sums/subtractions/unary-negation of
+    //! linear subexpressions are linear; a multiplication is linear only if
+    //! at most one factor contains a decide variable. Any other function
+    //! (POWER, SIN, ...) is linear only when it contains no decide variable.
+    bool IsLinearInDecideVars(const Expression &expr) const;
+
     //! Extract coefficient expression, removing the specified variable
     //! For example: from "x * 5 * l_tax", removes x and returns "5 * l_tax"
     unique_ptr<Expression> ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const;
@@ -221,6 +231,21 @@ public:
     //! Main visitor: extract all terms from a SUM argument
     //! Handles + operators (recursively), * operators (extract var and coef), constants
     void ExtractTerms(const Expression &expr, vector<Term> &out_terms) const;
+
+    //! Forward declaration — see physical_decide.cpp for the full definition.
+    //! The struct holds a non-owning `const Expression *` into the caller's
+    //! expression tree plus a scalar sign multiplier; defining it in the .cpp
+    //! keeps that lifetime contract internal to the execution operator.
+    struct QuadraticPattern;
+
+    //! Detect quadratic patterns in a DECIDE objective/constraint expression:
+    //!   POWER(expr, 2), POW(expr, 2), expr ** 2,
+    //!   (expr) * (expr) with identical children,
+    //!   -(quadratic_pattern),
+    //!   K * quadratic_pattern (K constant, either side).
+    //! Cast wrappers are unwrapped transparently. The `inner linear expression`
+    //! returned is the argument inside POWER / one side of the self-product.
+    QuadraticPattern DetectQuadraticPattern(const Expression &expr) const;
 };
 
 } // namespace duckdb

@@ -132,6 +132,57 @@ bool PhysicalDecide::ContainsVariable(const Expression &expr, idx_t var_idx) con
     return found;
 }
 
+bool PhysicalDecide::IsLinearInDecideVars(const Expression &expr) const {
+    // Column refs and constants: a decide-var col-ref contributes degree 1;
+    // non-decide col-refs and constants contribute degree 0. Both are linear.
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+        expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT ||
+        expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+        return true;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        return IsLinearInDecideVars(*expr.Cast<BoundCastExpression>().child);
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+        auto &func = expr.Cast<BoundFunctionExpression>();
+        string fname = StringUtil::Lower(func.function.name);
+
+        // Additive operators preserve linearity iff every child is linear.
+        if (fname == "+" || fname == "-") {
+            for (auto &child : func.children) {
+                if (!IsLinearInDecideVars(*child)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Multiplication is linear iff at most one factor contains a decide
+        // variable and every factor is itself linear. Two var-carrying factors
+        // (e.g. x * y, x * POWER(y,2)) push the product to degree ≥ 2.
+        if (fname == "*") {
+            idx_t factors_with_vars = 0;
+            for (auto &child : func.children) {
+                if (!IsLinearInDecideVars(*child)) {
+                    return false;
+                }
+                if (FindDecideVariable(*child) != DConstants::INVALID_INDEX) {
+                    factors_with_vars++;
+                }
+            }
+            return factors_with_vars <= 1;
+        }
+
+        // Any other function (POWER, SIN, ABS, ...) is linear only when none
+        // of its arguments reference a decide variable (it is a pure data
+        // expression evaluated at runtime into a coefficient).
+        return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
+    }
+
+    // Unknown expression classes: linear only if they contain no decide var.
+    return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
+}
+
 unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const {
     // If this IS the variable itself, return constant 1
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -174,6 +225,122 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
 
     // Otherwise, return a copy of the entire expression (no variable in it)
     return expr.Copy();
+}
+
+//! Result of DetectQuadraticPattern. `inner_linear_expr` is a non-owning
+//! pointer into the tree rooted at the caller's expression (valid only
+//! while that tree is alive). `sign` carries the scalar multiplier from
+//! negation and constant-times-quadratic patterns (e.g. `-POWER(x,2)` → -1,
+//! `(-2)*POWER` → -2). When `inner_linear_expr == nullptr`, no pattern
+//! matched. Defined here (not in the header) so the lifetime contract stays
+//! internal to this translation unit.
+struct PhysicalDecide::QuadraticPattern {
+    const Expression *inner_linear_expr = nullptr;
+    double sign = 1.0;
+};
+
+PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Expression &expr) const {
+    // Unwrap any cast wrappers on the incoming expression.
+    const Expression *cur = &expr;
+    while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+        cur = cur->Cast<BoundCastExpression>().child.get();
+    }
+    if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+        return {};
+    }
+    auto &func = cur->Cast<BoundFunctionExpression>();
+    string fname = StringUtil::Lower(func.function.name);
+
+    // Fast path: nothing below this point can match on names outside this set.
+    // Without the gate every recursive additive (`+`) node in the objective
+    // tree would pay for the self-product `ToString() == ToString()` compare,
+    // which is O(subtree-size) — turning the walker into O(n^2) on deep sums.
+    if (fname != "-" && fname != "*" && fname != "power" && fname != "pow" && fname != "**") {
+        return {};
+    }
+
+    // -(quadratic)
+    if (fname == "-" && func.children.size() == 1) {
+        auto inner = DetectQuadraticPattern(*func.children[0]);
+        if (inner.inner_linear_expr) {
+            return {inner.inner_linear_expr, -inner.sign};
+        }
+    }
+
+    // K * quadratic or quadratic * K (constant on either side)
+    if (fname == "*" && func.children.size() == 2) {
+        for (idx_t side = 0; side < 2; side++) {
+            const Expression *maybe_const = func.children[side].get();
+            while (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                maybe_const = maybe_const->Cast<BoundCastExpression>().child.get();
+            }
+            if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                double cval = maybe_const->Cast<BoundConstantExpression>()
+                                  .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                if (cval != 0.0) {
+                    auto inner = DetectQuadraticPattern(*func.children[1 - side]);
+                    if (inner.inner_linear_expr) {
+                        return {inner.inner_linear_expr, cval * inner.sign};
+                    }
+                }
+            }
+        }
+    }
+
+    // POWER / POW / **  with literal exponent 2
+    if ((fname == "power" || fname == "pow" || fname == "**") && func.children.size() == 2) {
+        const Expression *exp_expr = func.children[1].get();
+        while (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            exp_expr = exp_expr->Cast<BoundCastExpression>().child.get();
+        }
+        if (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+            double exponent = exp_expr->Cast<BoundConstantExpression>()
+                                  .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+            if (exponent == 2.0) {
+                const Expression *inner = func.children[0].get();
+                while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    inner = inner->Cast<BoundCastExpression>().child.get();
+                }
+                if (FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
+                    // Shape matches POWER(expr, 2); reject expr that is itself
+                    // degree > 1 in decide vars (e.g. POWER(POWER(x,2), 2) =
+                    // x^4, POWER(x*y, 2) = x^2 y^2) rather than silently
+                    // emitting an x^2-shaped Q term.
+                    if (!IsLinearInDecideVars(*inner)) {
+                        throw InvalidInputException(
+                            "DECIDE objective/constraint contains a non-linear expression "
+                            "inside POWER(..., 2) (total degree > 2 in decision variables). "
+                            "Only POWER(linear_expr, 2) is supported; rewrite the expression "
+                            "or combine it into a single quadratic group.");
+                    }
+                    return {inner, 1.0};
+                }
+            }
+        }
+    }
+
+    // (expr) * (expr) with identical children containing a DECIDE variable
+    if (fname == "*" && func.children.size() == 2 &&
+        func.children[0]->ToString() == func.children[1]->ToString() &&
+        FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
+        const Expression *inner = func.children[0].get();
+        while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            inner = inner->Cast<BoundCastExpression>().child.get();
+        }
+        // Identical-child self-product matches `(expr)*(expr)`; the inner
+        // must be linear in decide vars or the product is degree > 2 (e.g.
+        // POWER(x,2) * POWER(x,2) = x^4, (x*y) * (x*y) = x^2 y^2).
+        if (!IsLinearInDecideVars(*inner)) {
+            throw InvalidInputException(
+                "DECIDE objective/constraint contains a self-product of a non-linear "
+                "expression (e.g. POWER(x, 2) * POWER(x, 2) or (x*y) * (x*y)), total "
+                "degree > 2 in decision variables. Only (linear_expr) * (linear_expr) "
+                "is supported as a quadratic pattern.");
+        }
+        return {inner, 1.0};
+    }
+
+    return {};
 }
 
 void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_terms) const {
@@ -696,6 +863,38 @@ public:
     //! Linear terms (c * x, constants) go to objective->terms via ExtractTerms.
     void ExtractLinearAndBilinearTerms(const Expression &expr, Objective &obj, int sign,
                                        const Expression *filter = nullptr) {
+        // PackDB: detect quadratic patterns (POWER / x*x / negated / const * POWER)
+        // *before* any linear-structure traversal. This allows mixed shapes like
+        // SUM(POWER(x-t, 2) + penalty*x) to route the POWER leaf into squared_terms
+        // while the `+` recursion below sends the linear sibling into terms.
+        //
+        // The objective currently supports exactly one quadratic group per
+        // objective (the inner expression of a single SUM(POWER(...))), with a
+        // single scalar quadratic_sign. Additional quadratic groups (e.g.
+        // `SUM(POWER(x,2)) + SUM(POWER(y,2))`) would need per-group Q matrices
+        // downstream and are explicitly rejected.
+        auto quad_pattern = op.DetectQuadraticPattern(expr);
+        if (quad_pattern.inner_linear_expr) {
+            double effective_sign = quad_pattern.sign * static_cast<double>(sign);
+            if (obj.has_quadratic) {
+                throw InvalidInputException(
+                    "DECIDE objective contains multiple quadratic (POWER / (expr)*(expr)) "
+                    "groups. Only a single quadratic group plus linear terms is supported; "
+                    "combine them mathematically or rewrite the objective."
+                );
+            }
+            obj.has_quadratic = true;
+            obj.quadratic_sign = effective_sign;
+            idx_t before = obj.squared_terms.size();
+            op.ExtractTerms(*quad_pattern.inner_linear_expr, obj.squared_terms);
+            if (filter) {
+                for (idx_t i = before; i < obj.squared_terms.size(); i++) {
+                    obj.squared_terms[i].filter = filter->Copy();
+                }
+            }
+            return;
+        }
+
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
             auto &func = expr.Cast<BoundFunctionExpression>();
             string fname = func.function.name;
@@ -733,6 +932,22 @@ public:
                     if (func.children[0]->ToString() == func.children[1]->ToString()) {
                         // Fall through to linear extraction (shouldn't happen — QP detected earlier)
                     } else {
+                        // Guard against degree > 2 shapes: each side must be linear
+                        // in decide vars. Rejects e.g. x * POWER(y, 2) (degree 3),
+                        // POWER(x, 2) * POWER(y, 2) (degree 4), (x*y) * z (degree 3).
+                        // Without this gate the bilinear emitter silently treats the
+                        // inner POWER / nested-* as an opaque "data coefficient",
+                        // corrupting Q and in practice crashing the coefficient
+                        // evaluator when the coefficient re-references a decide var.
+                        if (!op.IsLinearInDecideVars(*func.children[0]) ||
+                            !op.IsLinearInDecideVars(*func.children[1])) {
+                            throw InvalidInputException(
+                                "DECIDE objective contains a product of decision variables "
+                                "with total degree > 2 (e.g. x * POWER(y, 2), POWER(x, 2) * "
+                                "POWER(y, 2), x * x * y). Only bilinear (x * y, different "
+                                "variables, each linear) or quadratic (POWER(linear_expr, 2)) "
+                                "forms are supported.");
+                        }
                         // Bilinear term: extract var_a, var_b, and optional data coefficient
                         // The expression is of the form: coef_a * var_a * coef_b * var_b
                         // We need to extract both variable indices and any remaining data coefficient.
@@ -858,6 +1073,12 @@ public:
                                 inner = inner->Cast<BoundCastExpression>().child.get();
                             }
                             if (op.FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
+                                if (!op.IsLinearInDecideVars(*inner)) {
+                                    throw InvalidInputException(
+                                        "DECIDE constraint contains a non-linear expression "
+                                        "inside POWER(..., 2) (total degree > 2 in decision "
+                                        "variables). Only POWER(linear_expr, 2) is supported.");
+                                }
                                 return inner;
                             }
                         }
@@ -870,6 +1091,13 @@ public:
                     const Expression *inner = qf.children[0].get();
                     while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
                         inner = inner->Cast<BoundCastExpression>().child.get();
+                    }
+                    if (!op.IsLinearInDecideVars(*inner)) {
+                        throw InvalidInputException(
+                            "DECIDE constraint contains a self-product of a non-linear "
+                            "expression (e.g. POWER(x, 2) * POWER(x, 2)), total degree > 2 "
+                            "in decision variables. Only (linear_expr) * (linear_expr) is "
+                            "supported as a quadratic pattern.");
                     }
                     return inner;
                 }
@@ -923,6 +1151,19 @@ public:
                 idx_t right_var = op.FindDecideVariable(*func.children[1]);
                 if (left_var != DConstants::INVALID_INDEX && right_var != DConstants::INVALID_INDEX &&
                     func.children[0]->ToString() != func.children[1]->ToString()) {
+                    // Guard against degree > 2 shapes in constraints (mirrors the
+                    // objective-side check). Without this, x * POWER(y,2) silently
+                    // becomes a bilinear x*y with POWER(y,2) carried as an opaque
+                    // "coefficient" that still references y.
+                    if (!op.IsLinearInDecideVars(*func.children[0]) ||
+                        !op.IsLinearInDecideVars(*func.children[1])) {
+                        throw InvalidInputException(
+                            "DECIDE constraint contains a product of decision variables "
+                            "with total degree > 2 (e.g. x * POWER(y, 2), POWER(x, 2) * "
+                            "POWER(y, 2), x * x * y). Only bilinear (x * y, different "
+                            "variables, each linear) or quadratic (POWER(linear_expr, 2)) "
+                            "forms are supported.");
+                    }
                     BilinearConstraintTerm bt;
                     bt.var_a = left_var;
                     bt.var_b = right_var;
@@ -1005,12 +1246,16 @@ public:
 
         idx_t before = obj.terms.size();
         idx_t bilinear_before = obj.bilinear_terms.size();
+        idx_t squared_before = obj.squared_terms.size();
         ExtractLinearAndBilinearTerms(*agg.children[0], obj, sign, agg.filter.get());
         for (idx_t i = before; i < obj.terms.size(); i++) {
             obj.terms[i].avg_scale = is_avg;
         }
         for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
             obj.bilinear_terms[i].avg_scale = is_avg;
+        }
+        for (idx_t i = squared_before; i < obj.squared_terms.size(); i++) {
+            obj.squared_terms[i].avg_scale = is_avg;
         }
     }
 
@@ -1056,121 +1301,24 @@ public:
 
             objective = make_uniq<Objective>();
 
-            // Check if the SUM argument is a quadratic pattern: POWER(expr, 2) or expr * expr
-            // Also detect negated quadratic: -(POWER(expr, 2)) or (-1) * POWER(expr, 2)
-            auto *sum_arg = agg.children[0].get();
-            // Unwrap casts
-            while (sum_arg->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                sum_arg = sum_arg->Cast<BoundCastExpression>().child.get();
-            }
-
-            bool is_quadratic = false;
-            const Expression *inner_linear_expr = nullptr;
-            double quadratic_sign = 1.0;
-
-            // Lambda to detect core quadratic patterns (POWER/POW/**/identical multiplication)
-            auto TryDetectQuadratic = [&](const Expression *expr) -> bool {
-                if (expr->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
-                auto &func = expr->Cast<BoundFunctionExpression>();
-                string fname = StringUtil::Lower(func.function.name);
-
-                if (fname == "power" || fname == "pow" || fname == "**") {
-                    if (func.children.size() == 2) {
-                        const Expression *exp_expr = func.children[1].get();
-                        while (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                            exp_expr = exp_expr->Cast<BoundCastExpression>().child.get();
-                        }
-                        if (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                            auto &exp_val = exp_expr->Cast<BoundConstantExpression>();
-                            double exponent = exp_val.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                            if (exponent == 2.0) {
-                                inner_linear_expr = func.children[0].get();
-                                return true;
-                            }
-                        }
-                    }
-                } else if (fname == "*" && func.children.size() == 2) {
-                    if (func.children[0]->ToString() == func.children[1]->ToString()) {
-                        if (op.FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
-                            inner_linear_expr = func.children[0].get();
-                            return true;
-                        }
-                    }
+            // Walk the SUM argument. ExtractLinearAndBilinearTerms recognises
+            // quadratic patterns (POWER/(expr)*(expr)/negated/K*POWER) at any
+            // position in `+`/`-` trees and routes them into squared_terms, so
+            // the same walker handles pure QP, pure linear+bilinear, and the
+            // mixed forms (e.g. SUM(POWER(x-t, 2) + penalty*x)) uniformly.
+            idx_t before = objective->terms.size();
+            idx_t bilinear_before = objective->bilinear_terms.size();
+            idx_t squared_before = objective->squared_terms.size();
+            ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1, agg.filter.get());
+            if (agg.alias == AVG_REWRITE_TAG) {
+                for (idx_t i = before; i < objective->terms.size(); i++) {
+                    objective->terms[i].avg_scale = true;
                 }
-                return false;
-            };
-
-            // Try direct quadratic pattern
-            is_quadratic = TryDetectQuadratic(sum_arg);
-
-            // Try negated quadratic: -(quadratic) or (-1) * quadratic
-            if (!is_quadratic && sum_arg->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-                auto &outer_func = sum_arg->Cast<BoundFunctionExpression>();
-                string outer_name = StringUtil::Lower(outer_func.function.name);
-
-                // Unary negation: -(POWER(expr, 2))
-                if (outer_name == "-" && outer_func.children.size() == 1) {
-                    const Expression *child = outer_func.children[0].get();
-                    while (child->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                        child = child->Cast<BoundCastExpression>().child.get();
-                    }
-                    if (TryDetectQuadratic(child)) {
-                        quadratic_sign = -1.0;
-                        is_quadratic = true;
-                    }
+                for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
+                    objective->bilinear_terms[i].avg_scale = true;
                 }
-
-                // Multiplication by constant: K * quadratic or quadratic * K
-                if (!is_quadratic && outer_name == "*" && outer_func.children.size() == 2) {
-                    for (idx_t i = 0; i < 2; i++) {
-                        const Expression *maybe_const = outer_func.children[i].get();
-                        while (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                            maybe_const = maybe_const->Cast<BoundCastExpression>().child.get();
-                        }
-                        if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                            double cval = maybe_const->Cast<BoundConstantExpression>()
-                                              .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                            if (cval != 0.0 && TryDetectQuadratic(outer_func.children[1 - i].get())) {
-                                quadratic_sign = cval;
-                                is_quadratic = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (is_quadratic && inner_linear_expr) {
-                objective->has_quadratic = true;
-                objective->quadratic_sign = quadratic_sign;
-                // Unwrap casts from inner expression
-                while (inner_linear_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    inner_linear_expr = inner_linear_expr->Cast<BoundCastExpression>().child.get();
-                }
-                op.ExtractTerms(*inner_linear_expr, objective->squared_terms);
-                if (agg.filter) {
-                    for (auto &term : objective->squared_terms) {
-                        term.filter = agg.filter->Copy();
-                    }
-                }
-                if (agg.alias == AVG_REWRITE_TAG) {
-                    for (auto &term : objective->squared_terms) {
-                        term.avg_scale = true;
-                    }
-                }
-            } else {
-                // Linear + possible bilinear objective
-                // Walk the SUM argument and split into linear terms and bilinear terms.
-                idx_t before = objective->terms.size();
-                idx_t bilinear_before = objective->bilinear_terms.size();
-                ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1, agg.filter.get());
-                if (agg.alias == AVG_REWRITE_TAG) {
-                    for (idx_t i = before; i < objective->terms.size(); i++) {
-                        objective->terms[i].avg_scale = true;
-                    }
-                    for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
-                        objective->bilinear_terms[i].avg_scale = true;
-                    }
+                for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
+                    objective->squared_terms[i].avg_scale = true;
                 }
             }
 
@@ -2062,28 +2210,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
 
     // 2. Evaluate objective
-    vector<TermFilterState> obj_term_filters;
+    vector<TermFilterState> obj_linear_term_filters;
+    vector<TermFilterState> obj_quadratic_term_filters;
     vector<TermFilterState> obj_bilinear_filters;
     vector<bool> objective_when_mask;
-    bool objective_terms_are_quadratic = false;
     bool objective_has_when = false;
 
     if (gstate.objective) {
-        // Determine which term list to evaluate (linear or quadratic inner)
-        auto &active_terms = gstate.objective->has_quadratic
-            ? gstate.objective->squared_terms
-            : gstate.objective->terms;
-        auto &active_coefficients = gstate.objective->has_quadratic
-            ? gstate.evaluated_quadratic_coefficients
-            : gstate.evaluated_objective_coefficients;
-        auto &active_var_indices = gstate.objective->has_quadratic
-            ? gstate.quadratic_variable_indices
-            : gstate.objective_variable_indices;
-
         if (gstate.objective->has_quadratic) {
             gstate.has_quadratic_objective = true;
             gstate.quadratic_sign = gstate.objective->quadratic_sign;
-            objective_terms_are_quadratic = true;
         }
 
         objective_has_when = (gstate.objective->when_condition != nullptr);
@@ -2095,16 +2231,135 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        obj_term_filters.resize(active_terms.size());
-        for (idx_t term_idx = 0; term_idx < active_terms.size(); term_idx++) {
-            auto &term = active_terms[term_idx];
-            obj_term_filters[term_idx].avg_scale = term.avg_scale;
-            if (term.filter) {
-                obj_term_filters[term_idx].has_filter = true;
-                obj_term_filters[term_idx].mask = EvaluateBooleanMask(*term.filter);
-                if (obj_term_filters[term_idx].mask.size() != num_rows) {
-                    throw InternalException("DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                                            num_rows, obj_term_filters[term_idx].mask.size());
+        // PackDB: evaluate both the linear and quadratic-inner term lists so that
+        // mixed objectives (e.g. SUM(POWER(x-t, 2) + penalty * x)) emit coefficients
+        // into both solver-input arrays. The two buckets are processed together
+        // inside a single scan over gstate.data — doubling coefficient evaluators
+        // was cheap, but doubling the ColumnDataCollection scan was not.
+        struct ObjBucket {
+            vector<Term> *src_terms;
+            vector<vector<double>> *out_coeffs;
+            vector<idx_t> *out_var_indices;
+            vector<TermFilterState> *out_term_filters;
+        };
+        vector<ObjBucket> buckets;
+        if (!gstate.objective->terms.empty()) {
+            buckets.push_back({&gstate.objective->terms,
+                               &gstate.evaluated_objective_coefficients,
+                               &gstate.objective_variable_indices,
+                               &obj_linear_term_filters});
+        }
+        if (gstate.objective->has_quadratic) {
+            buckets.push_back({&gstate.objective->squared_terms,
+                               &gstate.evaluated_quadratic_coefficients,
+                               &gstate.quadratic_variable_indices,
+                               &obj_quadratic_term_filters});
+        }
+
+        if (!buckets.empty()) {
+            // Per-bucket: pre-size filters + out_coeffs and snapshot variable indices.
+            for (auto &b : buckets) {
+                b.out_term_filters->resize(b.src_terms->size());
+                b.out_coeffs->resize(b.src_terms->size());
+                for (idx_t term_idx = 0; term_idx < b.src_terms->size(); term_idx++) {
+                    auto &term = (*b.src_terms)[term_idx];
+                    (*b.out_term_filters)[term_idx].avg_scale = term.avg_scale;
+                    if (term.filter) {
+                        (*b.out_term_filters)[term_idx].has_filter = true;
+                        (*b.out_term_filters)[term_idx].mask = EvaluateBooleanMask(*term.filter);
+                        if ((*b.out_term_filters)[term_idx].mask.size() != num_rows) {
+                            throw InternalException(
+                                "DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
+                                num_rows, (*b.out_term_filters)[term_idx].mask.size());
+                        }
+                    }
+                    b.out_var_indices->push_back(term.variable_index);
+                }
+            }
+
+            // Flatten all coefficient expressions across buckets. `route[i]` names
+            // the bucket and the position within that bucket that flat term `i`
+            // writes to — so the scan loop can route each evaluated value back
+            // without knowing which bucket it came from.
+            vector<unique_ptr<Expression>> flat_coeffs;
+            vector<pair<idx_t, idx_t>> route; // (bucket_idx, term_idx)
+            for (idx_t b_idx = 0; b_idx < buckets.size(); b_idx++) {
+                auto &b = buckets[b_idx];
+                for (idx_t term_idx = 0; term_idx < b.src_terms->size(); term_idx++) {
+                    flat_coeffs.push_back(
+                        TransformToChunkExpression(*(*b.src_terms)[term_idx].coefficient, context));
+                    route.emplace_back(b_idx, term_idx);
+                }
+            }
+
+            ColumnDataScanState obj_scan_state;
+            gstate.data.InitializeScan(obj_scan_state);
+            DataChunk obj_chunk;
+            obj_chunk.Initialize(context, gstate.data.Types());
+
+            while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
+                for (idx_t j = 0; j < flat_coeffs.size(); j++) {
+                    ExpressionExecutor term_executor(context);
+                    term_executor.AddExpression(*flat_coeffs[j]);
+
+                    DataChunk term_result;
+                    vector<LogicalType> result_types = {flat_coeffs[j]->return_type};
+                    term_result.Initialize(context, result_types);
+                    term_executor.Execute(obj_chunk, term_result);
+
+                    auto &vec = term_result.data[0];
+                    auto &b = buckets[route[j].first];
+                    idx_t term_idx = route[j].second;
+                    auto &out = (*b.out_coeffs)[term_idx];
+                    int term_sign = (*b.src_terms)[term_idx].sign;
+
+                    for (idx_t row_in_chunk = 0; row_in_chunk < obj_chunk.size(); row_in_chunk++) {
+                        Value val = vec.GetValue(row_in_chunk);
+                        if (val.IsNull()) {
+                            throw InvalidInputException(
+                                "DECIDE objective coefficient returned NULL at row %llu. "
+                                "NULL values are not allowed in optimization objective. "
+                                "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
+                                out.size());
+                        }
+                        double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                        if (!std::isfinite(double_val)) {
+                            throw InvalidInputException(
+                                "DECIDE objective coefficient contains invalid value (NaN or Infinity) at row %llu. "
+                                "Common causes:\n"
+                                "  • Division by zero in objective expression\n"
+                                "  • Arithmetic overflow in calculations\n"
+                                "  • NULL values that propagated through math operations\n"
+                                "Check your objective expressions and input data.",
+                                out.size());
+                        }
+                        out.push_back(double_val * term_sign);
+                    }
+                }
+            }
+
+            // Apply per-term aggregate-local WHEN filters and the expression-level
+            // WHEN mask once per bucket. Both masks are shared between linear and
+            // quadratic lists for a mixed objective.
+            for (auto &b : buckets) {
+                for (idx_t term_idx = 0; term_idx < b.out_coeffs->size(); term_idx++) {
+                    if ((*b.out_term_filters)[term_idx].has_filter) {
+                        auto &mask = (*b.out_term_filters)[term_idx].mask;
+                        auto &out = (*b.out_coeffs)[term_idx];
+                        for (idx_t row = 0; row < out.size(); row++) {
+                            if (!mask[row]) {
+                                out[row] = 0.0;
+                            }
+                        }
+                    }
+                }
+                if (objective_has_when) {
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (objective_when_mask[row]) continue;
+                        for (idx_t term_idx = 0; term_idx < b.out_coeffs->size(); term_idx++) {
+                            (*b.out_coeffs)[term_idx][row] = 0.0;
+                        }
+                    }
                 }
             }
         }
@@ -2119,93 +2374,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (obj_bilinear_filters[term_idx].mask.size() != num_rows) {
                     throw InternalException("DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
                                             num_rows, obj_bilinear_filters[term_idx].mask.size());
-                }
-            }
-        }
-
-        // Build transformed expressions
-        vector<unique_ptr<Expression>> transformed_coefficients;
-        for (auto &term : active_terms) {
-            active_var_indices.push_back(term.variable_index);
-            transformed_coefficients.push_back(TransformToChunkExpression(*term.coefficient, context));
-        }
-
-        active_coefficients.resize(active_terms.size());
-
-        // Scan and evaluate chunk by chunk
-        ColumnDataScanState obj_scan_state;
-        gstate.data.InitializeScan(obj_scan_state);
-
-        DataChunk obj_chunk;
-        obj_chunk.Initialize(context, gstate.data.Types());
-
-        while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
-            // Evaluate each term separately
-            for (idx_t term_idx = 0; term_idx < transformed_coefficients.size(); term_idx++) {
-                ExpressionExecutor term_executor(context);
-                term_executor.AddExpression(*transformed_coefficients[term_idx]);
-
-                // Use the expression's actual return type, then cast to double when extracting
-                DataChunk term_result;
-                vector<LogicalType> result_types = {transformed_coefficients[term_idx]->return_type};
-                term_result.Initialize(context, result_types);
-                term_executor.Execute(obj_chunk, term_result);
-
-                // Extract values and cast to double
-                auto &vec = term_result.data[0];
-                for (idx_t row_in_chunk = 0; row_in_chunk < obj_chunk.size(); row_in_chunk++) {
-                    // Cast to double regardless of the actual type (could be INTEGER, DOUBLE, etc.)
-                    Value val = vec.GetValue(row_in_chunk);
-
-                    // Check for NULL values
-                    if (val.IsNull()) {
-                        throw InvalidInputException(
-                            "DECIDE objective coefficient returned NULL at row %llu. "
-                            "NULL values are not allowed in optimization objective. "
-                            "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
-                            active_coefficients[term_idx].size());
-                    }
-
-                    double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-
-                    // Check for NaN or Infinity
-                    if (!std::isfinite(double_val)) {
-                        throw InvalidInputException(
-                            "DECIDE objective coefficient contains invalid value (NaN or Infinity) at row %llu. "
-                            "Common causes:\n"
-                            "  • Division by zero in objective expression\n"
-                            "  • Arithmetic overflow in calculations\n"
-                            "  • NULL values that propagated through math operations\n"
-                            "Check your objective expressions and input data.",
-                            active_coefficients[term_idx].size());
-                    }
-
-                    active_coefficients[term_idx].push_back(
-                        double_val * active_terms[term_idx].sign);
-                }
-            }
-        }
-
-        for (idx_t term_idx = 0; term_idx < active_coefficients.size(); term_idx++) {
-            if (obj_term_filters[term_idx].has_filter) {
-                auto &mask = obj_term_filters[term_idx].mask;
-                for (idx_t row = 0; row < active_coefficients[term_idx].size(); row++) {
-                    if (!mask[row]) {
-                        active_coefficients[term_idx][row] = 0.0;
-                    }
-                }
-            }
-        }
-
-        // PackDB: Apply WHEN mask to objective coefficients
-        if (objective_has_when) {
-            for (idx_t row = 0; row < num_rows; row++) {
-                if (objective_when_mask[row]) {
-                    continue;
-                }
-                // Zero out all objective coefficients for this row
-                for (idx_t term_idx = 0; term_idx < active_coefficients.size(); term_idx++) {
-                    active_coefficients[term_idx][row] = 0.0;
                 }
             }
         }
@@ -2595,7 +2763,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     if (gstate.objective && !gstate.objective->per_columns.empty()) {
         bool objective_has_local_filters = false;
         bool objective_has_unfiltered_part = false;
-        for (auto &f : obj_term_filters) {
+        for (auto &f : obj_linear_term_filters) {
+            objective_has_local_filters |= f.has_filter;
+            objective_has_unfiltered_part |= !f.has_filter;
+        }
+        for (auto &f : obj_quadratic_term_filters) {
             objective_has_local_filters |= f.has_filter;
             objective_has_unfiltered_part |= !f.has_filter;
         }
@@ -2608,7 +2780,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (!objective_has_local_filters || objective_has_unfiltered_part) {
                 return true;
             }
-            for (auto &f : obj_term_filters) {
+            for (auto &f : obj_linear_term_filters) {
+                if (f.has_filter && f.mask[row]) {
+                    return true;
+                }
+            }
+            for (auto &f : obj_quadratic_term_filters) {
                 if (f.has_filter && f.mask[row]) {
                     return true;
                 }
@@ -2765,14 +2942,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     };
 
-    for (idx_t term_idx = 0; term_idx < obj_term_filters.size(); term_idx++) {
-        if (!obj_term_filters[term_idx].avg_scale) {
+    for (idx_t term_idx = 0; term_idx < obj_linear_term_filters.size(); term_idx++) {
+        if (!obj_linear_term_filters[term_idx].avg_scale) {
             continue;
         }
-        auto &coefficients = objective_terms_are_quadratic ? solver_input.quadratic_inner_coefficients[term_idx]
-                                                           : solver_input.objective_coefficients[term_idx];
-        ScaleObjectiveAvgRows(coefficients, obj_term_filters[term_idx].has_filter,
-                              obj_term_filters[term_idx].mask, objective_terms_are_quadratic);
+        ScaleObjectiveAvgRows(solver_input.objective_coefficients[term_idx],
+                              obj_linear_term_filters[term_idx].has_filter,
+                              obj_linear_term_filters[term_idx].mask, false);
+    }
+    for (idx_t term_idx = 0; term_idx < obj_quadratic_term_filters.size(); term_idx++) {
+        if (!obj_quadratic_term_filters[term_idx].avg_scale) {
+            continue;
+        }
+        ScaleObjectiveAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
+                              obj_quadratic_term_filters[term_idx].has_filter,
+                              obj_quadratic_term_filters[term_idx].mask, true);
     }
 
     for (idx_t term_idx = 0; term_idx < obj_bilinear_filters.size(); term_idx++) {
