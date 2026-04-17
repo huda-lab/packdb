@@ -11,8 +11,10 @@ Picks a small batch of high-value gaps from `context/descriptions/05_testing/*/t
 
 ## Hard rules
 
-- **No unilateral design choices.** Every nontrivial decision goes through `AskUserQuestion`: which gaps, how many, where to put tests, what SQL shape, oracle vs. constraint-only, what to do if a bug is found.
-- **Never silently flip a failing test to make it pass.** Stop and escalate to the user.
+- **No unilateral design choices.** Every nontrivial decision goes through `AskUserQuestion`: which gaps, how many, where to put tests, what SQL shape, what to do if a bug is found.
+- **Every new correctness test is oracle-verified.** Build the same problem independently in gurobipy via `oracle_solver` and compare with `compare_solutions`. Analytical / hand-computed closed-form assertions (e.g. `expected = {1: 10.0, 2: 20.0, 3: 30.0}`) are **forbidden** — see `context/descriptions/05_testing/README.md` and `02_operations/oracle.md`. "constraint only" is a legacy tier, acceptable only for pure feasibility queries with no objective.
+- **Independent semantics, not Big-M mirrors.** For discrete constructs PackDB rewrites into Big-M ILPs (COUNT(INTEGER), `<>`, etc.), encode the semantics natively using Gurobi features via `oracle_solver.add_indicator_constraint` or the primitives in `tests/_oracle_helpers.py`. Mirroring PackDB's Big-M only detects lockstep bugs; independent encoding catches encoding errors too. The COUNT × aggregate-local-WHEN bug fixed in commit `293dc6d664` was only visible because the oracle was independent.
+- **Never silently flip a failing test to make it pass.** Stop and escalate to the user. Oracle mismatches usually mean a real bug — don't rewrite the oracle to match PackDB.
 - **Update docs in the same session** — `done.md` and `todo.md` for every area touched. Not optional (CLAUDE.md mandate).
 - **One batch per invocation.** Don't sprawl into Batch 2 unless the user asks.
 
@@ -73,9 +75,9 @@ Then `ExitPlanMode`.
 
 ## Phase 4 — Design each test (still asking)
 
-1. Read 1–2 existing tests in the area to learn fixture conventions, oracle pattern, perf_tracker call shape.
+1. Read 1–2 existing tests in the area to learn fixture conventions, oracle pattern, perf_tracker call shape. Also skim `tests/_oracle_helpers.py` for primitives that already cover the construct (group_indices, add_ne_indicator, add_count_integer_indicators, add_in_domain, add_bool_and, emit_inner_max/min, emit_hard_inner_max/min).
 2. For each test, draft SQL + outline oracle formulation. Show inline before writing code.
-3. `AskUserQuestion`: use todo.md SQL verbatim / adjust / fresh? Oracle compare or constraint-only? Scope (one direction / both / all variants)?
+3. `AskUserQuestion`: use todo.md SQL verbatim / adjust / fresh? Scope (one direction / both / all variants)? Do not ask "oracle or constraint-only?" — oracle is the only valid answer for correctness tests.
 4. If user says "sharper" or "show me", iterate the draft inline (don't write file yet).
 
 ## Phase 5 — Smoke-test SQL
@@ -94,14 +96,28 @@ If infeasible: adjust constants, expand data scope (e.g., `l_orderkey <= 100`), 
 - Each test:
   - Pytest marks (per_clause, min_max, var_*, correctness, etc.)
   - SQL string
+  - Run PackDB via `packdb_cli.execute(sql)` → `(rows, cols)`
   - Fetch oracle data via `duckdb_conn` with explicit casts
-  - Build oracle ILP mirroring PackDB's expected linearization (Big-M, ABS aux vars, per-group structure)
-  - `oracle_solver.solve()` → assert OPTIMAL
-  - Compare PackDB objective to oracle objective with tight tolerance
-  - Sanity-check per-group / per-row constraints on the PackDB result
-  - `perf_tracker.record(...)`
+  - Build the ILP in gurobipy via `oracle_solver`. Use the helpers in
+    `tests/_oracle_helpers.py` for common constructs rather than rolling
+    your own Big-M. For quadratic objectives/constraints use
+    `oracle_solver.set_quadratic_objective(linear, quadratic, sense)` and
+    `oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs)`.
+    For `COUNT(INTEGER)`, `<>`, discrete domain restrictions, use native
+    indicator constraints via `oracle_solver.add_indicator_constraint` or
+    the matching helpers — **do not mirror PackDB's Big-M rewrite**.
+  - `oracle_solver.solve()` → assert OPTIMAL (or INFEASIBLE/UNBOUNDED for
+    cross-verified error tests)
+  - Compare via `compare_solutions(packdb_rows, packdb_cols, result, data,
+    decide_var_names, coeff_fn=...)`. For non-linear (QP/QCQP) objectives,
+    pass `packdb_objective_fn=lambda rows, cols: ...` instead of `coeff_fn`
+    and evaluate the objective directly on PackDB's variable values.
+  - `perf_tracker.record(..., comparison_status=cmp.status, decide_vector=cmp.oracle_vector)`
 
-Mirror existing patterns from `test_per_clause.py`, `test_min_max.py`, `test_abs_linearization.py`.
+Reference patterns: `test_var_boolean.py`, `test_per_clause.py`,
+`test_per_objective.py` (nested aggregates with `emit_inner_max/min`),
+`test_quadratic.py`, `test_quadratic_constraints.py`, `test_error_infeasible.py`
+(oracle cross-verification of infeasibility).
 
 ## Phase 7 — Verify
 

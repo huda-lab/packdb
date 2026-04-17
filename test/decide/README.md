@@ -1,9 +1,9 @@
 # DECIDE Test Framework
 
 Pytest-based testing for PackDB's DECIDE clause. Each correctness test has a
-hand-written Python oracle that builds an ILP model using gurobipy or highspy
-directly — no SQL parsing in the oracle. Oracle results are cached on disk
-so the solver only runs when a test or the database changes.
+hand-written Python oracle that builds an ILP model using gurobipy directly —
+no SQL parsing in the oracle. Oracle results are cached on disk so the solver
+only runs when a test or the database changes.
 
 ## Quick Start
 
@@ -29,8 +29,9 @@ invokes pytest.
 python3 -m venv test/decide/.venv
 source test/decide/.venv/bin/activate
 
-# Install dependencies (vanilla duckdb, highspy, pytest)
+# Install dependencies (vanilla duckdb, gurobipy, pytest)
 pip install -r test/decide/requirements.txt
+# gurobipy requires a valid Gurobi license; run_tests.sh pre-flights this.
 
 # Ensure packdb executable + packdb.db exist
 make                   # build PackDB executable (build/release/packdb)
@@ -184,9 +185,11 @@ The comparison produces a status:
 | `optimal` | Objective matches but at least one assignment differs (alternate optimal) |
 
 Both the status and the full decide vector are stored in the perf JSON and
-oracle cache. Currently all tests report `identical` because both PackDB and
-the oracle use the same solver (HiGHS), which is deterministic. The `optimal`
-status would appear if different solvers were used (e.g. Gurobi for the oracle).
+oracle cache. Both PackDB (via dynamic-loaded libgurobi in the CLI) and the
+oracle (gurobipy) use Gurobi. Most tests report `identical`; the `optimal`
+status appears when the problem has multiple optima and the two Gurobi runs
+pick different ones — that is not a correctness failure, it's an alternate
+optimal solution at the same objective value.
 
 ## Oracle Cache
 
@@ -239,7 +242,7 @@ test/decide/
 ├── conftest.py          # Fixtures (CLI wrapper, duckdb conn, solver, cache, perf)
 ├── packdb_cli.py        # Subprocess wrapper for build/release/packdb executable
 ├── oracle_cache.py      # Oracle result cache + CachedOracleSolver wrapper
-├── solver/              # Solver abstraction (Gurobi / HiGHS)
+├── solver/              # Gurobi-only oracle solver abstraction
 ├── comparison/          # Solution comparison (objective + variable vector)
 ├── performance/         # Perf tracking and reporting
 ├── _tpch_oracle.duckdb  # Auto-generated vanilla TPC-H database (gitignored)
@@ -256,9 +259,9 @@ test/decide/
 │  PackDB (DECIDE queries)        │    │  Oracle (data fetching + ILP)    │
 │                                 │    │                                  │
 │  build/release/packdb (CLI)     │    │  vanilla duckdb (Python package) │
-│        ↕ subprocess             │    │        ↕ in-process              │
-│  packdb.db (PackDB format)      │    │  _tpch_oracle.duckdb (vanilla)  │
-│                                 │    │  generated via CALL dbgen(sf=0.01)│
+│  ↕ subprocess                   │    │  ↕ in-process                    │
+│  packdb.db (PackDB format)      │    │  _tpch_oracle.duckdb (vanilla)   │
+│  solver: Gurobi (dlopen libgrb) │    │  solver: gurobipy                │
 └─────────────────────────────────┘    └──────────────────────────────────┘
          │                                        │
          └──── compare_solutions() ◄──────────────┘

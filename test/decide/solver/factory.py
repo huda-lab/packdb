@@ -1,4 +1,4 @@
-"""Auto-detect the best available solver backend."""
+"""Instantiate the Gurobi oracle solver."""
 
 from __future__ import annotations
 
@@ -6,26 +6,19 @@ from .base import OracleSolver
 
 
 def get_solver() -> OracleSolver:
-    """Return the best available oracle solver.
+    """Return a Gurobi-backed oracle solver.
 
-    Tries gurobipy first (commercial, faster), falls back to highspy (bundled).
-    Raises ImportError if neither is available.
+    Raises ImportError if gurobipy is not installed or no valid license is
+    available — every DECIDE oracle test depends on Gurobi.
     """
     try:
         import gurobipy  # noqa: F401
-        from .gurobi_backend import GurobiSolver
-        return GurobiSolver()
-    except (ImportError, Exception):
-        pass
+    except ImportError as exc:
+        raise ImportError(
+            "gurobipy is required for the DECIDE oracle. "
+            "Install it with: pip install 'gurobipy>=12.0' "
+            "(requires a valid Gurobi license)."
+        ) from exc
 
-    try:
-        import highspy  # noqa: F401
-        from .highs_backend import HighsSolver
-        return HighsSolver()
-    except ImportError:
-        pass
-
-    raise ImportError(
-        "No ILP solver available. Install highspy (pip install highspy) "
-        "or gurobipy (requires Gurobi license)."
-    )
+    from .gurobi_backend import GurobiSolver
+    return GurobiSolver()

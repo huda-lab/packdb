@@ -52,7 +52,7 @@ Also always read:
 
 Launch all three agents simultaneously using the Agent tool. Pass each one the full diff, changed file list, recent commits, and any relevant doc excerpts you gathered. If there is a `scope_hint`, include it.
 
-Each reviewer MUST be instructed: **"Be a devil's advocate. Assume there are bugs. Your job is to prove the implementation wrong, find what was missed, and challenge every assumption. Do not be polite — be precise and critical."**
+Each reviewer MUST be instructed: **"Be a devil's advocate. Assume there are bugs. Your job is to prove the implementation wrong, find what was missed, and challenge every assumption. Do not be polite — be precise and critical. Never suggest that a failing test be flipped to make it pass — oracle mismatches are signals of real bugs (as demonstrated by the COUNT × aggregate-local WHEN fix in commit `293dc6d664`)."**
 
 Each reviewer MUST produce output in this exact format:
 
@@ -89,7 +89,7 @@ Prompt:
 > 1. **Big-M constants** — Is every Big-M value tight? Could it be tighter? An unnecessarily large M weakens the LP relaxation and slows the solver. Read the optimizer code and trace how M is computed.
 > 2. **Rewrite correctness** — For any new or modified algebraic rewrite (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators), is the reformulation mathematically equivalent? Construct a counterexample if you suspect it is not.
 > 3. **Easy/hard classification** — Are MIN/MAX cases classified correctly per the documentation? An easy case handled as hard wastes variables. A hard case handled as easy produces wrong results.
-> 4. **Solver-agnostic compliance** — Does the change work for BOTH Gurobi (C API) and HiGHS (C++ API)? Check that no solver-specific assumptions leak through. Read both solver backend files if solver-adjacent code changed.
+> 4. **Solver-agnostic compliance (PackDB CLI)** — PackDB's CLI dispatch is Gurobi-preferred with HiGHS as a fallback. Does the change work for BOTH Gurobi (C API, `src/packdb/gurobi/gurobi_solver.cpp`) and HiGHS (C++ API, `src/packdb/naive/deterministic_naive.cpp`)? Check that no solver-specific assumptions leak through. If the change is Gurobi-only by necessity (non-convex QP, quadratic constraints, bilinear non-Boolean), confirm HiGHS rejects it with a clear error rather than producing a wrong answer. Note that the test/decide oracle is Gurobi-only by design (`02_operations/oracle.md`); that's separate from CLI compliance.
 > 5. **Adversarial edge cases** — What happens with: zero rows, single row, all-zero coefficients, negative coefficients, infeasible problems, unbounded problems, WHEN filtering all rows out?
 >
 > Key files to read: `src/optimizer/decide/decide_optimizer.cpp`, `src/packdb/utility/ilp_model_builder.cpp`, `src/execution/operator/decide/physical_decide.cpp`, solver backends in `src/packdb/solver/`. Reference `context/descriptions/04_optimizer/` for expected behavior.
@@ -130,7 +130,7 @@ Prompt:
 > You MUST check:
 > 1. **Doc drift** — For every behavioral change in `src/`, is there a corresponding update in `context/descriptions/`? Check `done.md` code pointers (line numbers, file references, tag constants) — are they still accurate after the change? Check `todo.md` — was a planned item just implemented but not removed from todo?
 > 2. **CLAUDE.md sync** — Does the syntax reference in `.claude/CLAUDE.md` still match the actual behavior? Are the "Key PackDB source paths" still correct? Are conventions still accurate?
-> 3. **Test coverage gaps** — Are new code paths exercised by tests in `test/decide/tests/`? What edge cases are NOT tested? Specifically check: does the feature interact with WHEN, PER, QP, MIN/MAX, multiple variables? Are those interactions tested?
+> 3. **Test coverage gaps** — Are new code paths exercised by tests in `test/decide/tests/`? What edge cases are NOT tested? Specifically check: does the feature interact with WHEN, PER, QP, MIN/MAX, multiple variables? Are those interactions tested? **Oracle-verification checks**: every correctness test must use `comparison.compare.compare_solutions` against a gurobipy ILP built via `oracle_solver`. Flag any test that asserts hand-computed expected values (analytical/closed-form) — those are forbidden per `05_testing/README.md`. For discrete constructs (COUNT(INTEGER), `<>`, IN) the oracle should use Gurobi native indicator constraints via `add_indicator_constraint` or helpers from `tests/_oracle_helpers.py`, not mirror PackDB's Big-M rewrite. For quadratic objectives/constraints, the oracle should use `set_quadratic_objective` / `add_quadratic_constraint`, and non-linear objectives need `packdb_objective_fn` passed to `compare_solutions`.
 > 4. **lessons.md** — Does this change introduce any gotcha that future developers should know about? Check `.claude/lessons.md` for relevance.
 > 5. **Grammar/parser sync** — If `.y` files changed, were the generated files regenerated? Does the syntax reference doc reflect any new grammar?
 >

@@ -32,6 +32,16 @@ else
         --trusted-host pypi.org --trusted-host files.pythonhosted.org 2>/dev/null || true
 fi
 
+# ── Verify Gurobi oracle is usable ──────────────────────────────────────
+# The oracle is Gurobi-only; catch missing install or bad license up front
+# instead of surfacing it as a cryptic mid-test failure.
+if ! "${VENV_DIR}/bin/python3" -c "import gurobipy; e = gurobipy.Env(empty=True); e.setParam('OutputFlag', 0); e.start()" 2>/dev/null; then
+    echo "ERROR: gurobipy cannot start an environment." >&2
+    echo "       Check that a valid Gurobi license is installed (grbprobe)," >&2
+    echo "       or that GRB_LICENSE_FILE points to one." >&2
+    exit 1
+fi
+
 # ── Handle --setup-only ──────────────────────────────────────────────────
 if [[ "${1:-}" == "--setup-only" ]]; then
     echo "Setup complete. Virtualenv at: ${VENV_DIR}"

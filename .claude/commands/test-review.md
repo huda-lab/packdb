@@ -257,8 +257,8 @@ Launch up to 3 agents in parallel.
 > - Correlated subquery referencing decision variable (should this work? is it tested either way?)
 >
 > **Solver-specific**:
-> - Are there tests that verify identical results between Gurobi and HiGHS? Or does the oracle only use one solver?
-> - QP with HiGHS (continuous only) — is the restriction tested/enforced?
+> - The oracle is Gurobi-only by design (see `02_operations/oracle.md`); do not flag "no HiGHS oracle backend" as a gap. Do flag any test that still encodes an analytical / hand-computed closed-form expected value — those are forbidden.
+> - PackDB's CLI-side solver dispatch is Gurobi-preferred with HiGHS as a fallback. Are the HiGHS-rejection paths tested (QP with INTEGER via HiGHS, non-convex bilinear on HiGHS, quadratic constraints on HiGHS — each should emit a clear "requires Gurobi" error)?
 >
 > **Scope**: {scope_description}
 >
@@ -358,7 +358,9 @@ Ask the user before writing — if they decline, the report still stands as an e
 After (optionally) updating the tracker, ask: "Want me to write these tests? I'll start with the high-risk gaps and work down."
 
 If the user says yes, write the tests following the existing pattern:
-- Use the oracle comparison pattern from existing tests (PackDB subprocess → oracle solver → compare)
+- Oracle-verified only. Every correctness test must formulate the same problem in gurobipy via `oracle_solver` and compare via `comparison.compare.compare_solutions`. Analytical / hand-computed closed-form assertions are forbidden (see `context/descriptions/05_testing/README.md`).
+- The flow: `packdb_cli.execute(sql)` → `(rows, cols)` from PackDB; `duckdb_conn.execute(...)` → source data (vanilla duckdb against `_tpch_oracle.duckdb`); build the ILP via `oracle_solver` using helpers in `tests/_oracle_helpers.py`; call `compare_solutions(..., coeff_fn=...)` — or `packdb_objective_fn=...` for non-linear (QP/QCQP) objectives.
+- For discrete constructs (COUNT(INTEGER), `<>`, IN), use Gurobi native indicator constraints (`add_indicator_constraint` or the matching helpers). Do not mirror PackDB's Big-M rewrite — independent semantics is the point.
 - Follow naming conventions: `test_<feature>_<scenario>`
 - Add appropriate pytest markers
 - Place in the correct test file (or create a new one if a new category)
