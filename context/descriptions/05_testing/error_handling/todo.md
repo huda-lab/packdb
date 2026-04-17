@@ -1,26 +1,10 @@
 # Error Handling Test Coverage — Todo
 
+## Closed
+
+- **Unbounded problem detection** — `test_error_infeasible.py::TestUnboundedModels` (2026-04-17). Two assert-error tests covering `MAXIMIZE SUM(x)` with only a lower bound, for both `IS INTEGER` (MILP path) and `IS REAL` (LP path). Error message accepts `(?i)(unbounded|infeasible)` — some solvers return `INF_OR_UNBD` when the two can't be distinguished cheaply.
+
 ## Missing coverage
-
-### HIGH: Unbounded problem detection
-
-Infeasible problems are tested (4 tests in `test_error_infeasible.py`). Unbounded problems have no test.
-
-**Risk**: When no upper bound constrains a MAXIMIZE objective, the solver returns UNBOUNDED status. PackDB may not handle this status code correctly — could crash, hang, or return garbage values rather than raising a clear error. Infeasible and Unbounded are symmetric categories; missing the Unbounded path is a notable gap.
-
-```sql
--- Unbounded: no upper bound on x
-SELECT id, x FROM data
-DECIDE x IS INTEGER
-SUCH THAT x >= 1
-MAXIMIZE SUM(x)
-
--- Unbounded: REAL variable with no upper bound
-SELECT id, x FROM data
-DECIDE x IS REAL
-SUCH THAT x >= 0
-MAXIMIZE SUM(x)
-```
 
 ### MEDIUM: PER on per-row constraint rejection
 

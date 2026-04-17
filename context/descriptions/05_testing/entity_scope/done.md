@@ -4,9 +4,11 @@ Tests live in `test/decide/tests/test_entity_scope.py`.
 
 ## Oracle verification
 
-Tests marked ✓ compare PackDB's objective value against an independent reference
-solver. Tests marked (constraint only) verify feasibility and constraint
-satisfaction but not optimality.
+Tests marked ✓ compare PackDB's output against an independently-formulated
+gurobipy ILP via `compare_solutions` (objective + decision vector). Tests
+marked (constraint only) verify feasibility but not optimality — a legacy
+tier per `05_testing/README.md`; new tests in this area should move to
+oracle-verified.
 
 | Test | What it covers | Oracle |
 |------|---------------|--------|
@@ -27,7 +29,7 @@ satisfaction but not optimality.
 | `test_entity_scoped_mixed_when_per` | All-four: entity + row-scoped + WHEN + PER | constraint only |
 | `test_entity_scoped_when_on_objective` | WHEN on objective + entity-scoped | ✓ |
 | `test_entity_scoped_multi_column_per` | Multi-column PER (region × segment) + entity-scoped | ✓ |
-| `test_entity_scoped_per_strict` | PER STRICT + entity-scoped | xfail (parser broken) |
+| `test_entity_scoped_per_strict` | PER STRICT + entity-scoped | ✓ |
 | `test_entity_scoped_min_easy_case` | MIN >= K easy case + entity-scoped | ✓ |
 | `test_entity_scoped_avg_per` | AVG + PER + entity-scoped | ✓ |
 | `test_entity_scoped_ne_per` | NE + PER + entity-scoped | constraint only |
@@ -87,5 +89,5 @@ Files: `src/planner/binder/query_node/bind_select_node.cpp`,
 | entity_scope | BETWEEN | ✓ |
 | entity_scope | two entity-scoped tables | ✓ (oracle) |
 | entity_scope | WHEN filters entity to zero | ✓ |
-| entity_scope | PER STRICT | xfail |
+| entity_scope | PER STRICT | ✓ |
 | entity_scope + row-scoped | WHEN + PER | ✓ |

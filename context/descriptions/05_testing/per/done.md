@@ -28,7 +28,9 @@ Tests live in:
 | Multi-variable (BOOLEAN + INTEGER) + PER | `test_per_interactions.py::test_per_multi_variable` | ✓ |
 | WHEN + PER + multi-variable (BOOLEAN + INTEGER) — WHEN mask per group | `test_per_interactions.py::test_when_per_multi_variable` | ✓ |
 | COUNT(x INTEGER) + PER — Big-M indicators per group | `test_per_interactions.py::test_count_integer_per` | ✓ |
-| QP objective + PER constraint (flat MINIMIZE + SUM(x)>=5 PER grp) | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ (analytical) |
+| QP objective + PER constraint (flat MINIMIZE + SUM(x)>=5 PER grp) | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ |
+| PER equality constraint (`SUM(x) = K PER col`, two-sided bounds per group) | `test_abs_linearization.py` (`SUM(new_qty) = 20 PER l_orderkey`) | ✓ |
+| Feasibility (no objective) + PER (`SUM(x) = 1 PER grp` + global cap) | `test_edge_cases.py::test_feasibility_per` | ✓ |
 
 ### PER on objectives (nested aggregate syntax)
 
@@ -36,7 +38,7 @@ All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per
 
 | Scenario | Test |
 |----------|------|
-| `SUM(SUM(...)) PER col` (no-op equivalence) | `test_sum_sum_per` |
+| `SUM(SUM(...)) PER col` (no-op equivalence) | `test_sum_sum_per_noop` |
 | `MINIMIZE SUM(MAX(...)) PER col` | `test_minimize_sum_max_per` |
 | `MAXIMIZE SUM(MIN(...)) PER col` | `test_maximize_sum_min_per` |
 | `MAXIMIZE SUM(MAX(...)) PER col` (hard outer + easy inner) | `test_maximize_sum_max_per` |
@@ -80,3 +82,6 @@ All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per
 | PER | WHEN + multi-variable (WHEN mask per group per variable) | ✓ (`test_per_interactions.py::test_when_per_multi_variable`) |
 | PER | COUNT (INTEGER) — Big-M indicators scoped per group | ✓ (`test_per_interactions.py::test_count_integer_per`) |
 | PER | QP objective (flat QP + PER constraint) | ✓ (`test_per_interactions.py::test_qp_objective_per_constraint`) |
+| PER | equality constraint (`SUM(x) = K PER col`) | ✓ (`test_abs_linearization.py`) |
+| PER | quadratic constraint + WHEN (mask before group) | ✓ (`test_quadratic_constraints.py::test_when_per_quadratic_constraint`) |
+| PER | feasibility (no objective; `DecideSense::FEASIBILITY`) | ✓ (`test_edge_cases.py::test_feasibility_per`) |

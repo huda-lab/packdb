@@ -22,28 +22,7 @@ Closed in `test_per_interactions.py` (Batch 2, 2026-04-15):
 See [bilinear/todo.md](../bilinear/todo.md) for full details. This gap is the
 single largest cross-feature hole.
 
-### MEDIUM: Feasibility problem with PER
-
-`DECIDE x IS BOOLEAN SUCH THAT SUM(x) = 1 PER col` without an objective. The model builder sets all objective coefficients to zero; constraint generation under PER must still work correctly with a `DecideSense::FEASIBILITY` sense.
-
-```sql
--- Feasibility + PER
-SELECT id, grp, x FROM data
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x) = 1 PER grp
-```
-
-### MEDIUM: PER equality constraint
-
-`SUM(x) = K PER col` generates two-sided bounds per group (both `>=` and `<=`). Only one-sided PER constraints are tested.
-
-```sql
--- PER equality
-SELECT id, grp, x FROM data
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x) = 2 PER grp
-MAXIMIZE SUM(x * val)
-```
+Closed in `test_edge_cases.py::test_feasibility_per` (2026-04-17): `DECIDE x IS BOOLEAN SUCH THAT SUM(x) = 1 PER grp AND SUM(x*val) <= 35` (FEASIBILITY sense + PER + global cap). Oracle proves feasibility independently; structural check on PackDB output validates per-group cardinality and global budget.
 
 ### MEDIUM: PER on per-row constraint rejection (error test)
 
@@ -98,7 +77,7 @@ PER→WHEN) was recently added. Coverage is needed across:
 - PER STRICT + WHEN (infeasible lower bound)
 - PER STRICT + hard MIN/MAX (existential direction → infeasible)
 - PER STRICT + easy MIN/MAX (no-op)
-- PER STRICT + entity-scoped (currently xfail in `test_entity_scope.py` — parser issue)
+- ~~PER STRICT + entity-scoped~~ — covered by `test_entity_scope.py::test_entity_scoped_per_strict`
 
 ## Cross-references
 

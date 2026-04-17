@@ -1,23 +1,11 @@
 # ABS Linearization Test Coverage — Todo
 
+## Closed
+
+- **ABS in aggregate constraint with WHEN** — `test_abs_linearization.py::test_abs_constraint_aggregate_with_when` (2026-04-17). Oracle-compared test over lineitem with R-flagged returnflag. The `d_i` auxiliaries exist unconditionally (their linking constraints are row-independent), but only WHEN-matching rows contribute to the SUM. Designed so the aggregate bound is binding on the optimum — if the WHEN mask were dropped, PackDB would over-constrain and the oracle comparison would diverge.
+- **PER + ABS aggregate constraint** — `test_per_interactions.py::test_per_abs_aggregate` (2026-04-15).
+
 ## Missing coverage
 
-### HIGH: ABS in aggregate constraint with WHEN
-
-`SUM(ABS(expr)) op K WHEN condition` — ABS+WHEN is tested on objectives but not on aggregate constraints. The linearization creates auxiliary variables with unconditional linking constraints (`d >= expr`, `d >= -expr`). When WHEN is present on the aggregate, the auxiliary variable's contribution to `SUM(d)` should include only WHEN-matching rows. If the WHEN filter doesn't propagate to the auxiliary variable's coefficient in the aggregate, wrong rows contribute to the sum.
-
-```sql
--- ABS aggregate constraint with WHEN
-WITH data AS (
-    SELECT 1 AS id, 10.0 AS target, true AS active, 5.0 AS profit UNION ALL
-    SELECT 2, 20.0, false, 8.0 UNION ALL
-    SELECT 3, 15.0, true, 3.0
-)
-SELECT id, ROUND(x, 2) AS x, target, active
-FROM data
-DECIDE x IS REAL
-SUCH THAT x <= 30 AND SUM(ABS(x - target)) <= 8 WHEN active
-MAXIMIZE SUM(x * profit)
-```
-
-_(PER + ABS aggregate constraint covered in `test_per_interactions.py::test_per_abs_aggregate` — Batch 1, 2026-04-15.)_
+_(No known gaps in the ABS test surface at this time. Extend here when new
+scenarios are surfaced by audits or bug reports.)_

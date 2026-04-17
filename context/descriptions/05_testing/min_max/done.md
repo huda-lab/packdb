@@ -16,8 +16,8 @@ classifies each occurrence as **easy** (naturally per-row, no Big-M) or
 
 | Scenario | Where | Oracle |
 |----------|-------|--------|
-| `MAX(expr) <= K` → per-row | `test_min_max.py::test_max_constraint_easy` | ✓ |
-| `MIN(expr) >= K` → per-row | `test_min_max.py::test_min_constraint_easy` | ✓ |
+| `MAX(expr) <= K` → per-row | `test_min_max.py::test_max_leq_constraint` | ✓ |
+| `MIN(expr) >= K` → per-row | `test_min_max.py::test_min_geq_constraint` | ✓ |
 | `MAX + WHEN` (easy) | `test_min_max.py::test_max_constraint_with_when` | ✓ |
 | `MAX + PER` (stripped as redundant) | `test_min_max.py` | ✓ |
 | `MAX <= K` with entity-scoped | `test_entity_scope.py::test_entity_scoped_with_max` | ✓ |
@@ -36,6 +36,7 @@ classifies each occurrence as **easy** (naturally per-row, no Big-M) or
 | `MAX(expr) >= K PER col` (Big-M per group) | `test_per_interactions.py::test_per_max_geq_constraint` | ✓ |
 | `MIN(expr) <= K PER col` (Big-M per group) | `test_per_interactions.py::test_per_min_leq_constraint` | ✓ |
 | `MAX(expr) = K PER col` (easy + hard combined per group) | `test_per_interactions.py::test_per_max_eq_constraint` | ✓ |
+| `MAX(expr) WHEN cond >= K` (hard + aggregate-local WHEN, Big-M indicators only on WHEN-matching rows) | `test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max` | ✓ |
 
 ### Objectives
 
@@ -79,4 +80,5 @@ Tests in `test_per_objective.py` cover all 4 × 4 nesting combinations of inner/
 | MIN/MAX (hard) | entity-scoped | ✓ |
 | MIN/MAX | INTEGER variables | ✓ |
 | MIN/MAX (aggregate-local WHEN, easy) | — | ✓ |
+| MIN/MAX (aggregate-local WHEN, hard) | — | ✓ (`test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max`) |
 | MIN/MAX (hard) | PER (per-group Big-M) | ✓ (`test_per_interactions.py`) |

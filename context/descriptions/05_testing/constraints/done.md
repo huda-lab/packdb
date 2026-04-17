@@ -22,7 +22,9 @@ Covers the constraint operators `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, and 
 | `>=` | ✓ | ✓ | many files |
 | `<>` | ✓ | ✓ | `test_cons_comparison.py` (expression-level) |
 | `<>` + WHEN (expression-level) | — | ✓ | `test_cons_comparison.py::test_sum_not_equal_with_when` |
-| `<>` + WHEN (aggregate-local) | — | **xfail** | `test_cons_comparison.py::test_ne_aggregate_local_when_constraint` (known bug) |
+| `<>` + WHEN (aggregate-local) | — | ✓ | `test_aggregate_local_when.py::test_ne_aggregate_local_when_constraint` (fix landed 2026-04-17) |
+| `<>` with WHEN binding | — | ✓ | `test_cons_comparison.py::test_sum_not_equal_with_when_binding` |
+| `<>` without WHEN binding | — | ✓ | `test_cons_comparison.py::test_sum_not_equal_no_when_binding` |
 
 ### BETWEEN
 

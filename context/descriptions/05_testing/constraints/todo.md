@@ -1,9 +1,5 @@
 # Constraint Operator Test Coverage — Todo
 
-## Known bug to fix
-
-`test_ne_aggregate_local_when_constraint` is **xfail** — NE Big-M expansion does not compose with aggregate-local WHEN. See [when/todo.md](../when/todo.md).
-
 ## Missing coverage
 
 ### HIGH: Strict `<` / `>` with IS REAL variables

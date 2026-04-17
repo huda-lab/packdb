@@ -36,16 +36,18 @@ When a `BoundComparisonExpression` is reached (the actual constraint):
 
 ## `AnalyzeObjective()`
 
-Extracts terms from the objective's aggregate expression. Handles linear, bilinear, and quadratic objectives, including additive objective expressions with aggregate-local filters.
+Extracts terms from the objective's aggregate expression. Handles linear, bilinear, and quadratic objectives — including **mixed** shapes where a quadratic group and linear/bilinear siblings appear inside the same SUM (e.g. `SUM(POWER(x - t, 2) + c * x)`) — and additive objective expressions with aggregate-local filters.
 
 1. Unwraps any `BoundCastExpression` layers.
 2. Checks for a WHEN wrapper (same `WHEN_CONSTRAINT_TAG` pattern) and extracts the condition.
-3. Expects a `BoundAggregateExpression` (SUM) or an additive expression containing aggregate terms. The SUM argument is checked for quadratic patterns:
-   - `POWER(linear_expr, 2)` / `POW(linear_expr, 2)` / `(expr) ** 2` — exponent is unwrapped from casts (DuckDB wraps the integer literal `2` in a `BoundCastExpression`)
-   - `(expr) * (expr)` where both children have identical `ToString()`
-   If quadratic: enforces MINIMIZE (throws for MAXIMIZE), sets `has_quadratic = true`, and calls `ExtractTerms()` on the inner linear expression into `squared_terms`.
-   If linear: calls `ExtractTerms()` on the SUM argument into `terms`.
-4. Stores the result as an `Objective` with terms (linear), squared_terms (quadratic), and optional when_condition/per_columns. Aggregate-local filters are copied onto the terms they came from.
+3. Expects a `BoundAggregateExpression` (SUM) or an additive expression containing aggregate terms. The SUM argument is walked by `ExtractLinearAndBilinearTerms`, which at **every** additive node probes `PhysicalDecide::DetectQuadraticPattern`:
+   - `POWER(linear_expr, 2)` / `POW(linear_expr, 2)` / `(expr) ** 2` — exponent unwrapped from casts (DuckDB wraps the integer literal `2` in a `BoundCastExpression`)
+   - `(expr) * (expr)` self-product with identical `ToString()`
+   - `-(quadratic_pattern)` (unary negation) and `K * quadratic_pattern` (constant on either side, nested combinations produce composed signs)
+   A quadratic match routes the inner linear expression into `squared_terms` with a scalar `quadratic_sign` (carries both negation and constant scaling); linear/bilinear siblings in the same `+`/`-` tree are emitted into `terms` / `bilinear_terms` by the same walker. Pure-linear, pure-quadratic, and mixed objectives therefore go through one unified traversal.
+4. **At most one quadratic group per objective**: a second match raises `InvalidInputException` (e.g. `SUM(POWER(x,2)) + SUM(POWER(y,2))` is rejected) because downstream Q construction assumes a single scalar `quadratic_sign`.
+5. **Degree guard**: `PhysicalDecide::IsLinearInDecideVars` is invoked on the inner of every POWER/self-product pattern and on each side of a bilinear `*`. Degree > 2 shapes (`POWER(x,2)*POWER(x,2) = x^4`, `POWER(x,2)*POWER(y,2) = x^2 y^2`, `a*POWER(x,2)`, `POWER(POWER(x,2),2)`) are rejected with a clear error instead of silently misclassified as lower-degree Q or bilinear with a garbage coefficient.
+6. Stores the result as an `Objective` with `terms` (linear), `squared_terms` (quadratic inner), `bilinear_terms`, `has_quadratic`, `quadratic_sign`, and optional `when_condition` / `per_columns`. Aggregate-local filters are copied onto the terms they came from (linear, bilinear, and quadratic lists each receive the filter independently).
 
 ## Variable Bounds Extraction
 

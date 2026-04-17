@@ -159,6 +159,6 @@ The evaluated data is packaged into a `SolverInput` struct:
 - `objective_variable_indices[term_idx]`: Which variable each objective term references
 - `sense`: MAXIMIZE or MINIMIZE
 
-When the objective is quadratic (`has_quadratic = true`), the same evaluation runs on `squared_terms` instead of `terms`, populating `quadratic_inner_coefficients` and `quadratic_variable_indices` in the `SolverInput`.
+When the objective is quadratic (`has_quadratic = true`), the same evaluation runs on `squared_terms` **in addition to** `terms` (not instead of): `EvaluateObjectiveTermList` is called once per non-empty list, populating `objective_coefficients` / `objective_variable_indices` for the linear half and `quadratic_inner_coefficients` / `quadratic_variable_indices` for the quadratic half. Pure-linear objectives populate only the linear arrays, pure-quadratic objectives populate only the quadratic arrays, and mixed objectives (e.g. `SUM(POWER(x - t, 2) + c * x)`) populate both. The expression-level WHEN mask and aggregate-local per-term filters are applied independently to each list.
 
 This `SolverInput` is then passed to `SolveModel()`, which hands it to the model builder (Phase 3) and solver backend (Phase 4).

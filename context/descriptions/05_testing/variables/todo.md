@@ -1,17 +1,10 @@
 # Variable Type Test Coverage — Todo
 
+## Closed
+
+- **IS REAL with MINIMIZE objective** — `test_var_real.py::test_real_minimize` (2026-04-17). Oracle-compared LP with `SUM(x) >= 10` lower bound forcing a non-zero optimum; MINIMIZE pushes the load onto the smallest-coefficient row. Exercises the coefficient-sign path that's distinct from MAXIMIZE (sign flip happens in the objective builder or solver adapter).
+
 ## Missing coverage
-
-### MEDIUM: IS REAL with MINIMIZE objective
-
-All REAL-variable tests use MAXIMIZE. A MINIMIZE LP is a distinct code path for coefficient sign handling (negation happens in the solver adapter or the objective builder depending on the backend).
-
-```sql
-SELECT id, ROUND(x, 2) AS x FROM data
-DECIDE x IS REAL
-SUCH THAT x <= 100 AND SUM(x) >= 10
-MINIMIZE SUM(x * cost)
-```
 
 ### MEDIUM: INTEGER + REAL without BOOLEAN
 

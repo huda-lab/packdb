@@ -30,7 +30,7 @@ Each subdirectory corresponds to a feature area and contains:
 | `quadratic/` | QP objectives, QCQP constraints | `test_quadratic.py`, `test_quadratic_constraints.py` |
 | `subquery/` | Scalar and correlated subqueries as constraint RHS | `test_cons_subquery.py`, `test_cons_correlated_subquery.py` |
 | `error_handling/` | Parser errors, binder errors, infeasibility, solver-specific errors | `test_error_*.py` |
-| `edge_cases/` | Boundary conditions, data shapes, scale, JOIN sources | `test_edge_cases.py`, `test_large_scale.py`, `test_sql_*.py` |
+| `edge_cases/` | Boundary conditions, data shapes, scale, JOIN sources, EXPLAIN plan, objective-shape tests | `test_edge_cases.py`, `test_large_scale.py`, `test_sql_*.py`, `test_explain.py`, `test_obj_maximize.py`, `test_obj_minimize.py`, `test_obj_complex_coeffs.py` |
 
 ## How to use
 
@@ -45,10 +45,14 @@ When planning test work from scratch, start with the HIGH-risk gaps across all
 
 ## Coverage quality levels
 
-- **oracle** (✓) — PackDB objective is compared against an independent reference solver. Catches silent optimality bugs (wrong coefficients, wrong constraint direction, rewrite errors).
-- **constraint only** — Test checks that constraints are satisfied and the result is non-empty. Does not verify the solution is optimal. Can miss bugs where the solver produces a valid but suboptimal solution due to incorrect formulation.
+- **oracle** (✓) — PackDB output is compared against an independently-formulated gurobipy ILP via `compare_solutions`. The comparison checks both the objective value and the decision-variable vector, returning `identical` (same vector) or `optimal` (alternate optimum at the same objective). Catches silent optimality bugs — wrong coefficients, wrong constraint direction, rewrite errors, Big-M encoding bugs.
+- **constraint only** — Legacy tier. Test checks that constraints are satisfied and the result is non-empty, but does not verify optimality. Can miss bugs where the solver produces a valid but suboptimal solution due to incorrect formulation. Acceptable only for pure feasibility queries (no objective); new correctness tests must use **oracle**.
 - **xfail** — Known defect or feature not yet implemented. Test is kept to auto-detect when fixed.
 - **error test** — Verifies that an invalid query is rejected with the right error message.
+
+### Forbidden: analytical / hand-computed closed-form assertions
+
+Asserting hand-computed expected variable assignments (e.g. `expected = {1: 10.0, 2: 20.0, 3: 30.0}`) is **not a valid oracle**. Analytical checks only verify the instance the author thought through; an encoding bug that coincides with the expected answer passes silently. Every correctness test must formulate the same problem independently in gurobipy via `oracle_solver` and compare via `compare_solutions`. For non-linear objectives (QP/QCQP), pass `packdb_objective_fn` to `compare_solutions` to evaluate the objective on PackDB's variable values. See `02_operations/oracle.md` for the canonical pattern and `tests/_oracle_helpers.py` for shared primitives.
 
 ## Risk priorities for gaps
 
@@ -70,3 +74,17 @@ LOW-risk gaps involve:
 ## Audit history
 
 - **2026-04-15**: Broad audit across the full feature surface (see individual `todo.md` files for findings). Future audits can be regenerated via the `/test-review` skill.
+- **2026-04-17**: Gap-fill batch via `/test-fill`. Closed gaps:
+  - `error_handling/` — Unbounded problem detection (2 tests, INTEGER + REAL)
+  - `variables/` — IS REAL with MINIMIZE objective (coefficient-sign path)
+  - `abs/` — ABS in aggregate constraint with WHEN (auxiliary-variable mask propagation)
+  - `min_max/` + `when/` — Hard `MAX(...) WHEN cond >= K` (aggregate-local WHEN with Big-M indicators)
+  - `quadratic/` — Mixed linear + quadratic objective (three shapes: nested SUM, sibling SUMs, negated). **Bug fix also landed** in `physical_decide.cpp` — the extraction path silently dropped the Q matrix or coerced POWER to `1*x`; now routes correctly.
+- **2026-04-17 (afternoon)**: Doc-sync pass via `/docs-review`. Reconciled docs against current `test/decide/tests/` and `src/`:
+  - Recorded the NE + aggregate-local WHEN bug fix (commit `293dc6d664`, `physical_decide.cpp`) that had landed in code but not in docs. `test_ne_aggregate_local_when_constraint` is no longer xfail; relocated its reference from `test_cons_comparison.py` to `test_aggregate_local_when.py`.
+  - Removed stale xfail marker on `test_entity_scoped_per_strict` (test has been passing).
+  - Cataloged uncatalogued tests in `test_aggregate_local_when.py`, `test_cons_comparison.py`, `test_quadratic_constraints.py`.
+  - Renamed drifted test references in `error_handling/done.md`, `min_max/done.md`, `per/done.md`, `quadratic/done.md`.
+  - Upgraded `test_qp_objective_per_constraint` from "analytical" to oracle-solved (commit `6e50c74db3`).
+  - Moved `PER equality constraint` from `per/todo.md` to `per/done.md` (covered by `test_abs_linearization.py`).
+  - Added "Oracle cache" section to `02_operations/oracle.md` documenting `test/decide/oracle_cache.py`.

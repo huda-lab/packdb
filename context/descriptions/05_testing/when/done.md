@@ -60,11 +60,25 @@ Tests live in:
 | Aggregate-local WHEN + PER + AVG | `test_aggregate_local_when.py::test_aggregate_local_when_with_avg_and_per` | ✓ |
 | Aggregate-local WHEN + COUNT | `test_aggregate_local_when.py::test_aggregate_local_when_with_count` | ✓ |
 | Aggregate-local WHEN + MAX (easy) | `test_aggregate_local_when.py::test_aggregate_local_when_with_max` | ✓ |
+| Aggregate-local WHEN + MAX (hard direction `>=`, Big-M indicators restricted to WHEN-matching rows) | `test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max` | ✓ |
 | Aggregate-local WHEN + bilinear (constraint) | `test_aggregate_local_when.py::test_bilinear_aggregate_local_when_constraint` | ✓ |
 | Aggregate-local WHEN + bilinear (objective) | `test_aggregate_local_when.py::test_bilinear_aggregate_local_when_objective` | ✓ |
 | Aggregate-local WHEN + entity-scoped | `test_aggregate_local_when.py::test_entity_scoped_aggregate_local_when` | ✓ |
 | Aggregate-local WHEN + BETWEEN | `test_aggregate_local_when.py::test_between_aggregate_local_when_constraint` | ✓ |
 | Expression-level WHEN + PER still works | `test_aggregate_local_when.py::test_expression_level_when_per_still_works` | ✓ |
+| Aggregate-local WHEN + `<>` (NE) constraint — Big-M rewrite composes with WHEN mask | `test_aggregate_local_when.py::test_ne_aggregate_local_when_constraint` | ✓ |
+| Aggregate-local WHEN + `<>` + PER | `test_aggregate_local_when.py::test_ne_with_per_constraint` | ✓ |
+| Aggregate-local WHEN objective re-association | `test_aggregate_local_when.py::test_aggregate_local_when_objective_reassociation` | ✓ |
+| Aggregate-local WHEN single aggregate | `test_aggregate_local_when.py::test_aggregate_local_when_single_aggregate` | ✓ |
+| Aggregate-local WHEN with three terms | `test_aggregate_local_when.py::test_aggregate_local_when_three_terms` | ✓ |
+| Aggregate-local WHEN overlapping filters | `test_aggregate_local_when.py::test_aggregate_local_when_overlapping_filters` | ✓ |
+| Aggregate-local WHEN all rows filtered out | `test_aggregate_local_when.py::test_aggregate_local_when_all_filtered_out` | ✓ |
+| Aggregate-local WHEN objective mixing filtered + unfiltered terms | `test_aggregate_local_when.py::test_aggregate_local_when_objective_mixed_filtered_unfiltered` | ✓ |
+| Aggregate-local WHEN constraint mixing filtered + unfiltered terms | `test_aggregate_local_when.py::test_aggregate_local_when_mixed_filtered_unfiltered_constraint` | ✓ |
+
+## Closed 2026-04-17
+
+- **NE + aggregate-local WHEN** — `test_ne_aggregate_local_when_constraint` was previously xfail because the `<>` Big-M expansion did not compose with aggregate-local WHEN filters. Fixed in commit `293dc6d664` (`src/execution/operator/decide/physical_decide.cpp`, +206/-56): the NE indicator variables and Big-M constraint emission now honor the per-term WHEN mask during aggregate accumulation. Test now runs as a standard oracle-compared correctness test.
 
 ### Error cases
 
@@ -73,12 +87,6 @@ Tests live in:
 | Mixing expression-level and aggregate-local WHEN (rejected) | `test_aggregate_local_when.py` |
 | DECIDE variable in WHEN condition (rejected) | `test_error_binder.py` |
 | Compound WHEN with DECIDE variable (rejected) | `test_error_binder.py` |
-
-## Known bugs (xfail)
-
-| Test | Issue |
-|------|-------|
-| `test_ne_aggregate_local_when_constraint` (in `test_cons_comparison.py`) | NE Big-M expansion does not compose with aggregate-local WHEN filters — documented defect |
 
 ## Feature interactions covered
 
@@ -90,13 +98,14 @@ Tests live in:
 | WHEN | compound AND/OR | ✓ |
 | WHEN | PER | ✓ |
 | WHEN | MIN/MAX (easy) | ✓ |
+| WHEN | MIN/MAX (hard, aggregate-local) | ✓ (`test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max`) |
 | WHEN | COUNT (BOOLEAN and INTEGER) | ✓ |
 | WHEN | AVG | ✓ |
 | WHEN | ABS (objective) | ✓ |
 | WHEN | QP | ✓ |
 | WHEN | quadratic constraint | ✓ |
 | WHEN | `<>` (expression-level) | ✓ |
-| WHEN | `<>` (aggregate-local) | **xfail** (known bug) |
+| WHEN | `<>` (aggregate-local) | ✓ (fix landed 2026-04-17 — see Closed section) |
 | WHEN | entity-scoped | ✓ |
 | WHEN | bilinear | ✓ |
 | WHEN | NULL in condition column | ✓ |

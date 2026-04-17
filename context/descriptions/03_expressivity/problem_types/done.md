@@ -94,6 +94,25 @@ SUCH THAT repaired >= 0 AND repaired <= 100 AND SUM(keep) >= 10
 MINIMIZE SUM(POWER(repaired - measured, 2))
 ```
 
+### Mixed Linear + Quadratic Objective
+
+Linear terms may appear alongside a `POWER(...)` term in the same objective, either within a single `SUM` or across sibling `SUM`s. The quadratic part populates the Q matrix; the linear part populates the c vector. Both are emitted from the objective extraction layer simultaneously and composed by the solver.
+
+```sql
+-- Linear regularisation on top of least-squares
+SELECT * FROM data
+DECIDE x IS REAL
+SUCH THAT x >= 0 AND x <= 100
+MINIMIZE SUM(POWER(x - target, 2) + penalty * x)
+
+-- Equivalent form (sibling SUMs) — produces the same solver input
+MINIMIZE SUM(POWER(x - target, 2)) + SUM(penalty * x)
+```
+
+Optimum of `SUM(POWER(x - t, 2) + c * x)` with no other binding constraints is `x = t - c/2` (clipped to bounds).
+
+**Restriction — single quadratic group per objective.** Only one `POWER(...)` / `(expr)*(expr)` self-product may appear in an objective (plus arbitrarily many linear siblings). Multiple quadratic groups (e.g., `SUM(POWER(x, 2)) + SUM(POWER(y, 2))`) are rejected with a clear error because the objective-side Q matrix is built from a single inner linear expression. Constraints don't have this restriction — they carry `quadratic_groups` per group.
+
 ### Bilinear Programming (Boolean × Anything — McCormick Linearization)
 
 When one factor in a product of two different DECIDE variables is declared `IS BOOLEAN`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
@@ -235,6 +254,12 @@ Supported quadratic forms:
 The following are rejected:
 
 - `MINIMIZE SUM(POWER(x, 3))` — only exponent 2 is supported
+- **Total degree > 2** in decision variables — the detector rejects products whose combined degree exceeds 2, even when each factor individually matches a supported pattern. Concretely:
+  - `SUM(POWER(x, 2) * POWER(x, 2))` (= x⁴): self-product of a squared expression. Rejected with "self-product of a non-linear expression".
+  - `SUM(POWER(x, 2) * POWER(y, 2))` (= x²y²): product of two quadratics. Rejected with "degree > 2".
+  - `SUM(a * POWER(x, 2))` where `a` is a DECIDE variable (= a·x²): variable multiplied by a quadratic. Rejected with "degree > 2".
+  - `SUM(POWER(POWER(x, 2), 2))` (= x⁴): POWER of a non-linear inner. Rejected with "non-linear expression inside POWER".
+  - Same rejections apply inside `SUCH THAT` (quadratic constraints).
 
 ### Bilinear Objectives
 
@@ -299,8 +324,9 @@ Several constructs (`<>`, `IN` on decision variables, `COUNT` on INTEGER, hard `
   - These flags determine whether the solver treats the problem as LP, ILP, or MILP
 
 - **Quadratic objective detection**: `src/execution/operator/decide/physical_decide.cpp`
-  - Detects `POWER(expr, 2)`, `(expr) * (expr)`, and negated forms (`-POWER(expr, 2)`, `(-1) * POWER(expr, 2)`) in bound expressions
-  - Extracts inner linear expression terms into `Objective::squared_terms` with `quadratic_sign` (+1.0 or -1.0)
+  - `PhysicalDecide::DetectQuadraticPattern` (member, invoked from `ExtractLinearAndBilinearTerms` at every additive node) matches `POWER(expr, 2)`, `(expr) * (expr)` self-product, and negated / constant-scaled forms. Returns `{inner_linear_expr, sign}`.
+  - Extracts inner linear expression terms into `Objective::squared_terms` with `quadratic_sign` (scalar; sign combines negation and constant scaling).
+  - **Degree guard**: `PhysicalDecide::IsLinearInDecideVars` is invoked on the inner of every POWER / self-product pattern and on each side of a bilinear `*`. Inputs whose total decision-variable degree would exceed 2 (e.g. `POWER(x,2)*POWER(x,2)`, `POWER(x,2)*POWER(y,2)`, `a*POWER(x,2)`, `POWER(POWER(x,2),2)`) are rejected with a clear `InvalidInputException` rather than silently misclassified as a lower-degree Q term. Same guard runs in the constraint path (`TryDetectConstraintQuadratic` and the constraint bilinear branch).
 
 - **Q matrix construction**: `src/packdb/utility/ilp_model_builder.cpp`
   - Builds Q from outer products of per-row inner expression coefficients: Q = sign * A^T A

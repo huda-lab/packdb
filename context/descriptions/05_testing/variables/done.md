@@ -39,6 +39,7 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 | Mixed BOOLEAN + REAL | `test_var_real.py::test_real_mixed` | ✓ |
 | REAL + WHEN on aggregate constraint | `test_var_real.py` | ✓ |
 | REAL + PER on aggregate constraint | `test_var_real.py` | ✓ |
+| REAL + MINIMIZE (coefficient-sign path) | `test_var_real.py::test_real_minimize` | ✓ |
 
 ### Multiple variables
 
@@ -66,6 +67,7 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 | BOOLEAN | all features (broadly) | ✓ |
 | INTEGER | all features (broadly) | ✓ |
 | REAL | MAXIMIZE objective | ✓ |
+| REAL | MINIMIZE objective | ✓ (`test_var_real.py::test_real_minimize`) |
 | REAL | PER constraint | ✓ |
 | REAL | WHEN constraint (aggregate) | ✓ |
 | BOOLEAN + INTEGER | same query | ✓ |

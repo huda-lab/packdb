@@ -55,6 +55,17 @@ Bilinear terms compose with existing features:
 - **PER**: Not yet tested but should work via the standard PER machinery
 - **Mixed with POWER**: `MINIMIZE SUM(POWER(x - target, 2) + b * x)` (bilinear + quadratic in same objective)
 
+### Degree Guard (Total Degree ≤ 2)
+
+Only bilinear (`x * y`, different variables, each linear in decide vars) and quadratic (`POWER(linear_expr, 2)`) are supported. Products whose total decision-variable degree exceeds 2 are rejected at execution time by `PhysicalDecide::IsLinearInDecideVars`, applied to each side of every bilinear `*` and to the inner of every POWER / self-product. Rejected shapes include:
+
+- `x * POWER(y, 2)` (cubic) — variable × squared
+- `POWER(x, 2) * POWER(y, 2)` (quartic) — squared × squared
+- `POWER(x, 2) * POWER(x, 2)` (x⁴) — identical squared self-product
+- `x * x * y`, `POWER(POWER(x, 2), 2)` (x⁴), etc.
+
+Without this guard the bilinear emitter would silently treat the inner POWER / nested-`*` factor as an opaque "data coefficient", producing a wrong Q matrix or crashing the coefficient evaluator. See `problem_types/done.md` → "Quadratic objective detection" Code Pointer for the shared helper and the corresponding test rows in `05_testing/quadratic/done.md`.
+
 ---
 
 ## Implementation Architecture
@@ -120,6 +131,8 @@ Bilinear terms compose with existing features:
 - `"Bilinear term requires a finite upper bound on variable 'x'"` — McCormick needs `x <= K`
 - `"Non-convex quadratic objectives require Gurobi"` — Real*Real or Int*Int bilinear on HiGHS
 - `"Quadratic/bilinear constraints require Gurobi"` — non-Boolean bilinear in constraints on HiGHS
+- `"DECIDE objective contains a product of decision variables with total degree > 2 ..."` — execution-time degree guard (also emitted on the constraint path as `"DECIDE constraint contains a product of decision variables with total degree > 2 ..."`)
+- `"DECIDE objective/constraint contains a self-product of a non-linear expression ..."` — `(expr)*(expr)` self-product where `expr` already carries a decision variable (e.g. `POWER(x,2)*POWER(x,2)`)
 
 ---
 

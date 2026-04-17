@@ -97,6 +97,15 @@ MINIMIZE SUM(MAX(x * cost)) PER department     -- minimize sum of per-dept max c
 MAXIMIZE MIN(SUM(x * profit)) PER region       -- maximize the worst-performing region
 ```
 
+Quadratic inner expressions are supported under nested outer-`SUM`:
+
+```sql
+MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp   -- sum per-group SSE; ≡ flat SUM(POWER(...))
+MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp   -- inner AVG scales each row by 1/n_g
+```
+
+These forms are detected by `SumInnerIsQuadratic` (`src/packdb/symbolic/decide_symbolic.cpp`), which preserves the raw AST through normalization so the post-bind optimizer can strip the outer wrapper. `SUM(MIN(POWER(...))) PER grp` and `SUM(MAX(POWER(...))) PER grp` also bind, but physical-layer correctness for the quadratic per-row auxiliary path is tracked separately in `context/descriptions/05_testing/quadratic/todo.md`.
+
 ---
 
 ## Objective and Solver Behavior

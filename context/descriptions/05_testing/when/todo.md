@@ -1,18 +1,8 @@
 # WHEN Clause Test Coverage — Todo
 
-## Known bug to fix
+## Closed
 
-### Aggregate-local WHEN + `<>` (NE)
-
-`test_ne_aggregate_local_when_constraint` in `test_cons_comparison.py` is **xfail** — the NE Big-M expansion does not compose with aggregate-local WHEN filters. This is a documented defect, not merely a missing test. When fixed, unxfail the test.
-
-```sql
--- This currently fails: aggregate-local WHEN + NE
-SELECT id, x FROM data
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x) WHEN active <> 2
-MAXIMIZE SUM(x * value)
-```
+- **Hard MIN/MAX + aggregate-local WHEN** — `test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max` (2026-04-17). The hard-direction `MAX(x * value) WHEN active >= 6` is oracle-compared; Big-M indicators are emitted only for WHEN-matching rows, and non-matching rows are unconstrained by the aggregate. See also `min_max/done.md`.
 
 ## Missing coverage
 
@@ -52,8 +42,3 @@ SUCH THAT SUM(x) >= 3
 MAXIMIZE SUM(x * value) WHEN distance IS NOT NULL
 ```
 
-### MEDIUM: Hard MIN/MAX with aggregate-local WHEN
-
-The aggregate-local WHEN test `test_aggregate_local_when_with_max` covers the easy MAX case (`MAX(x) <= K WHEN ...`). The hard direction (`MAX(x) >= K WHEN ...`) requires Big-M indicators and is not tested with an aggregate-local filter.
-
-See `min_max/todo.md` for details.

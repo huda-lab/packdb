@@ -1,18 +1,18 @@
 # Error Handling Test Coverage — Done
 
 Tests live in:
-- `test/decide/tests/test_error_parser.py` — parser-level syntax errors (4 tests)
-- `test/decide/tests/test_error_binder.py` — binder-level semantic errors (~19 tests)
-- `test/decide/tests/test_error_infeasible.py` — infeasible model detection (4 tests)
+- `test/decide/tests/test_error_parser.py` — parser-level syntax errors
+- `test/decide/tests/test_error_binder.py` — binder-level semantic errors
+- `test/decide/tests/test_error_infeasible.py` — infeasible and unbounded model detection
 
 ## Parser errors
 
 | Scenario | Where |
 |----------|-------|
 | DECIDE without SUCH THAT | `test_error_parser.py::test_missing_such_that` |
-| DECIDE IS BOOLEAN without name | `test_error_parser.py::test_missing_variable_name` |
-| SUCH THAT without DECIDE | `test_error_parser.py::test_missing_decide_keyword` |
-| Empty constraint list | `test_error_parser.py::test_empty_constraint` |
+| DECIDE without a variable name | `test_error_parser.py::test_missing_decide_variable` |
+| MAXIMIZE/MINIMIZE without an objective expression | `test_error_parser.py::test_missing_objective_expression` |
+| `IS <unknown-type>` | `test_error_parser.py::test_unknown_variable_type` |
 
 All expect `packdb.ParserException`.
 
@@ -21,7 +21,7 @@ All expect `packdb.ParserException`.
 | Category | Tests |
 |----------|-------|
 | Name/scope conflicts | `test_variable_conflicts_with_column`, `test_duplicate_decide_variables`, `test_unknown_variable_in_constraint` |
-| Unsupported syntax in SUCH THAT | `test_is_null_unsupported`, `test_sum_with_in_not_allowed`, `test_non_decide_variable_in_constraint`, `test_non_sum_function_in_constraint`, `test_count_real_rejected` |
+| Unsupported syntax in SUCH THAT | `test_is_null_unsupported`, `test_sum_with_in_not_allowed`, `test_non_decide_variable_in_constraint`, `test_non_sum_avg_min_max_function_in_objective`, `test_count_real_rejected` |
 | Non-linear / invalid aggregate | `test_no_decide_variable_in_sum`, `test_multiple_decide_variables_in_sum`, `test_nonlinear_decide_variables` |
 | RHS shape | `test_between_non_scalar`, `test_decide_between_decide_variable`, `test_in_rhs_with_decide_variable`, `test_sum_rhs_non_scalar`, `test_decide_variable_rhs_with_decide`, `test_sum_equal_non_scalar` |
 | Objective rejections | `test_objective_with_addition`, `test_objective_bare_column` |
@@ -36,13 +36,25 @@ All expect `packdb.InvalidInputException` or `packdb.BinderException`.
 
 | Scenario | Where |
 |----------|-------|
-| Contradictory bounds (`x >= 10 AND x <= 5`) | `test_error_infeasible.py::test_contradictory_bounds` |
-| Impossible SUM (`SUM(x) >= 1000` with too few rows) | `test_error_infeasible.py::test_impossible_sum` |
-| Conflicting aggregate (`SUM(x) >= 100 AND SUM(x) <= 1`) | `test_error_infeasible.py::test_conflicting_aggregate` |
-| Negative SUM upper bound | `test_error_infeasible.py` |
-| WHEN-forced infeasibility | `test_error_infeasible.py` |
+| Contradictory per-row bounds (`x >= 10 AND x <= 5`) | `test_error_infeasible.py::TestInfeasibleModels::test_contradictory_per_row_bounds` |
+| Impossible SUM constraint (`SUM(x) >= 1000` with too few rows) | `test_error_infeasible.py::TestInfeasibleModels::test_impossible_sum_constraint` |
+| Negative SUM upper bound | `test_error_infeasible.py::TestInfeasibleModels::test_negative_sum_upper_bound` |
+| WHEN-forced infeasibility (all rows zero) | `test_error_infeasible.py::TestInfeasibleModels::test_infeasible_when_forces_all_zero` |
 
 All expect `packdb.InvalidInputException` matching `"infeasible"`.
+
+## Unboundedness detection
+
+| Scenario | Where |
+|----------|-------|
+| Unbounded MAXIMIZE with `IS INTEGER` (only lower bound) | `test_error_infeasible.py::TestUnboundedModels::test_unbounded_integer_maximize` |
+| Unbounded MAXIMIZE with `IS REAL` (only lower bound) | `test_error_infeasible.py::TestUnboundedModels::test_unbounded_real_maximize` |
+
+Verifies PackDB surfaces the solver's UNBOUNDED status as a clear error rather
+than crashing, hanging, or returning garbage values. Covers both the MILP path
+(INTEGER) and the LP path (REAL). Error message matches
+`(?i)(unbounded|infeasible)` — accepts either, since some solvers return
+`INF_OR_UNBD` when they can't distinguish the two without further analysis.
 
 ## Solver-specific error paths
 

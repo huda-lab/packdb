@@ -1,8 +1,9 @@
 # Oracle-Based DECIDE Testing Framework
 
 Pytest-based differential testing framework that validates PackDB's DECIDE clause
-by comparing its output against hand-written ILP models solved by an independent
-oracle (HiGHS or Gurobi).
+by comparing its output against hand-written ILP models formulated in
+**gurobipy** (no SQL parsing on the oracle side, no dependence on PackDB's own
+solver or optimizer).
 
 Located at `test/decide/`.
 
@@ -12,28 +13,37 @@ Located at `test/decide/`.
 
 ```
                        ┌──────────────┐
-  DECIDE SQL ─────────►│   PackDB     │──► rows + objective
+  DECIDE SQL ─────────►│   PackDB CLI │──► rows (variable values)
                        └──────────────┘
                               │
                               ▼
                        ┌──────────────┐
-  same data ─────────►│ Oracle Solver │──► objective value
-  (fetched via SQL)    └──────────────┘
+  same data ─────────►│ gurobipy ILP │──► objective + variable vector
+  (via duckdb_conn)    └──────────────┘
                               │
                               ▼
-                    |packdb_obj - oracle_obj| <= ε
+                   compare_solutions(...) — objective AND vector
 ```
 
-Each test:
-1. Runs a DECIDE query through PackDB and captures output rows.
-2. Fetches the same underlying data via plain SQL.
-3. Builds an equivalent ILP model in Python (by hand, no SQL parsing).
-4. Solves the model with HiGHS (or Gurobi if available).
-5. Computes PackDB's achieved objective from its output rows.
-6. Asserts the two objective values match within tolerance (default 1e-4).
+Each correctness test:
+1. Runs a DECIDE query through the native PackDB CLI (`build/release/packdb`)
+   via `packdb_cli.execute(sql)` and captures the output `(rows, cols)`.
+2. Fetches the same underlying data via `duckdb_conn` (vanilla `duckdb`
+   against a separately-generated TPC-H database, `_tpch_oracle.duckdb`).
+3. Builds an equivalent ILP in gurobipy via the `oracle_solver` fixture.
+4. Solves it.
+5. Calls `compare_solutions` which checks (a) that PackDB's objective
+   (computed from its variable values) matches the oracle's `objective_value`
+   within tolerance and (b) that the decision-variable vector matches row
+   by row. The returned `ComparisonResult.status` is `"identical"` when both
+   match and `"optimal"` when objectives agree but the vectors differ (an
+   alternate optimum at the same objective value).
 
-Only objective values are compared — not variable assignments — because ILP
-problems frequently have multiple optimal solutions.
+Forbidden: analytical / hand-computed closed-form assertions like
+`expected = {1: 10.0, 2: 20.0, 3: 30.0}`. Those only check the instance the
+author thought through; an encoding bug that happens to coincide with the
+expected answer passes silently. The oracle must be an independent
+gurobipy formulation.
 
 ---
 
@@ -41,28 +51,36 @@ problems frequently have multiple optimal solutions.
 
 ```
 test/decide/
-├── run_tests.sh               # Virtualenv manager + test runner
+├── run_tests.sh               # Virtualenv manager + gurobipy pre-flight + test runner
+├── packdb_cli.py              # Subprocess wrapper around build/release/packdb
 ├── conftest.py                # Fixtures, markers, session hooks
+├── oracle_cache.py            # On-disk cache of oracle solve results
 ├── pytest.ini                 # Marker registration
-├── requirements.txt           # highspy, pytest
+├── requirements.txt           # duckdb, gurobipy, pytest
+├── _tpch_oracle.duckdb        # Vanilla TPC-H DB for duckdb_conn (gitignored)
 ├── .gitignore
 │
-├── solver/                    # Solver abstraction layer
-│   ├── types.py               #   SolverResult, VarType, ObjSense enums
+├── solver/                    # Gurobi-only oracle solver
+│   ├── types.py               #   SolverResult, VarType, ObjSense, SolverStatus
 │   ├── base.py                #   OracleSolver ABC
-│   ├── highs_backend.py       #   HiGHS wrapper (primary)
-│   ├── gurobi_backend.py      #   Gurobi wrapper (optional)
-│   └── factory.py             #   Auto-detect best available solver
+│   ├── gurobi_backend.py      #   gurobipy wrapper (only backend)
+│   └── factory.py             #   Returns GurobiSolver; ImportError otherwise
 │
 ├── comparison/
-│   └── compare.py             # assert_optimal_match, assert_infeasible
+│   └── compare.py             # compare_solutions (modern API), assert_optimal_match (legacy),
+│                              # assert_infeasible
 │
 ├── performance/
 │   ├── tracker.py             # PerfTracker / PerfRecord
 │   └── reporter.py            # CLI table printer, JSON output
 │
-├── results/                   # JSON perf files (gitignored)
-└── tests/                     # All test files
+├── results/                   # JSON perf files + oracle_cache.json (gitignored)
+└── tests/
+    ├── _oracle_helpers.py     # Shared primitives (group_indices, add_ne_indicator,
+    │                          # add_count_integer_indicators, add_in_domain,
+    │                          # add_bool_and, emit_inner_max/min, emit_hard_inner_max/min)
+    ├── test_oracle_api_quadratic.py  # Smoke tests for the quadratic oracle API
+    └── test_*.py              # Feature test files
 ```
 
 ---
@@ -79,48 +97,179 @@ test/decide/
 
 **`base.py`** — `OracleSolver` abstract base class:
 ```python
-create_model(name)              # Start a new model
-add_variable(name, var_type)    # Add decision variable
-add_constraint(coeffs, sense, rhs)  # coeffs = {var_name: coeff}
-set_objective(coeffs, sense)    # Set linear objective
-solve(time_limit=60.0)          # Returns SolverResult
-solver_name()                   # "HiGHS" or "Gurobi"
+create_model(name)
+add_variable(name, var_type, lb=0.0, ub=None)
+add_constraint(coeffs, sense, rhs, name="")                    # linear, sense ∈ {"<=", ">=", "="}
+set_objective(coeffs, sense)                                   # linear
+set_quadratic_objective(linear, quadratic, sense, constant=0.0)
+add_quadratic_constraint(linear, quadratic, sense, rhs, name="")
+add_indicator_constraint(indicator_var, indicator_val,
+                         coeffs, sense, rhs, name="")          # Gurobi-native, Big-M-free
+solve(time_limit=60.0)                                         # Returns SolverResult
+solver_name()                                                  # "Gurobi"
 ```
 
-**`highs_backend.py`** — Wraps `highspy.Highs()`. Uses `addCol`/`addRow`/
-`changeColCost`/`changeObjectiveSense`. Maps HiGHS status codes to `SolverStatus`.
+`quadratic` is a dict `{(var_i, var_j): coeff}`. Diagonal entries produce
+`x²`; off-diagonal produce bilinear `x·y`. Symmetric entries are
+de-duplicated by the backend. When any quadratic term is present the
+backend automatically sets `model.Params.NonConvex = 2`, which lets Gurobi
+handle convex, concave, and non-convex QP/QCQP uniformly.
 
-**`gurobi_backend.py`** — Wraps `gurobipy.Model`. Uses `addVar`/`addConstr`/
-`LinExpr`/`setObjective`. Maps Gurobi `model.status` to `SolverStatus`.
+**`gurobi_backend.py`** — Wraps `gurobipy.Model` (tested against gurobipy
+12.x). Linear constraints are added via the modern `addConstr(tc)` form
+(the expression/sense/rhs overload was removed in Gurobi 12). Quadratic
+objectives build a `QuadExpr`; quadratic constraints go through
+`addQConstr`. Indicator constraints use `addGenConstrIndicator` — a
+native implication that does not require a hand-picked Big-M.
 
-**`factory.py`** — `get_solver()` tries `import gurobipy` first, falls back to
-`import highspy`.
+**`factory.py`** — `get_solver()` returns a `GurobiSolver`. If gurobipy is
+not installed or the Gurobi environment cannot start (missing/expired
+license), raises `ImportError` with a clear message. HiGHS is not a fallback
+on the oracle side; the separate PackDB CLI-side HiGHS backend documented
+in `01_pipeline/03d_solver_backends.md` is unrelated.
 
 ### 3.2 Comparison (`comparison/compare.py`)
 
-**`assert_optimal_match(packdb_rows, packdb_cols, oracle_result, decide_var_names, coeff_fn, tolerance=1e-4)`**
+**`compare_solutions(packdb_rows, packdb_cols, oracle_result, oracle_data, decide_var_names, coeff_fn=None, tolerance=1e-4, packdb_objective_fn=None) -> ComparisonResult`**
 
-Computes PackDB's objective by iterating output rows:
-```
-packdb_obj = Σ (row[var] × coeff_fn(row)[var])  for each row, each var
-```
+The modern API. Checks both the objective value and the decision-variable
+vector; prefer this for every new correctness test.
 
-The `coeff_fn` parameter is a callable that, given a PackDB output row, returns a
-dict `{var_name: coefficient}`. This lets each test specify its own coefficient
-extraction logic, which is critical for complex expressions like
-`x * price * (1 - discount) * (1 + tax)`.
+- For linear objectives, pass `coeff_fn(row) -> {var_name: coefficient}`. The
+  PackDB objective is computed as `Σ (row[var] × coeff_fn(row)[var])` over
+  rows × variables.
+- For non-linear objectives (QP/QCQP), pass
+  `packdb_objective_fn(rows, cols) -> float` which evaluates the objective
+  directly on PackDB's variable values — e.g. for
+  `MINIMIZE SUM(POWER(x - t, 2))` compute `Σ (x_i - t_i)²` from the rows.
+  When the oracle uses `set_quadratic_objective` without a `constant`, the
+  oracle's reported `objective_value` omits the `Σ t_i²` term; the
+  `packdb_objective_fn` should subtract the same constant so both sides
+  match.
+
+Returns a `ComparisonResult` with:
+- `status`: `"identical"` (objective + vector match) or `"optimal"`
+  (objective matches but vector differs — alternate optimum).
+- `packdb_objective`, `oracle_objective`, `packdb_vector`, `oracle_vector`.
+
+Raises `AssertionError` if objectives differ beyond `tolerance`. Typical
+tolerance is `1e-4` for linear problems; QCQP with tight
+`POWER(expr, 2) <= 0` (equality-via-quadratic) constraints may need `5e-2`
+to absorb Gurobi's feasibility tolerance — see
+`tests/test_quadratic_constraints.py` for an in-place example.
+
+**`assert_optimal_match(...)`** — Legacy objective-only comparison, retained
+for backward compatibility. New tests should not use it.
+
+**`assert_infeasible(packdb_cli, sql)`** — Asserts that the SQL produces an
+`infeasible`/`unbounded` error from PackDB. Compose it with an independent
+gurobipy check (see §3.6) to cross-verify on the oracle side.
 
 ### 3.3 Fixtures (`conftest.py`)
 
 | Fixture | Scope | Purpose |
 |---------|-------|---------|
 | `packdb_db_path` | session | Path to `packdb.db` (TPC-H SF-0.01); skip if missing |
-| `packdb_conn` | function | In-memory packdb connection with TPC-H attached read-only |
-| `duckdb_conn` | function | Second packdb connection for data fetching (see caveat 6) |
-| `oracle_solver` | session | Auto-detected solver instance |
+| `packdb_exe_path` | session | Path to `build/release/packdb`; skip if missing |
+| `packdb_cli` | session | `PackDBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)` |
+| `_oracle_db_path` | session | Path to `_tpch_oracle.duckdb`; auto-generated on first run via `CALL dbgen(sf=0.01)` against a vanilla duckdb connection |
+| `duckdb_conn` | function | Per-test read-only vanilla `duckdb` connection to `_tpch_oracle.duckdb` (no `packdb` Python package involved) |
+| `oracle_solver` | function | `CachedOracleSolver` wrapping a `GurobiSolver`; per-test so the cache can disambiguate multiple models per test |
 | `perf_tracker` | session | Collects timing; writes JSON + prints table on teardown |
 
-### 3.4 Performance Tracking (`performance/`)
+PackDB and the oracle use two separate databases (`packdb.db` and
+`_tpch_oracle.duckdb`) generated with the same deterministic `dbgen`
+algorithm at the same scale factor, so the data is identical. The oracle
+side never touches the `packdb` Python package.
+
+### 3.4 Oracle Cache (`oracle_cache.py`)
+
+Oracle solves are deterministic for a fixed (test source, database) pair, so the framework caches solver results on disk to amortize the oracle cost across reruns.
+
+**File**: `test/decide/results/oracle_cache.json` (gitignored, generated on first run).
+
+**Keying**: each entry is keyed by pytest node ID, with an `input_hash` derived from:
+- `inspect.getsource(test_fn)` — hash of the test function's source code.
+- DB checksum — `sha256("{size}:{mtime_ns}")[:16]` of `packdb.db`.
+
+Changing either the test body or the underlying database invalidates only the affected entries.
+
+**Global invalidation**: the cache file stores the DB checksum at the top level. If the DB changes, the entire cache is dropped on next load.
+
+**GC**: on a full (unfiltered) test run, `save(gc=True)` prunes entries that weren't accessed during the run. Filtered runs (`-k`, `-m`) skip GC so unrelated entries survive.
+
+**How it plugs in**: `CachedOracleSolver` wraps the real `OracleSolver` as a drop-in replacement. `create_model()` consults the cache:
+- **Hit** — all subsequent model-building calls (`add_variable`, `add_constraint`, `set_objective`, `set_quadratic_objective`, `add_quadratic_constraint`, `add_indicator_constraint`) become no-ops; `solve()` returns the cached `SolverResult` instantly.
+- **Miss** — everything is delegated to the real solver; `solve()` stores the result before returning. If no real solver is available and the cache misses, the test is skipped with a clear message.
+
+**Parametric loops**: a single test may call `create_model()` multiple times (e.g. looping over budgets). Each call gets a unique cache key by suffixing `#2`, `#3`, … so earlier solves don't shadow later ones.
+
+**Manual reset**: delete `test/decide/results/oracle_cache.json`. A full rerun will repopulate it.
+
+### 3.5 Shared oracle primitives (`tests/_oracle_helpers.py`)
+
+Tests that encode common DECIDE constructs import helpers from
+`tests/_oracle_helpers.py` rather than re-rolling the same Big-M or
+indicator patterns in every file. Prefer these over hand-written Big-M
+mirrors — see §3.7 on independent semantics.
+
+| Helper | Purpose |
+|---|---|
+| `group_indices(data, key_fn)` | Group row indices by a PER key. Rows where `key_fn` returns `None` are dropped (matches DECIDE's exclusion of NULL-keyed rows from every group). |
+| `add_ne_indicator(oracle, coeffs, rhs, name)` | Encode `sum(coeffs) != rhs` over integer-valued terms via a native Gurobi indicator constraint (no Big-M). |
+| `add_count_integer_indicators(oracle, int_vars, big_M=0, prefix="z")` | For each integer `x_i`, add a binary `z_i` with `z_i=1 ⇔ x_i > 0` using two `addGenConstrIndicator` calls. `COUNT(x_i)` then lowers to `SUM(z_i)`. |
+| `add_in_domain(oracle, var_name, domain)` | Restrict `var_name` to a discrete set via SOS1-style indicator encoding (`SUM(z_k) = 1`, `var = SUM(v_k·z_k)`). |
+| `add_bool_and(oracle, x, y, z)` | Link binary `z = x ∧ y` with `z ≤ x`, `z ≤ y`, `z ≥ x + y − 1`. Used for Bool × Bool products before summation. |
+| `emit_inner_max` / `emit_inner_min` | Per-group auxiliary variable for the *easy* inner-MAX / inner-MIN case of `SUM(MAX(expr)) PER col` / `SUM(MIN(expr)) PER col` inside objectives. |
+| `emit_hard_inner_max` / `emit_hard_inner_min` | Same for the *hard* case — uses per-row Gurobi indicators to tightly pin the auxiliary to one row's value. |
+
+### 3.6 Cross-verifying infeasibility
+
+For infeasible / unbounded tests, the oracle independently formulates the
+same ILP in gurobipy and asserts the solver's status matches:
+
+```python
+packdb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")
+
+# Independent cross-check:
+oracle_solver.create_model("infeas_case")
+# ... build the same ILP ...
+assert oracle_solver.solve().status in (
+    SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED,
+)
+```
+
+This guards against PackDB falsely reporting infeasibility on a feasible
+problem (or vice versa). See `tests/test_error_infeasible.py` for the
+canonical pattern.
+
+### 3.7 Independent semantics, not Big-M mirrors
+
+For discrete constructs that PackDB rewrites into Big-M linear programs
+(COUNT(INTEGER), `<>`, etc.), the oracle should encode the **semantics
+natively using Gurobi features** — not mirror PackDB's Big-M reformulation.
+Mirroring only detects lockstep bugs (where both implementations agree on
+an incorrect rewrite); independent encoding catches PackDB encoding errors
+too.
+
+Concretely:
+
+- **COUNT(INTEGER)** — use `add_count_integer_indicators` (two
+  `addGenConstrIndicator` calls per integer variable). Do **not** hand-pick a
+  Big-M and write `z ≤ x ≤ M·z`.
+- **`<>`** — use `add_ne_indicator` (disjunctive branch indicator with native
+  implications). Do not mirror PackDB's `SUM + M·z <= rhs - 1 + M` / `SUM - M·z >= rhs + 1 - M`.
+- **IN (…)** — use `add_in_domain` (SOS1 with indicators). This one happens
+  to coincide with PackDB's bind-time rewrite; it's still the right oracle
+  shape because it's the canonical formulation, not a mirror.
+
+During the migration away from Big-M mirrors, the COUNT × aggregate-local WHEN
+oracle caught a real PackDB bug: for `COUNT(x) WHEN active <= K` on BOOLEAN
+`x`, PackDB under-selected relative to the semantically equivalent
+`SUM(x) WHEN active <= K`. That bug was only visible because the oracle's
+encoding was independent of PackDB's.
+
+### 3.8 Performance Tracking (`performance/`)
 
 Each correctness test calls `perf_tracker.record(...)` with:
 - PackDB wall-clock time, oracle build time, oracle solve time
@@ -144,8 +293,12 @@ bash run_tests.sh -m "error"              # All error tests
 bash run_tests.sh -m "not large_scale"    # Skip perf tests
 ```
 
-`run_tests.sh` creates a `.venv/` virtualenv on first run, installs deps
-(`highspy`, `pytest`, packdb from `tools/pythonpkg`), and invokes pytest.
+`run_tests.sh` creates a `.venv/` virtualenv on first run, installs
+`duckdb`, `gurobipy`, and `pytest` from `requirements.txt`, pre-flights
+gurobipy by starting a Gurobi environment (catches missing/expired
+licenses up front), and then invokes pytest. The `packdb` Python package is
+not a dependency — DECIDE queries run via the native CLI executable, not
+an in-process binding.
 
 ---
 
@@ -348,12 +501,19 @@ Create a new file if none fits.
 ### Step 2: Write the test function
 
 ```python
+import time
+import pytest
+
+from solver.types import VarType, ObjSense
+from comparison.compare import compare_solutions
+
+
 @pytest.mark.var_boolean          # variable type
 @pytest.mark.cons_aggregate       # constraint category
 @pytest.mark.obj_maximize         # objective type
-@pytest.mark.correctness          # always include for oracle tests
-def test_my_new_query(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
-    # 1. Run DECIDE query
+@pytest.mark.correctness          # required for oracle-verified tests
+def test_my_new_query(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    # 1. Run DECIDE via the native CLI. packdb_cli.execute returns (rows, cols).
     sql = """
         SELECT col1, col2, x
         FROM my_table WHERE some_filter
@@ -362,47 +522,60 @@ def test_my_new_query(packdb_conn, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * col2)
     """
     t0 = time.perf_counter()
-    packdb_result = packdb_conn.execute(sql).fetchall()
-    packdb_cols = [d[0] for d in packdb_conn.description]
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
-    # 2. Fetch same data via plain SQL
+    # 2. Fetch the same data via vanilla duckdb (independent of PackDB).
     data = duckdb_conn.execute("""
         SELECT CAST(col1 AS DOUBLE), CAST(col2 AS DOUBLE)
         FROM my_table WHERE some_filter
     """).fetchall()
 
-    # 3. Build oracle model
+    # 3. Formulate the equivalent ILP in gurobipy.
     t_build = time.perf_counter()
     oracle_solver.create_model("my_test")
-    vnames = [f"x_{i}" for i in range(len(data))]
+    n = len(data)
+    vnames = [f"x_{i}" for i in range(n)]
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
 
     oracle_solver.add_constraint(
-        {vnames[i]: data[i][0] for i in range(len(data))},
+        {vnames[i]: data[i][0] for i in range(n)},
         "<=", 100.0, name="capacity",
     )
     oracle_solver.set_objective(
-        {vnames[i]: data[i][1] for i in range(len(data))},
+        {vnames[i]: data[i][1] for i in range(n)},
         ObjSense.MAXIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    # 4. Compare objectives
-    assert_optimal_match(
-        packdb_result, packdb_cols, result, ["x"],
+    # 4. Compare objective + decision vector. For non-linear objectives,
+    #    pass packdb_objective_fn=lambda rows, cols: ... instead of coeff_fn.
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[packdb_cols.index("col2")])},
     )
 
-    # 5. Record performance
+    # 5. Record performance and comparison status.
     perf_tracker.record(
         "my_test", packdb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.solve_time_seconds, n, len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 ```
+
+For aggregate operators with non-trivial semantics (PER, `<>`, COUNT,
+bilinear, MIN/MAX hard cases, nested aggregates), import helpers from
+`tests/_oracle_helpers.py` rather than re-rolling the logic. See §3.5.
+
+For quadratic objectives / constraints, use
+`oracle_solver.set_quadratic_objective(linear, quadratic, sense)` and
+`oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs)`.
+Pass `packdb_objective_fn` to `compare_solutions` since PackDB's objective
+cannot be recovered via a linear `coeff_fn`.
 
 ### Step 3: Run
 
@@ -422,37 +595,50 @@ bash run_tests.sh -k "test_my_new_query" -v
    Each test calls `create_model()` which resets state, but if a test crashes mid-model
    the next test could inherit stale state.
 
-3. **No feasibility verification.** `assert_optimal_match` checks objective equality
-   but does not verify that PackDB's variable assignments satisfy the constraints.
-   A future `constraint_checker` callback could be added.
+3. **Legacy `assert_optimal_match` is objective-only.** The legacy wrapper
+   checks objective equality but does not compare decision-variable vectors.
+   `compare_solutions` (the modern API, §3.2) does both — prefer it for all
+   new tests.
 
 4. **Fatal error cascading.** `test_nonlinear_decide_variables` triggers an
-   `InternalException`. If PackDB's error handling leaves the connection in a bad
-   state, subsequent tests sharing that connection may also fail. In practice this
-   hasn't been an issue because connections are function-scoped.
+   `InternalException`. `packdb_cli` shells out to a fresh subprocess per
+   call, so there's no shared state to corrupt — unlike the old in-process
+   `packdb_conn` fixture this replaced.
 
-5. **DECIDE subquery search path.** Subqueries inside SUCH THAT don't inherit the
-   connection's `search_path`. Tables must be fully qualified (e.g. `tpch.customer`).
+5. **DECIDE subquery search path.** Subqueries inside SUCH THAT don't inherit
+   the connection's `search_path`. Tables must be fully qualified
+   (e.g. `tpch.customer`).
 
-6. **No independent duckdb oracle.** Both `packdb_conn` and `duckdb_conn` use the
-   `packdb` Python package because vanilla `duckdb` and `packdb` share pybind11
-   type registrations and cannot coexist in one process. The `duckdb_conn` fixture
-   is functionally equivalent for plain SQL, but it means both connections use the
-   same engine.
+6. **Oracle side is fully independent of PackDB.** `duckdb_conn` uses vanilla
+   `duckdb` against a separately-generated `_tpch_oracle.duckdb`; the
+   `packdb` Python package is not imported anywhere in the test code. Both
+   databases are seeded with the same deterministic `dbgen` scale factor
+   so the data is identical.
 
-7. **Wall-clock performance numbers.** Timings reflect wall-clock time including
-   Python overhead, not CPU time. They are useful for relative comparisons across
-   runs but not for absolute benchmarking.
+7. **Wall-clock performance numbers.** Timings reflect wall-clock time
+   including Python overhead and subprocess startup, not CPU time. They
+   are useful for relative comparisons across runs but not for absolute
+   benchmarking.
 
-8. **Untested Gurobi backend.** `gurobi_backend.py` is implemented but has not been
-   validated (no Gurobi license available during development). All tests pass with
-   HiGHS.
+8. **Gurobi is mandatory on the oracle side.** If gurobipy isn't installed or
+   no valid Gurobi license is available, `run_tests.sh` pre-flights the
+   failure and exits with a clear error. There is no HiGHS fallback on the
+   oracle side; the PackDB CLI's HiGHS fallback (`01_pipeline/03d_solver_backends.md`)
+   is unrelated.
 
-9. **TPC-H scale factor sensitivity.** Tests are tuned for SF-0.01 (`packdb.db`).
-   Changing the scale factor may make some queries infeasible or shift constraint
-   boundaries. Example: q09 uses `s_nationkey <= 5` to ensure 20+ suppliers.
+9. **TPC-H scale factor sensitivity.** Tests are tuned for SF-0.01
+   (`packdb.db` and `_tpch_oracle.duckdb`). Changing the scale factor may
+   make some queries infeasible or shift constraint boundaries. Example:
+   q09 uses `s_nationkey <= 5` to ensure 20+ suppliers.
 
-10. **sys.path manipulation in conftest.** `conftest.py` inserts the test/decide
-    directory onto `sys.path` so that `solver/`, `comparison/`, and `performance/`
-    are importable. This is a convenience hack; a proper package install would be
-    cleaner.
+10. **sys.path manipulation in conftest.** `conftest.py` inserts the
+    test/decide directory onto `sys.path` so that `solver/`, `comparison/`,
+    `performance/`, and the top-level `packdb_cli` and `oracle_cache`
+    modules are importable. This is a convenience hack; a proper package
+    install would be cleaner.
+
+11. **QCQP tolerance.** `POWER(expr, 2) <= 0` (equality-via-quadratic) only
+    holds up to Gurobi's feasibility tolerance (~1e-6), which propagates
+    into the objective. `test_quadratic_constraints.py` relaxes its
+    comparison tolerance to `5e-2` for this reason; real encoding bugs
+    differ by orders of magnitude, not by solver noise.
