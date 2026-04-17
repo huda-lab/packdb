@@ -120,6 +120,36 @@ def packdb_cli(packdb_exe_path, packdb_db_path):
 
 
 @pytest.fixture(scope="session")
+def packdb_cli_highs(packdb_exe_path, packdb_db_path):
+    """CLI wrapper that forces PackDB to use the HiGHS backend.
+
+    Backed by the ``PACKDB_FORCE_SOLVER=highs`` env var read in
+    ``src/packdb/utility/ilp_solver.cpp``. Use in tests that must verify
+    HiGHS-specific error paths (e.g. non-convex QP rejection) on hosts
+    where Gurobi is also linked.
+    """
+    return PackDBCli(
+        packdb_exe_path, packdb_db_path, env={"PACKDB_FORCE_SOLVER": "highs"},
+    )
+
+
+@pytest.fixture(scope="session")
+def packdb_cli_gurobi(packdb_exe_path, packdb_db_path, _raw_oracle_solver):
+    """CLI wrapper that forces PackDB to use the Gurobi backend.
+
+    Skips the test if Gurobi is not available on this host. Availability
+    is probed indirectly via ``_raw_oracle_solver``: the oracle factory
+    requires gurobipy, which in turn requires a working Gurobi install,
+    the same dependency PackDB's Gurobi backend has.
+    """
+    if _raw_oracle_solver is None:
+        pytest.skip("Gurobi not available — packdb_cli_gurobi requires it")
+    return PackDBCli(
+        packdb_exe_path, packdb_db_path, env={"PACKDB_FORCE_SOLVER": "gurobi"},
+    )
+
+
+@pytest.fixture(scope="session")
 def _oracle_db_path():
     """Generate (once) and return the path to the vanilla TPC-H database."""
     return str(_ensure_oracle_db())

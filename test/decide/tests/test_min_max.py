@@ -43,6 +43,8 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
+from comparison.compare import compare_solutions
+from ._oracle_helpers import emit_inner_max, emit_inner_min
 
 
 # ============================================================================
@@ -509,7 +511,14 @@ def test_max_constraint_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30: only qualifying rows count."""
+    """MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30 — easy-case flat MIN objective.
+
+    Per CLAUDE.md MIN/MAX rules: MAXIMIZE MIN is an easy case — introduce a
+    global `z` with ``z <= expr_i`` for each WHEN-qualifying row, then
+    MAXIMIZE z (no indicators, no Big-M). This test oracle-verifies that
+    PackDB's flat-MIN-with-WHEN formulation is correctly routed to the easy
+    linearization.
+    """
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
@@ -518,11 +527,150 @@ def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         SUCH THAT SUM(x) >= 2
         MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    selected = sum(1 for row in packdb_result if int(row[ci["x"]]) == 1)
-    assert selected >= 2, f"SUM(x) >= 2 not satisfied: got {selected}"
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 5
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("min_objective_with_when")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+
+    # SUM(x) >= 2 over all rows (WHEN applies only to the MIN objective).
+    oracle_solver.add_constraint(
+        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+    )
+
+    # MAXIMIZE MIN over WHEN-qualifying rows: easy case, global z with
+    # z <= l_quantity_i * x_i for each i where l_quantity_i <= 30.
+    qualifying_indices = [i for i, row in enumerate(data) if row[2] <= 30.0]
+    assert qualifying_indices, "design-time: at least one row must qualify"
+    row_coeffs = [
+        {vnames[i]: float(data[i][2])} for i in qualifying_indices
+    ]
+    row_ub = max(float(data[i][2]) for i in qualifying_indices)
+    z_name = emit_inner_min(
+        oracle_solver, "obj", row_coeffs, row_ub,
+    )
+    oracle_solver.set_objective({z_name: 1.0}, ObjSense.MAXIMIZE)
+
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    # MIN(x * l_quantity) over WHEN-qualifying rows gives PackDB's objective.
+    def _packdb_min(rows, cols):
+        x_idx = cols.index("x")
+        q_idx = cols.index("l_quantity")
+        vals = [
+            int(r[x_idx]) * float(r[q_idx])
+            for r in rows
+            if float(r[q_idx]) <= 30.0
+        ]
+        return float(min(vals)) if vals else 0.0
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 0.0},
+        packdb_objective_fn=_packdb_min,
+    )
+    perf_tracker.record(
+        "min_objective_with_when", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.var_boolean
+@pytest.mark.obj_minimize
+@pytest.mark.when_objective
+@pytest.mark.correctness
+def test_max_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MINIMIZE MAX(x * l_quantity) WHEN l_quantity <= 30 — easy-case flat MAX objective.
+
+    Mirror of ``test_min_objective_with_when``. Per CLAUDE.md, MINIMIZE MAX is
+    an easy case — introduce a global ``z`` with ``z >= expr_i`` for each
+    WHEN-qualifying row, then MINIMIZE z (no indicators, no Big-M). Confirms
+    PackDB's flat-MAX-with-WHEN formulation is routed to the easy
+    linearization.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem
+        WHERE l_orderkey <= 5
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 2
+        MINIMIZE MAX(x * l_quantity) WHEN l_quantity <= 30
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 5
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_objective_with_when")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+
+    oracle_solver.add_constraint(
+        {v: 1.0 for v in vnames}, ">=", 2.0, name="sum_ge_2",
+    )
+
+    qualifying_indices = [i for i, row in enumerate(data) if row[2] <= 30.0]
+    assert qualifying_indices, "design-time: at least one row must qualify"
+    row_coeffs = [
+        {vnames[i]: float(data[i][2])} for i in qualifying_indices
+    ]
+    row_ub = max(float(data[i][2]) for i in qualifying_indices)
+    z_name = emit_inner_max(
+        oracle_solver, "obj", row_coeffs, row_ub,
+    )
+    oracle_solver.set_objective({z_name: 1.0}, ObjSense.MINIMIZE)
+
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    def _packdb_max(rows, cols):
+        x_idx = cols.index("x")
+        q_idx = cols.index("l_quantity")
+        vals = [
+            int(r[x_idx]) * float(r[q_idx])
+            for r in rows
+            if float(r[q_idx]) <= 30.0
+        ]
+        return float(max(vals)) if vals else 0.0
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 0.0},
+        packdb_objective_fn=_packdb_max,
+    )
+    perf_tracker.record(
+        "max_objective_with_when", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 # ============================================================================

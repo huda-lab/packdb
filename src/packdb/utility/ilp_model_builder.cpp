@@ -304,15 +304,75 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     // 3. Build constraints
     //===--------------------------------------------------------------------===//
 
-    // Helper: apply comparison sense to a constraint
-    auto ApplyComparisonSense = [](ModelConstraint &constr, ExpressionType cmp, double rhs) {
+    // Helper: is the LHS of this EvaluatedConstraint provably integer-valued?
+    //
+    // The check runs on the user's LHS *before* any lowering (McCormick
+    // linearization, auxiliary-variable introduction). Post-lowering auxiliaries
+    // are often declared REAL even when they always take integer values (e.g.,
+    // z = x * y with x Boolean and y Integer) — so inspecting `model.is_integer`
+    // after the fact would spuriously reject valid integer LHS shapes.
+    //
+    // A term is integer-valued when every referenced DECIDE variable is
+    // INTEGER/BOOLEAN (i.e., not `LogicalType::DOUBLE` or `LogicalType::FLOAT`)
+    // and every coefficient is integral. For bilinear terms, both factors must
+    // be integer-typed. For POWER(expr, 2) groups, the inner expression must be
+    // integer-valued (integer-valued expressions squared remain integer-valued).
+    //
+    // Used to gate the strict-inequality rewrite (`< K → <= K-1`, `> K → >= K+1`),
+    // which is semantically exact iff the LHS is confined to integer points.
+    auto IsRealType = [](const LogicalType &t) {
+        return t == LogicalType::DOUBLE || t == LogicalType::FLOAT;
+    };
+    auto AllCoeffsIntegral = [](const vector<double> &coeffs) {
+        for (double c : coeffs) {
+            if (std::floor(c) != c) return false;
+        }
+        return true;
+    };
+    auto IsEvalConstraintLhsIntegerValued = [&](const EvaluatedConstraint &ec) -> bool {
+        for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
+            idx_t vi = ec.variable_indices[i];
+            if (vi == DConstants::INVALID_INDEX) continue;
+            if (IsRealType(input.variable_types[vi])) return false;
+            if (!AllCoeffsIntegral(ec.row_coefficients[i])) return false;
+        }
+        for (const auto &bt : ec.bilinear_terms) {
+            if (IsRealType(input.variable_types[bt.var_a])) return false;
+            if (IsRealType(input.variable_types[bt.var_b])) return false;
+            if (!AllCoeffsIntegral(bt.row_coefficients)) return false;
+        }
+        for (const auto &qg : ec.quadratic_groups) {
+            for (idx_t i = 0; i < qg.variable_indices.size(); i++) {
+                idx_t vi = qg.variable_indices[i];
+                if (vi == DConstants::INVALID_INDEX) continue;
+                if (IsRealType(input.variable_types[vi])) return false;
+                if (!AllCoeffsIntegral(qg.row_coefficients[i])) return false;
+            }
+        }
+        return true;
+    };
+
+    // Helper: apply comparison sense to a constraint.
+    // Strict `<` / `>` require a provably integer-valued LHS; otherwise reject.
+    auto ApplyComparisonSense = [](ModelConstraint &constr, ExpressionType cmp, double rhs,
+                                   bool lhs_is_integer) {
         if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
             constr.sense = '>'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
+            if (!lhs_is_integer) {
+                throw InvalidInputException(
+                    "Strict inequality '>' is not supported when the left-hand side "
+                    "involves a REAL variable or a non-integer coefficient. Use '>=' instead.");
+            }
             constr.sense = '>'; constr.rhs = std::floor(rhs) + 1.0;
         } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
             constr.sense = '<'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
+            if (!lhs_is_integer) {
+                throw InvalidInputException(
+                    "Strict inequality '<' is not supported when the left-hand side "
+                    "involves a REAL variable or a non-integer coefficient. Use '<=' instead.");
+            }
             constr.sense = '<'; constr.rhs = std::ceil(rhs) - 1.0;
         } else if (cmp == ExpressionType::COMPARE_EQUAL) {
             constr.sense = '='; constr.rhs = rhs;
@@ -329,6 +389,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
+        bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
 
         if (is_aggregate) {
             if (!has_groups) {
@@ -369,7 +430,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                             rhs, r, eval_const.rhs_values[r]);
                     }
                 }
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 model.constraints.push_back(std::move(constr));
 
             } else {
@@ -401,7 +462,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         }
                         // PER STRICT: emit constraint with zero LHS (AGG(∅) = 0)
                         ModelConstraint empty_constr;
-                        ApplyComparisonSense(empty_constr, eval_const.comparison_type, rhs);
+                        ApplyComparisonSense(empty_constr, eval_const.comparison_type, rhs, lhs_is_integer);
                         model.constraints.push_back(std::move(empty_constr));
                         continue;
                     }
@@ -427,7 +488,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         }
                     }
 
-                    ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
+                    ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                     model.constraints.push_back(std::move(constr));
                 }
             }
@@ -453,7 +514,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 }
 
                 double rhs = eval_const.rhs_values[row];
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs);
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 model.constraints.push_back(std::move(constr));
             }
         }
@@ -465,10 +526,13 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     // and POWER outer-product Q entries — all accumulated together.
 
     // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
-    // row_set: which rows to include (empty = all rows for a single-row per-row case)
+    // row_set: which rows to include (empty = all rows for a single-row per-row case).
+    // lhs_is_integer: precomputed from the user's EvaluatedConstraint; gates the
+    // strict-inequality rewrite (`< K → <= K-1`) in the same way as the linear path.
     auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec,
                                         const vector<idx_t> &row_set,
-                                        double rhs) -> SolverModel::QuadraticConstraint {
+                                        double rhs,
+                                        bool lhs_is_integer) -> SolverModel::QuadraticConstraint {
         SolverModel::QuadraticConstraint qc;
         std::unordered_map<int, double> linear_accum;
         std::map<std::pair<int,int>, double> q_accum;
@@ -567,14 +631,35 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             }
         }
 
-        // RHS and sense (move constant terms to RHS)
-        qc.rhs = rhs - rhs_adjustment;
-        if (ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-            qc.sense = '<';
-        } else if (ec.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-            qc.sense = '>';
-        } else {
-            qc.sense = '=';
+        // RHS and sense (move constant terms to RHS).
+        // Mirror the linear-path strict-inequality rule: apply `< K → <= K-1`
+        // (or `> K → >= K+1`) only when the LHS is provably integer-valued;
+        // otherwise reject.
+        double adjusted_rhs = rhs - rhs_adjustment;
+        qc.rhs = adjusted_rhs;
+        switch (ec.comparison_type) {
+        case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+            qc.sense = '<'; break;
+        case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+            qc.sense = '>'; break;
+        case ExpressionType::COMPARE_EQUAL:
+            qc.sense = '='; break;
+        case ExpressionType::COMPARE_LESSTHAN:
+            if (!lhs_is_integer) {
+                throw InvalidInputException(
+                    "Strict inequality '<' is not supported when the left-hand side "
+                    "involves a REAL variable or a non-integer coefficient. Use '<=' instead.");
+            }
+            qc.sense = '<'; qc.rhs = std::ceil(adjusted_rhs) - 1.0; break;
+        case ExpressionType::COMPARE_GREATERTHAN:
+            if (!lhs_is_integer) {
+                throw InvalidInputException(
+                    "Strict inequality '>' is not supported when the left-hand side "
+                    "involves a REAL variable or a non-integer coefficient. Use '>=' instead.");
+            }
+            qc.sense = '>'; qc.rhs = std::floor(adjusted_rhs) + 1.0; break;
+        default:
+            throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
         }
         return qc;
     };
@@ -586,6 +671,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
+        bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
 
         if (is_aggregate) {
             double rhs = eval_const.rhs_values.empty() ? 0.0 : eval_const.rhs_values[0];
@@ -595,7 +681,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
                 model.quadratic_constraints.push_back(
-                    BuildQuadraticConstraint(eval_const, all_rows, rhs));
+                    BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer));
             } else {
                 // PER groups: one QuadraticConstraint per group
                 vector<vector<idx_t>> group_rows(eval_const.num_groups);
@@ -611,11 +697,11 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         // PER STRICT: emit quadratic constraint with zero LHS
                         vector<idx_t> empty_rows;
                         model.quadratic_constraints.push_back(
-                            BuildQuadraticConstraint(eval_const, empty_rows, rhs));
+                            BuildQuadraticConstraint(eval_const, empty_rows, rhs, lhs_is_integer));
                         continue;
                     }
                     model.quadratic_constraints.push_back(
-                        BuildQuadraticConstraint(eval_const, group_rows[g], rhs));
+                        BuildQuadraticConstraint(eval_const, group_rows[g], rhs, lhs_is_integer));
                 }
             }
         } else {
@@ -627,7 +713,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 vector<idx_t> single_row = {row};
                 double rhs = eval_const.rhs_values[row];
                 model.quadratic_constraints.push_back(
-                    BuildQuadraticConstraint(eval_const, single_row, rhs));
+                    BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_is_integer));
             }
         }
     }

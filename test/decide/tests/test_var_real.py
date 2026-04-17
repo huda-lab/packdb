@@ -318,6 +318,77 @@ def test_real_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
 
 @pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_real_fractional_readback(
+    packdb_cli, oracle_solver, perf_tracker
+):
+    """Force a genuinely non-integer REAL optimum and confirm the readback
+    path preserves the fractional value.
+
+    ``SUM(x) = 10.5`` cannot be satisfied by all-integer variables (the sum of
+    three nonnegative integers is an integer). At least one row must come
+    back with a non-integer value. If the readback path in
+    ``physical_decide.cpp`` silently truncated or rounded DOUBLE outputs,
+    the sum of returned values would no longer equal 10.5.
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
+        )
+        SELECT id, ROUND(x, 6) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT x <= 5 AND SUM(x) = 10.5
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    assert len(packdb_rows) == 3
+
+    n = 3
+    t_build = time.perf_counter()
+    oracle_solver.create_model("real_fractional_readback")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=5.0)
+    oracle_solver.add_constraint(
+        {vn: 1.0 for vn in vnames}, "=", 10.5, name="sum_fractional",
+    )
+    oracle_solver.set_objective(
+        {vn: 1.0 for vn in vnames}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    x_idx = packdb_cols.index("x")
+    packdb_sum = sum(float(r[x_idx]) for r in packdb_rows)
+    assert abs(packdb_sum - 10.5) <= 1e-4, (
+        f"Readback lost fractional precision: SUM(x)={packdb_sum}, expected 10.5"
+    )
+    assert abs(packdb_sum - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: PackDB={packdb_sum}, Oracle={result.objective_value}"
+    )
+    # Structural check: at least one value must be genuinely fractional.
+    has_fractional = any(
+        abs(float(r[x_idx]) - round(float(r[x_idx]))) > 1e-4 for r in packdb_rows
+    )
+    assert has_fractional, (
+        f"No fractional value in readback; got x={[r[x_idx] for r in packdb_rows]}"
+    )
+
+    perf_tracker.record(
+        "real_fractional_readback", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="oracle_match",
+        decide_vector=None,
+    )
+
+
+@pytest.mark.var_real
 @pytest.mark.per_clause
 @pytest.mark.obj_maximize
 @pytest.mark.correctness

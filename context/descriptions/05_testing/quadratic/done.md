@@ -21,17 +21,20 @@ variants.
 | Simple squared variable (`POWER(x, 2)`) | `test_quadratic.py` | ✓ |
 | Various coefficient forms | `test_quadratic.py` | ✓ |
 | QP + WHEN | `test_quadratic.py::test_qp_with_when` | ✓ |
-| QP objective + PER constraint (`SUM(x)>=5 PER grp` with `MINIMIZE SUM(POWER(x-t,2))`) | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ |
+| QP objective + PER constraint | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ |
 | Mixed linear + quadratic: `SUM(POWER(x-t,2) + c*x)` | `test_quadratic.py::test_qp_mixed_linear_quadratic` | ✓ |
 | Mixed linear + quadratic: `SUM(POWER(x-t,2)) + SUM(c*x)` | `test_quadratic.py::test_qp_mixed_separate_sums` | ✓ |
 | Mixed negated quadratic + linear: `MAXIMIZE SUM(-POWER(x-t,2) + c*x)` | `test_quadratic.py::test_qp_mixed_negated_quadratic` | ✓ |
-| MIQP (integer vars + convex QP, maximize concave Q) | `test_quadratic.py::test_maximize_convex_power_integer_case_b` | ✓ (gurobi-gated) |
+| MIQP (integer vars + convex QP) | `test_quadratic.py::test_maximize_convex_power_integer_case_b` | ✓ (gurobi-gated) |
 | QP + multiple variables | `test_quadratic.py::test_qp_multiple_variables` | ✓ |
 | TPC-H data QP | `test_quadratic.py` | ✓ |
 | Nested `SUM(SUM(POWER(x-t,2))) PER grp` with binding per-group cap | `test_quadratic.py::test_qp_nested_sum_sum_per_binding` | ✓ |
 | Nested `SUM(SUM(POWER(x-t,2))) PER grp` unconstrained | `test_quadratic.py::test_qp_nested_sum_sum_per_unconstrained` | ✓ |
-| Nested `SUM(AVG(POWER(x-t,2))) PER grp` with unequal groups + per-group cap | `test_quadratic.py::test_qp_nested_sum_avg_per_binding` | ✓ |
+| Nested `SUM(AVG(POWER(x-t,2))) PER grp` with unequal groups | `test_quadratic.py::test_qp_nested_sum_avg_per_binding` | ✓ |
 | Nested `SUM(SUM(POWER(x,2))) PER grp` (constant-free regression) | `test_quadratic.py::test_qp_nested_sum_sum_per_constant_free_regression` | ✓ |
+| Nested `SUM(MAX(POWER(x-t,2))) PER grp` (hard inner, non-convex) | `test_per_objective.py::test_maximize_sum_max_power_per` | ✓ (gurobi-gated) |
+| Nested `SUM(MIN(POWER(x-t,2))) PER grp` (hard inner, INTEGER x) | `test_per_objective.py::test_minimize_sum_min_power_per` | ✓ (gurobi-gated) |
+| Entity-scoped QP objective | `test_quadratic.py::test_qp_entity_scoped_objective` | ✓ |
 
 ## Scenarios covered (constraints — QCQP)
 
@@ -63,17 +66,17 @@ variants.
 |----------|-------|
 | `POWER(x, 3)` (exponent ≠ 2) rejected | `test_quadratic.py` |
 | Variable exponent rejected | `test_quadratic.py` |
-| Multiple POWER groups in one objective (e.g. `SUM(POWER(x,2)) + SUM(POWER(y,2))`) rejected | `test_quadratic.py::test_qp_multiple_quadratic_groups_rejected` |
-| Degree > 2 self-product in objective (`POWER(x,2)*POWER(x,2)` = x⁴) rejected | `test_quadratic.py::test_qp_self_product_of_power_rejected` |
-| Degree > 2 product of two POWERs in objective (`POWER(x,2)*POWER(y,2)` = x²y²) rejected | `test_quadratic.py::test_qp_product_of_two_powers_rejected` |
-| Degree > 2 variable × POWER in objective (`a*POWER(y,2)`, cubic) rejected | `test_quadratic.py::test_qp_variable_times_power_rejected` |
-| Degree > 2 self-product in constraint (`SUM(POWER(x,2)*POWER(x,2)) <= K`) rejected | `test_quadratic_constraints.py::test_constraint_self_product_of_power_rejected` |
+| Multiple POWER groups in one objective | `test_quadratic.py::test_qp_multiple_quadratic_groups_rejected` |
+| Degree > 2 self-product in objective | `test_quadratic.py::test_qp_self_product_of_power_rejected` |
+| Degree > 2 product of two POWERs in objective | `test_quadratic.py::test_qp_product_of_two_powers_rejected` |
+| Degree > 2 variable × POWER in objective | `test_quadratic.py::test_qp_variable_times_power_rejected` |
+| Degree > 2 self-product in constraint | `test_quadratic_constraints.py::test_constraint_self_product_of_power_rejected` |
 | Degree > 2 product of two POWERs in constraint | `test_quadratic_constraints.py::test_constraint_product_of_two_powers_rejected` |
 | Degree > 2 variable × POWER in constraint | `test_quadratic_constraints.py::test_constraint_variable_times_power_rejected` |
-| HiGHS rejects non-convex QP | `test_quadratic.py` (`_expect_gurobi` pattern) |
-| HiGHS rejects MIQP | `test_quadratic.py` |
+| HiGHS rejects non-convex QP | `test_quadratic.py::TestHighsRejection::test_highs_nonconvex_qp_rejected` + `_expect_gurobi` pattern |
+| HiGHS rejects MIQP | `test_quadratic.py::TestHighsRejection::test_highs_miqp_rejected` + `_expect_gurobi` |
 | HiGHS rejects quadratic constraints | `test_quadratic_constraints.py` |
-| Infeasible quadratic constraint | `test_quadratic_constraints.py` |
+| Infeasible quadratic constraint (tight `match=`) | `test_quadratic_constraints.py::test_infeasible_negative_budget` |
 
 ## Feature interactions covered
 
@@ -82,7 +85,7 @@ variants.
 | QP objective | WHEN | ✓ |
 | QP constraint | WHEN | ✓ |
 | QP constraint | PER | ✓ |
-| QP constraint | WHEN + PER (mask before group) | ✓ (`test_quadratic_constraints.py::test_when_per_quadratic_constraint`) |
+| QP constraint | WHEN + PER | ✓ |
 | QP objective | multiple variables | ✓ |
 | QP constraint | multiple variables | ✓ |
 | QP | BOOLEAN (MIQP) | ✓ (gurobi-gated) |
@@ -90,8 +93,10 @@ variants.
 | QP | REAL | ✓ |
 | QP | entity-scoped | ✓ |
 | QP constraint | bilinear (mixed) | ✓ |
-| QP objective | PER constraint (flat MINIMIZE + SUM(x)>=K PER grp) | ✓ (`test_per_interactions.py::test_qp_objective_per_constraint`, oracle-solved) |
-| QP objective | linear terms in same SUM (`SUM(POWER(x-t,2) + c*x)`) | ✓ (`test_quadratic.py::test_qp_mixed_linear_quadratic`) |
-| QP objective | linear terms in sibling SUM (`SUM(POWER(...)) + SUM(c*x)`) | ✓ (`test_quadratic.py::test_qp_mixed_separate_sums`) |
-| Negated QP objective | linear terms (`MAXIMIZE SUM(-POWER(...) + c*x)`) | ✓ (`test_quadratic.py::test_qp_mixed_negated_quadratic`) |
-| QP objective | nested PER outer-SUM (`SUM(SUM(POWER(...))) PER grp`, `SUM(AVG(POWER(...))) PER grp`) | ✓ (`test_quadratic.py::test_qp_nested_sum_sum_per_binding`, `test_qp_nested_sum_avg_per_binding`). Fix: `SumInnerIsQuadratic` recognizes nested aggregate-of-quadratic so normalization preserves the raw AST; post-bind optimizer's nested-strip flattens to flat QP+PER. |
+| QP objective | PER constraint | ✓ |
+| QP objective | linear terms in same SUM | ✓ |
+| QP objective | linear terms in sibling SUM | ✓ |
+| Negated QP objective | linear terms | ✓ |
+| QP objective | nested PER outer-SUM | ✓ |
+| QP objective | nested PER inner-MIN (hard) | ✓ |
+| QP objective | nested PER inner-MAX (hard) | ✓ |

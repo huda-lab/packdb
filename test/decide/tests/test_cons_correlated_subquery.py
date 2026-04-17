@@ -360,3 +360,82 @@ def test_correlated_subquery_null_coalesce(packdb_cli, duckdb_conn, oracle_solve
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.cons_aggregate
+@pytest.mark.cons_subquery
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_correlated_subquery_is_real(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Correlated subquery providing a fractional per-row upper bound on IS REAL.
+
+    Decorrelation emits per-row RHS values; with `AVG(...)` on a continuous
+    (non-integer) LHS those bounds are fractional in general. This exercises
+    the LP / continuous-variable path through decorrelation — previous
+    correlated-subquery tests all use BOOLEAN or INTEGER variables.
+
+    An aggregate budget forces the optimum to be non-trivial (not simply
+    `x_i = ub_i` for every row).
+    """
+    sql = """
+        SELECT l.l_orderkey, l.l_linenumber, l.l_extendedprice, l.l_quantity, x
+        FROM lineitem l
+        WHERE l.l_orderkey < 30
+        DECIDE x IS REAL
+        SUCH THAT x <= (SELECT CAST(AVG(l2.l_quantity) AS DOUBLE)
+                        FROM lineitem l2
+                        WHERE l2.l_orderkey = l.l_orderkey)
+              AND SUM(x * l.l_quantity) <= 100
+        MAXIMIZE SUM(x * l.l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l.l_orderkey AS BIGINT),
+               CAST(l.l_linenumber AS BIGINT),
+               CAST(l.l_extendedprice AS DOUBLE),
+               CAST(l.l_quantity AS DOUBLE),
+               CAST(avg_q.avg_quantity AS DOUBLE)
+        FROM lineitem l
+        JOIN (
+            SELECT l2.l_orderkey, AVG(l2.l_quantity) AS avg_quantity
+            FROM lineitem l2
+            GROUP BY l2.l_orderkey
+        ) avg_q ON avg_q.l_orderkey = l.l_orderkey
+        WHERE l.l_orderkey < 30
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("correlated_subquery_is_real")
+    vnames = [f"x_{i}" for i in range(n)]
+    for i, vn in enumerate(vnames):
+        # ub from decorrelated AVG → fractional in general
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=data[i][4])
+
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][3] for i in range(n)},
+        "<=", 100.0, name="budget",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+    perf_tracker.record(
+        "correlated_subquery_is_real", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )

@@ -25,9 +25,11 @@ All expect `packdb.ParserException`.
 | Non-linear / invalid aggregate | `test_no_decide_variable_in_sum`, `test_multiple_decide_variables_in_sum`, `test_nonlinear_decide_variables` |
 | RHS shape | `test_between_non_scalar`, `test_decide_between_decide_variable`, `test_in_rhs_with_decide_variable`, `test_sum_rhs_non_scalar`, `test_decide_variable_rhs_with_decide`, `test_sum_equal_non_scalar` |
 | Objective rejections | `test_objective_with_addition`, `test_objective_bare_column` |
-| Subquery | `test_subquery_rhs_non_scalar` |
+| Subquery | `test_subquery_rhs_non_scalar`, `test_subquery_rhs_returns_multiple_rows` |
 | WHEN restrictions | DECIDE var in WHEN condition (aggregate + compound), correlated subquery non-scalar |
 | Aggregate-local WHEN | Mixing expression-level and aggregate-local, DECIDE var in local condition |
+| PER on per-row constraint | `test_per_on_perrow_constraint_rejection` |
+| Aggregate LHS vs aggregate RHS | `test_aggregate_vs_aggregate_constraint_rejected` |
 | Flat MIN/MAX + PER | Rejected via `test_per_objective.py` |
 
 All expect `packdb.InvalidInputException` or `packdb.BinderException`.
@@ -50,18 +52,16 @@ All expect `packdb.InvalidInputException` matching `"infeasible"`.
 | Unbounded MAXIMIZE with `IS INTEGER` (only lower bound) | `test_error_infeasible.py::TestUnboundedModels::test_unbounded_integer_maximize` |
 | Unbounded MAXIMIZE with `IS REAL` (only lower bound) | `test_error_infeasible.py::TestUnboundedModels::test_unbounded_real_maximize` |
 
-Verifies PackDB surfaces the solver's UNBOUNDED status as a clear error rather
-than crashing, hanging, or returning garbage values. Covers both the MILP path
-(INTEGER) and the LP path (REAL). Error message matches
-`(?i)(unbounded|infeasible)` — accepts either, since some solvers return
-`INF_OR_UNBD` when they can't distinguish the two without further analysis.
+Error message matches `(?i)(unbounded|infeasible)` — accepts either, since
+some solvers return `INF_OR_UNBD` when they can't distinguish the two without
+further analysis.
 
 ## Solver-specific error paths
 
 | Scenario | Where |
 |----------|-------|
-| HiGHS rejects non-convex QP (via `_expect_gurobi`) | `test_quadratic.py` |
-| HiGHS rejects MIQP (via `_expect_gurobi`) | `test_quadratic.py` |
+| HiGHS rejects non-convex QP | `test_quadratic.py::TestHighsRejection::test_highs_nonconvex_qp_rejected` (forced-HiGHS tight match) + `test_quadratic.py` (`_expect_gurobi` pattern) |
+| HiGHS rejects MIQP | `test_quadratic.py::TestHighsRejection::test_highs_miqp_rejected` (forced-HiGHS tight match) + `test_quadratic.py` (`_expect_gurobi`) |
 | HiGHS rejects quadratic constraints | `test_quadratic_constraints.py` |
 | HiGHS rejects non-convex bilinear | `test_bilinear.py` |
 | Bilinear without upper bound on non-Boolean | `test_bilinear.py` |

@@ -4,6 +4,14 @@ Uses Big-M indicator variables: for each INTEGER var x, introduces binary z
 with z <= x and x <= M*z, then rewrites COUNT(x) to SUM(z). The oracle
 mirrors the same rewrite so its objective/constraint shape matches PackDB's
 compiled ILP.
+
+Covers:
+  - test_count_integer_constraint / _upper / _dedup: COUNT bounds
+  - test_count_integer_objective: MAXIMIZE COUNT
+  - test_count_integer_objective_minimize: MINIMIZE COUNT (indicator orientation
+    — solver must be free to drive z_i to 0, which drives x_i to 0)
+  - test_count_integer_hidden_indicator: indicator vars not in SELECT *
+  - test_count_integer_with_when: COUNT(x) WHEN condition
 """
 
 import time
@@ -89,20 +97,26 @@ def _run_and_compare(
     result = oracle_solver.solve()
 
     if count_objective_max:
-        # Objective is COUNT(x) — in PackDB rows, that's how many x > 0.
-        coeff_fn = lambda row, _vcol=value_col_index: {"x": 0.0}
-        # We can't compare via coeff_fn alone for a COUNT objective; fall back
-        # to asserting the oracle's count matches PackDB's count.
-        nonzero = sum(1 for r in packdb_rows if float(r[packdb_cols.index("x")]) > 0)
-        assert abs(nonzero - result.objective_value) < 1e-4, (
-            f"COUNT mismatch: PackDB {nonzero}, oracle {result.objective_value}"
+        # Non-linear objective: route `packdb_objective_fn` through
+        # `compare_solutions` so the x-vector is still validated element-wise
+        # against the oracle (not just the scalar count — an off-orientation
+        # indicator could produce the same count with a wrong x-vector).
+        def _packdb_count(rows, cols, _vcol=value_col_index):
+            return float(
+                sum(1 for r in rows if float(r[cols.index("x")]) > 0)
+            )
+
+        cmp = compare_solutions(
+            packdb_rows, packdb_cols, result, data, ["x"],
+            coeff_fn=lambda row: {"x": 0.0},
+            packdb_objective_fn=_packdb_count,
         )
         perf_tracker.record(
             test_id, packdb_time, build_time, result.solve_time_seconds,
             n, 2 * n, 1,
             result.objective_value, oracle_solver.solver_name(),
-            comparison_status="identical",
-            decide_vector=[float(r[packdb_cols.index("x")]) for r in packdb_rows],
+            comparison_status=cmp.status,
+            decide_vector=cmp.oracle_vector,
         )
     else:
         cmp = compare_solutions(
@@ -194,6 +208,78 @@ def test_count_integer_objective(
         value_col_index=1, big_M=5.0,
         count_objective_max=True,
         extra_constraints_fn=extra,
+    )
+
+
+@pytest.mark.count_rewrite
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_count_integer_objective_minimize(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE COUNT(x) should minimize number of non-zero assignments.
+
+    Indicator orientation is the concern: ``z_i = 1 ⇔ x_i > 0``. Under
+    MAXIMIZE COUNT the solver pushes z up (and must be able to); under
+    MINIMIZE COUNT the solver pushes z down (and must be free to set z=0
+    only when x=0). A wrong orientation would either force all z=1 or
+    would allow x>0 with z=0, silently inflating or deflating the count.
+
+    SUM(x) >= 12 with x <= 10 per row forces at least 2 non-zeros, so the
+    oracle-optimal count is 2.
+    """
+    data_sql = (
+        "SELECT * FROM (VALUES ('a', 10), ('b', 5), ('c', 8), ('d', 3)) t(name, value)"
+    )
+    decide_sql = f"""
+        SELECT name, value, x FROM ({data_sql})
+        DECIDE x
+        SUCH THAT SUM(x) >= 12 AND x <= 10
+        MINIMIZE COUNT(x)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(decide_sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(data_sql).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("count_integer_objective_minimize")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=10.0)
+    zs = add_count_integer_indicators(oracle_solver, vnames, big_M=10.0)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(n)}, ">=", 12.0, name="sum_floor",
+    )
+    oracle_solver.set_objective(
+        {z: 1.0 for z in zs}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    # Non-linear COUNT objective: feed x-vector through compare_solutions via
+    # `packdb_objective_fn`. Bare scalar-count comparison would silently pass
+    # an incorrect x-vector that happens to hit the same count.
+    def _packdb_count(rows, cols):
+        return float(
+            sum(1 for r in rows if float(r[cols.index("x")]) > 0)
+        )
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 0.0},
+        packdb_objective_fn=_packdb_count,
+    )
+
+    perf_tracker.record(
+        "count_integer_objective_minimize", packdb_time, build_time,
+        result.solve_time_seconds, n, 2 * n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
     )
 
 

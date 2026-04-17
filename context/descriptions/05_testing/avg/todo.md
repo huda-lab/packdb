@@ -1,32 +1,28 @@
 # AVG Aggregate Test Coverage — Todo
 
-## Missing coverage
+## Open bugs
 
-### MEDIUM: AVG with `<>` operator
+### MEDIUM: AVG with `<>` operator — rewrite distributes `1/N` into LHS coefficients
 
-`AVG(x) <> K` desugars to `SUM(x) <> K*N` — scaled RHS interacts with the Big-M disjunction rewrite used for `<>`. If the RHS scaling happens after the `<>` rewrite, the disjunction bounds are wrong.
+**Status:** xfail test in place (`test_avg.py::test_avg_not_equal_boolean`, `::test_avg_not_equal_with_when`). Both raise `PackDBCliError` with the integer-step guard message.
 
+**Symptom:** Every `AVG(x) <> K` query is rejected:
+
+```
+Invalid Input Error: Inequality '<>' is not supported when the left-hand side
+involves a REAL variable or a non-integer coefficient. The integer-step
+rewrite (x <> K → x <= K-1 OR x >= K+1) would cut continuous feasible
+points in the band (K-1, K+1).
+```
+
+**Root cause (empirical):** `AVG(x) <=`/`=` work correctly (oracle-verified by the other `test_avg_*` tests), but the NE path lowers `AVG(x) <> K` by distributing `1/N` into LHS coefficients rather than hoisting `N` to the RHS. The NE integer-step guard in `physical_decide.cpp` then sees fractional coefficients and rejects. Rewrite order: `RewriteNotEqual` (step 4 in `decide_optimizer.cpp:46-64`) runs before `RewriteAvgToSum` (step 6), so the NE indicator is created against the still-AVG LHS; by the time the guard runs, the AVG has been lowered into fractional coefficients.
+
+**Fix direction:** the AVG→SUM rewrite must, for the NE case, emit `SUM(x) <> K*N` (integer-valued LHS) rather than `SUM((1/N)*x) <> K`. Un-xfail both tests when fixed.
+
+**Example:**
 ```sql
--- AVG with not-equal
 SELECT id, x FROM data
 DECIDE x IS BOOLEAN
 SUCH THAT AVG(x) <> 0.5
 MAXIMIZE SUM(x * profit)
-```
-
-### LOW: PER group with exactly 1 row + AVG (scaling edge case)
-
-Off-by-one or division issues in the `1/n_g` scaling when a PER group has a single row, combined with groups of very different sizes. AVG scaling stresses the coefficient scaling path differently when `n_g = 1` vs. `n_g = 50` in the same query.
-
-```sql
--- Asymmetric PER groups with AVG
-WITH data AS (
-    SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
-    SELECT 2, 'B', 5.0 UNION ALL SELECT 3, 'B', 8.0 UNION ALL
-    SELECT 4, 'B', 3.0 UNION ALL SELECT 5, 'B', 7.0
-)  -- group A has 1 row, group B has 4
-SELECT id, grp, val, x FROM data
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x) >= 1 PER grp
-MINIMIZE SUM(AVG(x * val)) PER grp
 ```

@@ -15,10 +15,13 @@ Tests live in `test/decide/tests/test_avg.py` (9 tests) plus interactions in
 | AVG with BOOLEAN variables | `test_avg.py` | ✓ |
 | AVG with INTEGER variables | `test_avg.py` | ✓ |
 | AVG in bilinear constraint | `test_avg.py` | ✓ |
+| AVG(x) `<>` K (Big-M + RHS scaling) | `test_avg.py::test_avg_not_equal_boolean` | xfail |
+| AVG(x) `<>` K + WHEN | `test_avg.py::test_avg_not_equal_with_when` | xfail |
 | AVG with no decide variable (passthrough) | `test_avg.py` | — |
 | Aggregate-local WHEN on AVG | `test_aggregate_local_when.py` | ✓ |
 | Aggregate-local WHEN + AVG + PER | `test_aggregate_local_when.py` | ✓ |
 | Nested `SUM(AVG(x * cost)) PER col` with unequal groups | `test_per_objective.py::test_sum_avg_per_unequal_groups` | ✓ |
+| Nested `SUM(AVG(x * cost)) PER col` with **extreme** group-size asymmetry (1:5) | `test_per_objective.py::test_sum_avg_per_extreme_unequal_groups` | ✓ |
 | Nested `MAX(AVG(...)) PER col` (easy MAX) | `test_per_objective.py::test_minimize_max_avg_per` | ✓ |
 | Nested `MIN(AVG(...)) PER col` (easy MIN) | `test_per_objective.py::test_maximize_min_avg_per` | ✓ |
 
@@ -34,4 +37,5 @@ Tests live in `test/decide/tests/test_avg.py` (9 tests) plus interactions in
 | AVG | WHEN + PER | ✓ |
 | AVG (inner) | SUM / MAX / MIN (outer) + PER | ✓ |
 | AVG | bilinear constraint | ✓ |
+| AVG | `<>` (NE Big-M) | xfail (see `todo.md` — rewrite leaves fractional coeffs on LHS) |
 | AVG | entity-scoped | ✓ (`test_entity_scope.py::test_entity_scoped_with_avg`) |

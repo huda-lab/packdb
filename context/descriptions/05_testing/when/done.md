@@ -13,11 +13,14 @@ Tests live in:
 
 | Scenario | Where | Oracle |
 |----------|-------|--------|
-| String equality condition | `test_when_constraint.py` | ✓ |
-| Numeric comparison condition | `test_when_constraint.py` | ✓ |
+| String equality condition | `test_when_constraint.py::test_when_aggregate_string_equality` | ✓ |
+| Numeric comparison condition | `test_when_constraint.py::test_when_aggregate_numeric_comparison` | ✓ |
+| Constant coefficient in WHEN-gated SUM | `test_when_constraint.py::test_when_aggregate_constant_coeff` | ✓ |
+| `<>` with WHEN (expression-level) | `test_when_constraint.py::test_when_not_equal` | ✓ |
 | All rows match (trivially applies) | `test_when_constraint.py::test_when_all_rows_match` | ✓ |
 | No rows match (trivially satisfied) | `test_when_constraint.py::test_when_no_rows_match` | ✓ |
 | NULL in condition column | `test_when_constraint.py::test_when_null_condition_column` | ✓ |
+| Explicit `IS NOT NULL` predicate in WHEN (requires parens around predicate) | `test_when_constraint.py::test_when_is_not_null_predicate` | ✓ |
 | Mixed conditional + unconditional constraints | `test_when_constraint.py::test_when_mixed_conditional_and_unconditional` | ✓ |
 | Multiple categories (different WHEN per constraint) | `test_when_constraint.py::test_when_multiple_categories` | ✓ |
 | Constraint ordering invariance | `test_when_constraint.py::test_when_constraint_ordering_invariance` | ✓ |
@@ -31,6 +34,7 @@ Tests live in:
 | Numeric row filter | `test_when_perrow.py` | ✓ |
 | All rows match | `test_when_perrow.py` | ✓ |
 | No rows match | `test_when_perrow.py` | ✓ |
+| IS REAL variable (continuous skip-constraint path, no implicit [0,1] cap) | `test_when_perrow.py::test_when_perrow_real` | ✓ |
 
 ### WHEN on objectives
 
@@ -41,11 +45,12 @@ Tests live in:
 | Unconditional constraint + WHEN objective | `test_when_objective.py` | ✓ |
 | Same WHEN on constraint and objective | `test_when_objective.py` | ✓ |
 | Different WHEN on constraint vs objective | `test_when_objective.py` | ✓ |
+| WHEN on objective matching zero rows | `test_when_objective.py::test_when_objective_no_match` | ✓ |
 
 ### Compound conditions
 
-| Scenario | Where |
-|----------|-------|
+| Scenario | Where | Oracle |
+|----------|-------|--------|
 | WHEN with AND (parenthesized) | `test_when_compound.py` | ✓ |
 | WHEN with OR (parenthesized) | `test_when_compound.py` | ✓ |
 | Nested compound conditions | `test_when_compound.py` | ✓ |
@@ -66,7 +71,7 @@ Tests live in:
 | Aggregate-local WHEN + entity-scoped | `test_aggregate_local_when.py::test_entity_scoped_aggregate_local_when` | ✓ |
 | Aggregate-local WHEN + BETWEEN | `test_aggregate_local_when.py::test_between_aggregate_local_when_constraint` | ✓ |
 | Expression-level WHEN + PER still works | `test_aggregate_local_when.py::test_expression_level_when_per_still_works` | ✓ |
-| Aggregate-local WHEN + `<>` (NE) constraint — Big-M rewrite composes with WHEN mask | `test_aggregate_local_when.py::test_ne_aggregate_local_when_constraint` | ✓ |
+| Aggregate-local WHEN + `<>` (NE) constraint | `test_aggregate_local_when.py::test_ne_aggregate_local_when_constraint` | ✓ |
 | Aggregate-local WHEN + `<>` + PER | `test_aggregate_local_when.py::test_ne_with_per_constraint` | ✓ |
 | Aggregate-local WHEN objective re-association | `test_aggregate_local_when.py::test_aggregate_local_when_objective_reassociation` | ✓ |
 | Aggregate-local WHEN single aggregate | `test_aggregate_local_when.py::test_aggregate_local_when_single_aggregate` | ✓ |
@@ -75,10 +80,6 @@ Tests live in:
 | Aggregate-local WHEN all rows filtered out | `test_aggregate_local_when.py::test_aggregate_local_when_all_filtered_out` | ✓ |
 | Aggregate-local WHEN objective mixing filtered + unfiltered terms | `test_aggregate_local_when.py::test_aggregate_local_when_objective_mixed_filtered_unfiltered` | ✓ |
 | Aggregate-local WHEN constraint mixing filtered + unfiltered terms | `test_aggregate_local_when.py::test_aggregate_local_when_mixed_filtered_unfiltered_constraint` | ✓ |
-
-## Closed 2026-04-17
-
-- **NE + aggregate-local WHEN** — `test_ne_aggregate_local_when_constraint` was previously xfail because the `<>` Big-M expansion did not compose with aggregate-local WHEN filters. Fixed in commit `293dc6d664` (`src/execution/operator/decide/physical_decide.cpp`, +206/-56): the NE indicator variables and Big-M constraint emission now honor the per-term WHEN mask during aggregate accumulation. Test now runs as a standard oracle-compared correctness test.
 
 ### Error cases
 
@@ -93,19 +94,19 @@ Tests live in:
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
 | WHEN | aggregate constraint | ✓ |
-| WHEN | per-row constraint | ✓ |
+| WHEN | per-row constraint | ✓ (BOOLEAN, INTEGER, REAL) |
 | WHEN | objective | ✓ |
 | WHEN | compound AND/OR | ✓ |
 | WHEN | PER | ✓ |
 | WHEN | MIN/MAX (easy) | ✓ |
-| WHEN | MIN/MAX (hard, aggregate-local) | ✓ (`test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max`) |
+| WHEN | MIN/MAX (hard, aggregate-local) | ✓ |
 | WHEN | COUNT (BOOLEAN and INTEGER) | ✓ |
 | WHEN | AVG | ✓ |
 | WHEN | ABS (objective) | ✓ |
 | WHEN | QP | ✓ |
 | WHEN | quadratic constraint | ✓ |
 | WHEN | `<>` (expression-level) | ✓ |
-| WHEN | `<>` (aggregate-local) | ✓ (fix landed 2026-04-17 — see Closed section) |
+| WHEN | `<>` (aggregate-local) | ✓ |
 | WHEN | entity-scoped | ✓ |
 | WHEN | bilinear | ✓ |
 | WHEN | NULL in condition column | ✓ |

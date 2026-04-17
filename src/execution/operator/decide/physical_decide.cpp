@@ -2608,10 +2608,40 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     };
     vector<DeferredAggregateNE> deferred_ne_aggregate;
 
+    // The ±1 band above is only semantically exact when the LHS is integer-valued.
+    // For REAL variables or non-integer coefficients the band (K-1, K+1) wrongly
+    // excludes feasible continuous points. Mirror the strict-inequality guard in
+    // ilp_model_builder.cpp::IsEvalConstraintLhsIntegerValued.
+    auto NEIsRealType = [](const LogicalType &t) {
+        return t == LogicalType::DOUBLE || t == LogicalType::FLOAT;
+    };
+    auto NEAllCoeffsIntegral = [](const vector<double> &coeffs) {
+        for (double c : coeffs) {
+            if (std::floor(c) != c) return false;
+        }
+        return true;
+    };
+    auto NELhsIsIntegerValued = [&](const EvaluatedConstraint &ec) -> bool {
+        for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
+            idx_t vi = ec.variable_indices[i];
+            if (vi == DConstants::INVALID_INDEX) continue;
+            if (NEIsRealType(solver_input.variable_types[vi])) return false;
+            if (!NEAllCoeffsIntegral(ec.row_coefficients[i])) return false;
+        }
+        return true;
+    };
+
     if (!ne_indicator_indices.empty()) {
         vector<EvaluatedConstraint> new_constraints;
         for (auto &ec : gstate.evaluated_constraints) {
             if (ec.ne_indicator_idx != DConstants::INVALID_INDEX) {
+                if (!NELhsIsIntegerValued(ec)) {
+                    throw InvalidInputException(
+                        "Inequality '<>' is not supported when the left-hand side "
+                        "involves a REAL variable or a non-integer coefficient. "
+                        "The integer-step rewrite (x <> K → x <= K-1 OR x >= K+1) "
+                        "would cut continuous feasible points in the band (K-1, K+1).");
+                }
                 // Compute M from variable bounds (only consider active rows)
                 double M = 1e6; // default
                 for (idx_t t = 0; t < ec.variable_indices.size(); t++) {

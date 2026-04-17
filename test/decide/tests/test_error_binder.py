@@ -50,13 +50,18 @@ class TestBinderErrors:
             """, match=r"does not support")
 
     def test_sum_with_in_not_allowed(self, packdb_cli):
-        """SUM(x) IN (...) is not a valid constraint form."""
+        """SUM(x) IN (...) is not a valid constraint form.
+
+        Tightened match anchors to the aggregate-specific wording so a
+        regression in error-message quality (e.g. falling back to a generic
+        "not supported" path) would fail the test.
+        """
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT SUM(x) IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"does not support IN on")
+            """, match=r"does not support IN on.*Only simple DECIDE variables are allowed as the IN target")
 
     def test_non_decide_variable_in_constraint(self, packdb_cli):
         """Using a regular column (not a DECIDE var) as a constrained value."""
@@ -108,13 +113,19 @@ class TestBinderErrors:
             """, match=r"Unsupported aggregate")
 
     def test_between_non_scalar(self, packdb_cli):
-        """SUM BETWEEN with a non-scalar bound."""
+        """SUM BETWEEN with a non-scalar bound.
+
+        BETWEEN desugars into paired `<=` / `>=` constraints; the non-scalar
+        check fires on the leg that references the column. Tightened match
+        confirms it's the aggregate-RHS scalar check, not some unrelated
+        "not a scalar" path elsewhere in the binder.
+        """
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT SUM(x) BETWEEN l_quantity AND 1
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"not a scalar")
+            """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
 
     def test_decide_between_decide_variable(self, packdb_cli):
         """Multi-variable per-row constraints are now supported (e.g. x BETWEEN y AND 1).
@@ -188,13 +199,67 @@ class TestBinderErrors:
             """, match=r"does not support")
 
     def test_subquery_rhs_non_scalar(self, packdb_cli):
-        """Subquery RHS that references DECIDE variables."""
+        """Subquery RHS that references DECIDE variables.
+
+        PackDB surfaces this via the same "not a scalar or aggregate without
+        DECIDE variables" binder path; the tightened match anchors to that
+        wording so a regression (e.g. a less-informative generic scalar
+        check) would fail.
+        """
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem)
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"not a scalar")
+            """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
+
+    def test_subquery_rhs_returns_multiple_rows(self, packdb_cli):
+        """A non-aggregated subquery RHS that yields more than one row must error.
+
+        Complements `test_subquery_rhs_non_scalar`: that case has a DECIDE
+        variable inside the subquery (binder rejection); this case has a
+        scalar-expected subquery that returns multiple rows (executor-level
+        rejection from DuckDB).
+        """
+        packdb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS l_quantity UNION ALL SELECT 2)
+                SELECT l_quantity FROM t
+                DECIDE x
+                SUCH THAT SUM(x) <= (SELECT l_quantity FROM t)
+                MAXIMIZE SUM(x)
+            """, match=r"More than one row returned by a subquery")
+
+    def test_per_on_perrow_constraint_rejection(self, packdb_cli):
+        """PER attached to a per-row constraint must be rejected with a clear message.
+
+        PER requires an aggregate constraint — each row already owns its own
+        constraint, so partitioning has no meaning. Closes both
+        `per/todo.md` and `error_handling/todo.md` gaps.
+        """
+        packdb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS l_quantity, 'A' AS grp
+                    UNION ALL SELECT 2, 'B')
+                SELECT l_quantity, x FROM t
+                DECIDE x
+                SUCH THAT x <= 5 PER grp
+                MAXIMIZE SUM(x * l_quantity)
+            """, match=r"PER can only be applied to aggregate \(SUM\) constraints")
+
+    def test_aggregate_vs_aggregate_constraint_rejected(self, packdb_cli):
+        """Aggregate on both LHS and RHS (`SUM(x*v) <= SUM(y*v)`) must be rejected.
+
+        Per-row `x <= y` is now supported (ABS linearization), but the
+        *aggregate-against-aggregate* shape reuses the "not a scalar or
+        aggregate without DECIDE variables" binder rejection because the RHS
+        is itself an aggregate over DECIDE variables.
+        """
+        packdb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
+                SELECT id, val, x, y FROM t
+                DECIDE x, y
+                SUCH THAT SUM(x * val) <= SUM(y * val) AND SUM(y) <= 5
+                MAXIMIZE SUM(x * val)
+            """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
 
     # --- WHEN error cases ---
 

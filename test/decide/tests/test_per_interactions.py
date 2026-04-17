@@ -19,6 +19,9 @@ Covered:
   - test_when_per_multi_variable:    WHEN + PER + (BOOLEAN + INTEGER) — WHEN mask per group per variable
   - test_count_integer_per:          COUNT(x INTEGER) + PER — Big-M indicators scoped per group
   - test_qp_objective_per_constraint: QP objective + PER constraint — QP path alongside PER
+  - test_per_single_row_groups:      PER with |group| = 1 — degenerate group cardinality
+  - test_per_zero_coefficient_group: PER where one group's aggregate is vacuous (all-zero coeffs)
+  - test_per_null_group_with_when:   NULL PER key + WHEN mask — NULL bucket interacts with WHEN→PER empty-skip
 """
 
 import time
@@ -901,6 +904,228 @@ def test_qp_objective_per_constraint(
     perf_tracker.record(
         "qp_objective_per", packdb_time, build_time,
         result.solve_time_seconds, n, n, 2 + n,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+# ============================================================================
+# Sanity: PER with degenerate group shapes
+# ============================================================================
+
+@pytest.mark.per_clause
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_per_single_row_groups(packdb_cli, oracle_solver, perf_tracker):
+    """Every PER group has exactly one row — |group| = 1 degenerate case.
+
+    Each group's aggregate has a single-element coefficient vector; the
+    per-group constraint degenerates to a per-row bound. The budget RHS
+    (60) selects between rows based on val: group B (val=50) fits, groups
+    A (100) and C (75) do not.
+    """
+    sql = """
+        SELECT id, grp, val, x FROM (
+            VALUES (1, 'A', 100.0), (2, 'B', 50.0), (3, 'C', 75.0)
+        ) t(id, grp, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) <= 60 PER grp
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 'A', 100.0), (2, 'B', 50.0), (3, 'C', 75.0)]
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_single_row_groups")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    groups: dict[str, list[int]] = {}
+    for i, row in enumerate(data):
+        groups.setdefault(row[1], []).append(i)
+    for g, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: data[i][2] for i in idxs},
+            "<=", 60.0, name=f"per_budget_{g}",
+        )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    val_idx = packdb_cols.index("val")
+    x_idx = packdb_cols.index("x")
+    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
+    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    )
+
+    perf_tracker.record(
+        "per_single_row_groups", packdb_time, build_time,
+        result.solve_time_seconds, n, n, len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.per_clause
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_per_zero_coefficient_group(packdb_cli, oracle_solver, perf_tracker):
+    """One PER group has all-zero coefficients — its aggregate constraint is
+    vacuously satisfied regardless of the decision.
+
+    Tests the constraint-builder's handling of a per-group aggregate that
+    degenerates to ``0 <= rhs``. Nothing should be added to the model for
+    that group, and the other groups' constraints must remain unaffected.
+    Group A (both coeffs 0) should leave x_1, x_2 unconstrained → picked by
+    MAXIMIZE; group B binds.
+    """
+    sql = """
+        SELECT id, grp, val, x FROM (
+            VALUES (1, 'A', 0.0), (2, 'A', 0.0),
+                   (3, 'B', 5.0), (4, 'B', 20.0)
+        ) t(id, grp, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) <= 8 PER grp
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 'A', 0.0), (2, 'A', 0.0), (3, 'B', 5.0), (4, 'B', 20.0)]
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_zero_coefficient_group")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    # Per-group SUM(x * val) <= 8. Group A: 0 <= 8 (vacuous, oracle omits it).
+    # Group B: 5 x_3 + 20 x_4 <= 8.
+    groups: dict[str, list[int]] = {}
+    for i, row in enumerate(data):
+        groups.setdefault(row[1], []).append(i)
+    for g, idxs in groups.items():
+        coeffs = {vnames[i]: data[i][2] for i in idxs}
+        # Emit only if not trivially zero (structural equivalent of the
+        # "vacuous" group that PackDB may or may not emit; the solver
+        # behaves identically either way).
+        if any(abs(c) > 0.0 for c in coeffs.values()):
+            oracle_solver.add_constraint(
+                coeffs, "<=", 8.0, name=f"per_{g}",
+            )
+    oracle_solver.set_objective(
+        {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    x_idx = packdb_cols.index("x")
+    packdb_obj = sum(int(r[x_idx]) for r in packdb_rows)
+    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    )
+
+    perf_tracker.record(
+        "per_zero_coefficient_group", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.per_clause
+@pytest.mark.when_constraint
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_per_null_group_with_when(packdb_cli, oracle_solver, perf_tracker):
+    """Row with NULL PER-key that passes the WHEN mask, combined with a
+    group whose only row fails the WHEN mask (empty WHEN-bucket).
+
+    Group NULL: an active row exists → constraint emitted.
+    Group 'B': only row is inactive → empty WHEN-bucket → default WHEN→PER
+               policy skips the constraint for that group.
+    This exercises the combination of NULL-grouping and empty-group skip.
+    """
+    sql = """
+        SELECT id, grp, val, active, x FROM (
+            VALUES (1, 'A', 10.0, true),
+                   (2, NULL, 5.0, true),
+                   (3, 'B', 8.0, false),
+                   (4, 'A', 3.0, true),
+                   (5, NULL, 12.0, false)
+        ) t(id, grp, val, active)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) <= 10 WHEN active PER grp
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [
+        (1, 'A', 10.0, True),
+        (2, None, 5.0, True),
+        (3, 'B', 8.0, False),
+        (4, 'A', 3.0, True),
+        (5, None, 12.0, False),
+    ]
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_null_group_with_when")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    # Per-group coefficients restricted to WHEN-active rows.
+    groups: dict = {}
+    for i, row in enumerate(data):
+        groups.setdefault(row[1], []).append(i)
+    for g, idxs in groups.items():
+        active_coeffs = {
+            vnames[i]: data[i][2] for i in idxs if data[i][3]
+        }
+        # Default WHEN→PER policy: skip groups with an empty WHEN-bucket.
+        if not active_coeffs:
+            continue
+        oracle_solver.add_constraint(
+            active_coeffs, "<=", 10.0, name=f"per_when_{g}",
+        )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    val_idx = packdb_cols.index("val")
+    x_idx = packdb_cols.index("x")
+    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
+    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    )
+
+    perf_tracker.record(
+        "per_null_group_with_when", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )

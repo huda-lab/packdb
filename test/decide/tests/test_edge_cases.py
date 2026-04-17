@@ -414,3 +414,372 @@ def test_null_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SUCH THAT SUM(x * weight) <= 15
         MAXIMIZE SUM(x * value)
     """, match=r"NULL")
+
+
+@pytest.mark.edge_case
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_all_zero_objective(packdb_cli, oracle_solver, perf_tracker):
+    """``MAXIMIZE SUM(x * 0)`` — objective is identically zero.
+
+    With a zero objective, the solver returns any feasible solution. PackDB
+    must still report OPTIMAL with objective value 0.0 and must honour the
+    feasibility constraint. A status-handling or objective-builder bug
+    (e.g., treating the all-zero coefficient vector as "no objective set")
+    would surface here.
+    """
+    sql = """
+        SELECT id, val, x FROM (VALUES (1, 0.0), (2, 0.0), (3, 0.0)) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    n = 3
+    t_build = time.perf_counter()
+    oracle_solver.create_model("all_zero_objective")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+    oracle_solver.add_constraint(
+        {vn: 1.0 for vn in vnames}, ">=", 1.0, name="floor",
+    )
+    oracle_solver.set_objective(
+        {vn: 0.0 for vn in vnames}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    from solver.types import SolverStatus
+    assert result.status == SolverStatus.OPTIMAL
+    assert abs(result.objective_value) <= 1e-9, (
+        f"Oracle objective should be 0, got {result.objective_value}"
+    )
+
+    val_idx = packdb_cols.index("val")
+    x_idx = packdb_cols.index("x")
+    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
+    assert abs(packdb_obj) <= 1e-9, (
+        f"PackDB objective should be 0, got {packdb_obj}"
+    )
+    # Feasibility: at least one row picked (per SUM(x) >= 1).
+    total_x = sum(int(r[x_idx]) for r in packdb_rows)
+    assert total_x >= 1, f"SUM(x)={total_x} violates feasibility constraint"
+
+    perf_tracker.record(
+        "all_zero_objective", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stress tests from edge_cases/todo.md: many-terms, heterogeneous constraints,
+# and large-coefficient numeric stability. All use tiny inline VALUES so the
+# oracle stays small; these exercise the symbolic normalizer and matrix
+# builder without relying on TPC-H shape.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.edge_case
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_many_terms_objective(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """10-column linear combination in both constraint and objective.
+
+    Stresses the symbolic normalizer / expression evaluator on a much wider
+    term list than typical TPC-H queries (which use 2-3 columns). Coefficient
+    mismatches between PackDB's extraction and the oracle would surface as an
+    x-vector or objective divergence.
+    """
+    data_sql = (
+        "SELECT * FROM (VALUES "
+        "(1, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0),"
+        "(2, 2.0, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0, 10.0, 9.0),"
+        "(3, 3.0, 3.0, 1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 5.0, 5.0),"
+        "(4, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.0),"
+        "(5, 2.5, 3.5, 1.5, 4.5, 2.0, 3.0, 6.5, 1.5, 4.0, 2.5)"
+        ") t(id, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10)"
+    )
+    sql = f"""
+        SELECT id, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, x FROM ({data_sql})
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * (c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10)) <= 40
+        MAXIMIZE SUM(x * (c1 + 2*c2 + c3 + 2*c4 + c5 + 2*c6 + c7 + 2*c8 + c9 + 2*c10))
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(
+        f"SELECT id, "
+        f"CAST(c1 AS DOUBLE), CAST(c2 AS DOUBLE), CAST(c3 AS DOUBLE), "
+        f"CAST(c4 AS DOUBLE), CAST(c5 AS DOUBLE), CAST(c6 AS DOUBLE), "
+        f"CAST(c7 AS DOUBLE), CAST(c8 AS DOUBLE), CAST(c9 AS DOUBLE), "
+        f"CAST(c10 AS DOUBLE) FROM ({data_sql})"
+    ).fetchall()
+    n = len(data)
+
+    # Precompute per-row constraint and objective coefficients from the 10 cols.
+    cons_coeffs = [sum(data[i][1:11]) for i in range(n)]
+    obj_weights = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2]
+    obj_coeffs = [
+        sum(data[i][1 + k] * w for k, w in enumerate(obj_weights))
+        for i in range(n)
+    ]
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("many_terms_objective")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint(
+        {vnames[i]: cons_coeffs[i] for i in range(n)},
+        "<=", 40.0, name="wide_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: obj_coeffs[i] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def _obj(row):
+        # Per-row objective coefficient computed the same way the oracle did.
+        cols = packdb_cols
+        idx = {c: cols.index(c) for c in
+               ("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10")}
+        c = [float(row[idx[f"c{k+1}"]]) for k in range(10)]
+        return {"x": sum(c[k] * obj_weights[k] for k in range(10))}
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=_obj,
+    )
+    perf_tracker.record(
+        "many_terms_objective", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.cons_perrow
+@pytest.mark.when_constraint
+@pytest.mark.per_clause
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_five_plus_heterogeneous_constraints(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Six mixed constraints in one query: per-row, aggregate, WHEN, PER, NE, BETWEEN.
+
+    Stresses the constraint-matrix builder with heterogeneous shapes in a
+    single DECIDE — indexing errors or rewrite ordering bugs that only appear
+    when several constraint kinds coexist would surface here.
+    """
+    data_sql = (
+        "SELECT * FROM (VALUES "
+        "(1, 3.0, 10.0, 'R', 'A'),"
+        "(2, 2.0,  5.0, 'R', 'A'),"
+        "(3, 5.0, 15.0, 'N', 'A'),"
+        "(4, 4.0, 12.0, 'R', 'B'),"
+        "(5, 1.0,  4.0, 'N', 'B'),"
+        "(6, 2.0,  8.0, 'N', 'B'),"
+        "(7, 3.0,  9.0, 'R', 'C'),"
+        "(8, 4.0, 11.0, 'R', 'C')"
+        ") t(id, qty, price, flag, category)"
+    )
+    sql = f"""
+        SELECT id, qty, price, flag, category, x FROM ({data_sql})
+        DECIDE x IS BOOLEAN
+        SUCH THAT x <= 1
+            AND SUM(x * qty) <= 12
+            AND SUM(x) >= 2 WHEN flag = 'R'
+            AND SUM(x) <= 2 PER category
+            AND SUM(x) <> 7
+            AND SUM(x * price) BETWEEN 10 AND 60
+        MAXIMIZE SUM(x * price)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(
+        f"SELECT id, CAST(qty AS DOUBLE), CAST(price AS DOUBLE), "
+        f"CAST(flag AS VARCHAR), CAST(category AS VARCHAR) FROM ({data_sql})"
+    ).fetchall()
+    n = len(data)
+
+    from ._oracle_helpers import add_ne_indicator, group_indices
+    t_build = time.perf_counter()
+    oracle_solver.create_model("five_plus_heterogeneous")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+
+    # (1) per-row x <= 1 is baked into the BINARY domain — nothing to add.
+    # (2) aggregate quantity cap
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][1] for i in range(n)},
+        "<=", 12.0, name="qty_cap",
+    )
+    # (3) WHEN flag='R' lower bound on count
+    r_idx = [i for i in range(n) if data[i][3] == "R"]
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in r_idx},
+        ">=", 2.0, name="when_R_floor",
+    )
+    # (4) PER category upper bound on count
+    per_cat = group_indices(data, lambda r: r[4])
+    for cat, idxs in per_cat.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs},
+            "<=", 2.0, name=f"per_cat_{cat}",
+        )
+    # (5) NE: SUM(x) != 7 via native Gurobi indicator (no Big-M)
+    add_ne_indicator(
+        oracle_solver, {v: 1.0 for v in vnames}, 7.0, name="sum_ne_7",
+    )
+    # (6) BETWEEN: SUM(x*price) >= 10 AND <= 60
+    price_coeffs = {vnames[i]: data[i][2] for i in range(n)}
+    oracle_solver.add_constraint(price_coeffs, ">=", 10.0, name="between_lo")
+    oracle_solver.add_constraint(price_coeffs, "<=", 60.0, name="between_hi")
+
+    oracle_solver.set_objective(price_coeffs, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("price")])},
+    )
+    perf_tracker.record(
+        "five_plus_heterogeneous_constraints", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 6,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.cons_comparison
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_large_coefficient_numeric_stability(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """1e9 coefficients combined with `<>` Big-M expansion.
+
+    The NE Big-M rewrite `SUM(x*v) <> K` expands into a disjunction sized by
+    the coefficient magnitude. With `v = 1e9`, the Big-M is enormous — a
+    numerically unstable formulation would diverge from the oracle or miss
+    the optimum. This test pins the oracle on integer-valued SUM (per
+    `ilp_model_builder.cpp`'s integer-step rewrite path, `<> 1` is valid
+    because the LHS `SUM(x)` is integer-valued).
+    """
+    data_sql = (
+        "SELECT * FROM (VALUES (1, 1000000000.0), (2, 1000000000.0)) t(id, val)"
+    )
+    sql = f"""
+        SELECT id, val, x FROM ({data_sql})
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <> 1
+            AND SUM(x * val) <= 2000000000
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(
+        f"SELECT id, CAST(val AS DOUBLE) FROM ({data_sql})"
+    ).fetchall()
+    n = len(data)
+
+    from ._oracle_helpers import add_ne_indicator
+    t_build = time.perf_counter()
+    oracle_solver.create_model("large_coefficient_ne")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    # Native indicator SUM != 1 (no Big-M selection by the oracle)
+    add_ne_indicator(
+        oracle_solver, {v: 1.0 for v in vnames}, 1.0, name="sum_ne_1",
+    )
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][1] for i in range(n)},
+        "<=", 2_000_000_000.0, name="big_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("val")])},
+        tolerance=1.0,  # 1e9 coefficients → absolute tolerance scaled accordingly
+    )
+    perf_tracker.record(
+        "large_coefficient_numeric_stability", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dual-solver agreement: same problem through Gurobi and HiGHS
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+@pytest.mark.edge_case
+def test_gurobi_highs_agree_on_objective(packdb_cli_highs, packdb_cli_gurobi):
+    """Run a linear ILP through both backends; objectives must agree.
+
+    Skips if Gurobi isn't linked (``packdb_cli_gurobi`` fixture skips).
+    The 3-row cost-knapsack shape mirrors the ``test_bilinear_minimize_objective``
+    data table but without the bilinear term — a pure linear IP small enough
+    that both solvers hit the same optimum exactly.
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 5.0 AS cost UNION ALL
+            SELECT 2, 10.0 UNION ALL
+            SELECT 3, 3.0
+        )
+        SELECT id, cost, b FROM data
+        DECIDE b IS BOOLEAN
+        SUCH THAT SUM(b) >= 2
+        MINIMIZE SUM(cost * b)
+    """
+    highs_rows, highs_cols = packdb_cli_highs.execute(sql)
+    gurobi_rows, gurobi_cols = packdb_cli_gurobi.execute(sql)
+
+    h_ci = {name: i for i, name in enumerate(highs_cols)}
+    g_ci = {name: i for i, name in enumerate(gurobi_cols)}
+    highs_obj = sum(
+        float(r[h_ci["cost"]]) * int(r[h_ci["b"]]) for r in highs_rows
+    )
+    gurobi_obj = sum(
+        float(r[g_ci["cost"]]) * int(r[g_ci["b"]]) for r in gurobi_rows
+    )
+    assert abs(highs_obj - gurobi_obj) <= 1e-4, (
+        f"Solver disagreement: HiGHS={highs_obj}, Gurobi={gurobi_obj}"
+    )

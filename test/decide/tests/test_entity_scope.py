@@ -2291,3 +2291,318 @@ def test_entity_scoped_ne_oracle(packdb_cli, duckdb_conn, oracle_solver):
     packdb_obj = sum(int(row[nkey_idx]) * int(row[qty_idx]) for row in result)
     assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
         f"PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Test E2: Row-scoped variables on a 1-to-many (fan-out) JOIN.
+# Baseline contrast to entity-scoping: each JOIN row has its own variable,
+# so duplicates from the fan-out share no state.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.sql_joins
+def test_row_scoped_vars_on_fanout_join(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """Row-scoped `x IS BOOLEAN` on a 1-to-many orders×lineitem JOIN.
+
+    Each duplicated join row gets its own solver variable — the aggregate
+    SUM still sees every row independently, so the optimum is the textbook
+    0/1 knapsack on join rows (not on order entities). Contrast with
+    `test_entity_scoped_*` where `orders.x` would pick one value per order.
+    """
+    sql = """
+        SELECT o.o_orderkey, l.l_linenumber, l.l_quantity, l.l_extendedprice, x
+        FROM orders o JOIN lineitem l ON o.o_orderkey = l.l_orderkey
+        WHERE o.o_orderkey <= 10
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * l_quantity) <= 50
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(o.o_orderkey AS BIGINT),
+               CAST(l.l_linenumber AS BIGINT),
+               CAST(l.l_quantity AS DOUBLE),
+               CAST(l.l_extendedprice AS DOUBLE)
+        FROM orders o JOIN lineitem l ON o.o_orderkey = l.l_orderkey
+        WHERE o.o_orderkey <= 10
+    """).fetchall()
+    n = len(data)
+
+    oracle_solver.create_model("row_scoped_fanout_join")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][2] for i in range(n)},
+        "<=", 50.0, name="qty_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    from comparison.compare import compare_solutions
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, res, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+    assert cmp.status in ("identical", "optimal")
+
+
+# ---------------------------------------------------------------------------
+# Test E3: Three-way interaction — uncorrelated scalar subquery RHS +
+# entity-scoped variable + PER grouping.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+@pytest.mark.cons_subquery
+@pytest.mark.per_clause
+def test_entity_scoped_subquery_per_three_way(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """Uncorrelated scalar subquery RHS shared across PER groups on an
+    entity-scoped variable.
+
+    Exercises: (1) scalar subquery evaluated once and reused for every PER
+    group, (2) PER grouping by an entity-table column, (3) entity-scoped
+    variable consistency across rows in each group.
+    """
+    sql = """
+        SELECT n.n_nationkey, n.n_regionkey, n.n_name, keepN
+        FROM nation n
+        WHERE n.n_regionkey IN (0, 1)
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT SUM(keepN) <= (SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation)
+                  PER n_regionkey
+        MAXIMIZE SUM(keepN)
+    """
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+
+    rhs_val = duckdb_conn.execute(
+        "SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation"
+    ).fetchone()[0]
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT), CAST(n.n_regionkey AS BIGINT)
+        FROM nation n WHERE n.n_regionkey IN (0, 1)
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in data)
+    nation_region = {int(r[0]): int(r[1]) for r in data}
+
+    oracle_solver.create_model("entity_scope_subq_per")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+
+    # PER n_regionkey: one SUM(keepN) <= rhs_val constraint per region group.
+    regions: dict[int, list[int]] = {}
+    for nk in nation_ids:
+        regions.setdefault(nation_region[nk], []).append(nk)
+    for region, nks in regions.items():
+        oracle_solver.add_constraint(
+            {vnames[nk]: 1.0 for nk in nks},
+            "<=", float(rhs_val), name=f"per_region_{region}",
+        )
+
+    oracle_solver.set_objective(
+        {vnames[nk]: 1.0 for nk in nation_ids}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    keep_idx = packdb_cols.index("keepN")
+    nkey_idx = packdb_cols.index("n_nationkey")
+    # Aggregate row-level keepN back to entity-level (same nation → same var).
+    nation_to_keep: dict[int, int] = {}
+    for row in packdb_rows:
+        nkey = int(row[nkey_idx])
+        k = int(row[keep_idx])
+        if nkey in nation_to_keep:
+            assert nation_to_keep[nkey] == k, \
+                f"Nation {nkey} inconsistent keepN: {nation_to_keep[nkey]} vs {k}"
+        else:
+            nation_to_keep[nkey] = k
+    packdb_obj = sum(nation_to_keep.values())
+    assert abs(packdb_obj - res.objective_value) < 1e-6, (
+        f"PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test E4: NULL in the entity-key column. Per `physical_decide.cpp:1578-1607`,
+# PackDB tags NULL vs non-NULL in the composite entity key; all NULL-keyed
+# rows share a single entity variable. Oracle mirrors this exactly — a
+# divergence (e.g., PackDB accidentally creating one entity per NULL row)
+# would surface as a vector mismatch.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_entity_scoped_null_key(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """NULL-keyed rows group into one entity variable (documented semantics).
+
+    The table has two NULL-key rows and one non-NULL row. Setting the
+    shared NULL-entity variable to 1 forces both NULL rows to show keep=1,
+    which means SUM(keep) = 2 across those two rows. A naive implementation
+    that gave each NULL row its own variable would pick the highest-value
+    NULL row (obj=200) under SUM(keep)=1; PackDB instead picks the non-NULL
+    row (obj=10) because the NULL entity cannot be turned on without
+    violating the count cap.
+    """
+    sql = """
+        WITH t_null_entity(nk, val) AS (
+            SELECT NULL::INTEGER, 100 UNION ALL
+            SELECT NULL::INTEGER, 200 UNION ALL
+            SELECT 1, 10
+        )
+        SELECT n.nk, n.val, keep
+        FROM t_null_entity n
+        DECIDE n.keep IS BOOLEAN
+        SUCH THAT SUM(keep) = 1
+        MAXIMIZE SUM(keep * n.val)
+    """
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+
+    # Oracle: two entities — NULL-entity (covers both NULL rows, combined
+    # coefficient 300 = 100 + 200) and entity nk=1 (coefficient 10).
+    # SUM(keep) counts one contribution per *row*, so the NULL entity
+    # contributes twice to SUM(keep) (= 2 * keep_NULL).
+    oracle_solver.create_model("entity_scoped_null_key")
+    oracle_solver.add_variable("keep_NULL", VarType.BINARY)
+    oracle_solver.add_variable("keep_1", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {"keep_NULL": 2.0, "keep_1": 1.0}, "=", 1.0, name="sum_eq_1",
+    )
+    oracle_solver.set_objective(
+        {"keep_NULL": 300.0, "keep_1": 10.0}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+    assert res.objective_value == pytest.approx(10.0), (
+        f"Expected obj=10 (nk=1 row, NULL-entity forced to 0), got {res.objective_value}"
+    )
+
+    # Compute PackDB's objective from actual row values (order-independent).
+    keep_idx = packdb_cols.index("keep")
+    nk_idx = packdb_cols.index("nk")
+    val_idx = packdb_cols.index("val")
+    packdb_obj = sum(
+        float(row[val_idx]) * int(row[keep_idx]) for row in packdb_rows
+    )
+    assert packdb_obj == pytest.approx(res.objective_value), (
+        f"PackDB obj={packdb_obj}, oracle obj={res.objective_value}"
+    )
+    # Verify NULL-entity consistency: both NULL rows must have the same keep value.
+    null_vals = [int(row[keep_idx]) for row in packdb_rows if row[nk_idx] is None]
+    assert len(set(null_vals)) == 1, (
+        f"NULL-keyed rows should share an entity variable, got keep values: {null_vals}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Three-table fan-out (customer × nation × region) with PER on the outer table
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_entity_scoped_three_way_join_per_region(
+    packdb_cli, duckdb_conn, oracle_solver
+):
+    """Three-table fan-out with entity variable on the middle table and
+    PER on the outer table.
+
+    Join customer × nation × region. Entity variable lives on nation
+    (`n.keepN`). Per-region cap enforces ``SUM(keepN) <= 25 PER r_name`` —
+    where SUM counts customer join rows, so each nation contributes its
+    customer count to its region's sum. Exercises that the VarIndexer
+    correctly deduplicates the nation variable across the outer-joined
+    region rows.
+    """
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, n.n_regionkey,
+               r.r_name, c.c_acctbal, keepN
+        FROM customer c
+          JOIN nation n ON c.c_nationkey = n.n_nationkey
+          JOIN region r ON n.n_regionkey = r.r_regionkey
+        WHERE c.c_custkey <= 300 AND n.n_regionkey IN (0, 1)
+        DECIDE n.keepN IS BOOLEAN
+        SUCH THAT SUM(keepN) <= 25 PER r_name
+        MAXIMIZE SUM(keepN * c.c_acctbal)
+    """
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    assert len(packdb_rows) > 0
+
+    # Entity consistency: every row with the same nation must have the same keepN.
+    nk_idx = packdb_cols.index("n_nationkey")
+    keep_idx = packdb_cols.index("keepN")
+    nation_keep = {}
+    for row in packdb_rows:
+        nk = int(row[nk_idx])
+        kv = int(row[keep_idx])
+        if nk in nation_keep:
+            assert nation_keep[nk] == kv, (
+                f"nation {nk} has inconsistent keepN: "
+                f"{nation_keep[nk]} vs {kv}"
+            )
+        else:
+            nation_keep[nk] = kv
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(c.c_custkey AS BIGINT),
+               CAST(n.n_nationkey AS BIGINT),
+               CAST(n.n_regionkey AS BIGINT),
+               CAST(c.c_acctbal AS DOUBLE)
+        FROM customer c
+          JOIN nation n ON c.c_nationkey = n.n_nationkey
+          JOIN region r ON n.n_regionkey = r.r_regionkey
+        WHERE c.c_custkey <= 300 AND n.n_regionkey IN (0, 1)
+    """).fetchall()
+
+    # One variable per nation; aggregate join-row coefficients per nation.
+    nation_ids = sorted({int(row[1]) for row in data})
+    nation_region = {int(row[1]): int(row[2]) for row in data}
+    nation_count = {nk: 0 for nk in nation_ids}
+    nation_acctbal = {nk: 0.0 for nk in nation_ids}
+    for row in data:
+        nk = int(row[1])
+        nation_count[nk] += 1
+        nation_acctbal[nk] += float(row[3])
+
+    oracle_solver.create_model("entity_scoped_three_way_join_per_region")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+
+    # Per-region row-count cap: each nation contributes its cust-count to its
+    # region's sum. SUM(keepN) over a region = sum of customer join rows in
+    # that region whose nation is selected.
+    regions = sorted({nation_region[nk] for nk in nation_ids})
+    for rk in regions:
+        oracle_solver.add_constraint(
+            {
+                vnames[nk]: float(nation_count[nk])
+                for nk in nation_ids
+                if nation_region[nk] == rk
+            },
+            "<=", 25.0, name=f"region_{rk}_cap",
+        )
+
+    oracle_solver.set_objective(
+        {vnames[nk]: nation_acctbal[nk] for nk in nation_ids},
+        ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    # PackDB objective from actual row values.
+    ac_idx = packdb_cols.index("c_acctbal")
+    packdb_obj = sum(
+        int(row[keep_idx]) * float(row[ac_idx]) for row in packdb_rows
+    )
+    assert abs(packdb_obj - res.objective_value) < 1e-4, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )

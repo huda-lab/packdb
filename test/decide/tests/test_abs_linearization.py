@@ -698,3 +698,84 @@ def test_abs_mixed_vars(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_real_abs_fractional_target_oracle(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """``SUM(ABS(x - 2.5)) <= K`` with IS REAL and a non-integer target constant.
+
+    Regression test for the integer-step rewrite sweep. ABS linearization uses
+    bounded-auxiliary constraints (``d >= x - 2.5`` and ``d >= -(x - 2.5)``) —
+    no ±1 step — so a fractional constant inside the ABS must not trigger any
+    coefficient-integrality shortcut. Distinct from the existing
+    ``test_abs_constraint_aggregate`` which uses a column reference (integer-
+    valued in the TPC-H fixture) rather than an explicit fractional offset.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, x
+        FROM lineitem WHERE l_orderkey < 20
+        DECIDE x IS REAL
+        SUCH THAT x <= 5.0
+            AND SUM(ABS(x - 2.5)) <= 10
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 20
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("real_abs_fractional")
+    vnames = [f"x_{i}" for i in range(n)]
+    dnames = [f"d_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=5.0)
+    for dn in dnames:
+        oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
+    # d_i >= x_i - 2.5 ; d_i >= -(x_i - 2.5)
+    for i in range(n):
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -2.5, name=f"abs_pos_{i}",
+        )
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", 2.5, name=f"abs_neg_{i}",
+        )
+    oracle_solver.add_constraint(
+        {dnames[i]: 1.0 for i in range(n)}, "<=", 10.0, name="abs_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    assert result.status == SolverStatus.OPTIMAL
+    ci = {name: i for i, name in enumerate(packdb_cols)}
+    total_dev = sum(abs(float(row[ci["x"]]) - 2.5) for row in packdb_rows)
+    assert total_dev <= 10.0 + 1e-4, f"ABS cap violated: {total_dev}"
+
+    packdb_obj = sum(
+        float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in packdb_rows
+    )
+    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    )
+
+    perf_tracker.record(
+        "real_abs_fractional_target", packdb_time, build_time,
+        result.solve_time_seconds, n, n * 2, 1 + n * 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )

@@ -6,6 +6,8 @@ Covers:
   - Numeric condition on per-row bound
   - Boundary: no rows match (per-row constraint is inert)
   - Boundary: all rows match (equivalent to unconditional per-row)
+  - test_when_perrow_real: REAL variable (no implicit [0,1] cap) + WHEN
+    per-row — continuous skip-constraint path
 """
 
 import time
@@ -330,6 +332,86 @@ def test_when_perrow_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 
     perf_tracker.record(
         "when_perrow_all", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.when_perrow
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_when_perrow_real(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Per-row WHEN bound with IS REAL — continuous skip-constraint path.
+
+    All existing per-row WHEN tests use BOOLEAN or INTEGER variables, both
+    of which have implicit or defaulted upper bounds. REAL variables have
+    no implicit cap, so the code path that decides "WHEN false → skip the
+    per-row constraint" for continuous variables is untested. If the
+    skip-path left a stale or default bound in place on non-matching rows,
+    the aggregate cap could no longer pick a high-priced uncapped row to
+    concentrate mass on.
+
+    The test caps 'N' rows at x <= 10 via WHEN while leaving non-'N' rows
+    uncapped per-row. The aggregate ``SUM(x) <= 30`` is the only cap on
+    non-'N' rows, so the optimum loads 30 units onto the highest-priced
+    non-'N' row.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_returnflag, l_extendedprice,
+               ROUND(x, 6) AS x
+        FROM lineitem
+        WHERE l_orderkey <= 5
+        DECIDE x IS REAL
+        SUCH THAT x <= 10 WHEN l_returnflag = 'N'
+            AND SUM(x) <= 30
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               l_returnflag,
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 5
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("when_perrow_real")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for i, row in enumerate(data):
+        if row[2] == 'N':
+            oracle_solver.add_variable(vnames[i], VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        else:
+            # Non-matching rows inherit only the aggregate cap — no per-row ub.
+            oracle_solver.add_variable(vnames[i], VarType.CONTINUOUS, lb=0.0)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(len(data))},
+        "<=", 30.0, name="aggregate_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(len(data))},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    price_idx = packdb_cols.index("l_extendedprice")
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[price_idx])},
+    )
+
+    perf_tracker.record(
+        "when_perrow_real", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

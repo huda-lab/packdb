@@ -16,9 +16,10 @@ from collections import defaultdict
 
 import pytest
 
+from packdb_cli import PackDBCliError
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
-from ._oracle_helpers import add_bool_and, group_indices
+from ._oracle_helpers import add_bool_and, add_ne_indicator, group_indices
 
 
 _VALUES_4 = "VALUES ('a', 10), ('b', 5), ('c', 8), ('d', 3)"
@@ -436,6 +437,151 @@ def test_avg_bilinear_constraint(
     perf_tracker.record(
         "avg_bilinear_constraint", packdb_time, build_time, result.solve_time_seconds,
         n, 3 * n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.avg_rewrite
+@pytest.mark.correctness
+@pytest.mark.xfail(
+    strict=True, raises=PackDBCliError,
+    reason="AVG(x) <> K: AVG→SUM rewrite distributes 1/N into LHS "
+    "coefficients, so the NE integer-step guard sees fractional coefficients "
+    "and rejects. Expected lowering is SUM(x) <> K*N (integer-valued LHS), "
+    "which would pass the guard. Un-xfail when the rewrite hoists 1/N to RHS.",
+)
+def test_avg_not_equal_boolean(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x) <> 0.5 with 4 BOOLEAN rows ⇒ SUM(x) <> 2 (Big-M disjunction).
+
+    Exercises the composition of AVG→SUM RHS scaling and the NE Big-M
+    disjunction. Dataset is tuned so the unconstrained optimum is
+    SUM(x)=2 (profit 190, pick {a,b} — the only feasible pair under
+    the weight budget), i.e. the one value AVG(x)<>0.5 rules out. A
+    silent no-op on the <> constraint would diverge from the oracle;
+    wrong RHS scaling would drop the wrong SUM band.
+    """
+    values = "VALUES ('a', 100, 9), ('b', 90, 7), ('c', 10, 2), ('d', 5, 1)"
+    data_sql = f"SELECT * FROM ({values}) t(name, profit, weight)"
+    sql = f"""
+        SELECT name, profit, weight, x FROM ({data_sql})
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * weight) <= 16
+              AND AVG(x) <> 0.5
+        MAXIMIZE SUM(x * profit)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(profit AS DOUBLE), "
+        f"CAST(weight AS DOUBLE) FROM ({data_sql})",
+    )
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_not_equal_boolean")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": data[i][2] for i in range(n)},
+        "<=", 16.0, name="budget",
+    )
+    # AVG(x) <> 0.5 with n=4 ⇒ SUM(x) <> 2 (integer step).
+    add_ne_indicator(
+        oracle_solver, {f"x_{i}": 1.0 for i in range(n)},
+        rhs=0.5 * n, name="avg_ne_05",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("profit")])},
+    )
+    perf_tracker.record(
+        "avg_not_equal_boolean", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 2, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.avg_rewrite
+@pytest.mark.correctness
+@pytest.mark.xfail(
+    strict=True, raises=PackDBCliError,
+    reason="AVG(x) <> K WHEN cond: same root cause as test_avg_not_equal_boolean, "
+    "but with N = count of WHEN-qualifying rows. Un-xfail when the AVG→SUM "
+    "rewrite hoists 1/N to RHS for the NE case.",
+)
+def test_avg_not_equal_with_when(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x) <> 0.5 WHEN tier='high' — N scales with WHEN-qualifying rows.
+
+    6 rows, 4 tagged 'high'; the AVG denominator becomes 4, so the
+    constraint is SUM(x_i for high i) <> 2. Dataset is tuned so the
+    unconstrained optimum picks exactly 2 high rows ({a,b,e}: profit
+    240) — the forbidden value; constrained optimum shifts to 3 high
+    rows ({a,b,d,f}: profit 235).
+    """
+    values = (
+        "VALUES ('a', 100, 9, 'high'), ('b', 90, 7, 'high'),"
+        "       ('c',  10, 2, 'high'), ('d',  5, 1, 'high'),"
+        "       ('e',  50, 4, 'low'),  ('f', 40, 3, 'low')"
+    )
+    data_sql = f"SELECT * FROM ({values}) t(name, profit, weight, tier)"
+    sql = f"""
+        SELECT name, profit, weight, tier, x FROM ({data_sql})
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * weight) <= 20
+              AND AVG(x) <> 0.5 WHEN tier = 'high'
+        MAXIMIZE SUM(x * profit)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(profit AS DOUBLE), "
+        f"CAST(weight AS DOUBLE), CAST(tier AS VARCHAR) FROM ({data_sql})",
+    )
+    n = len(data)
+    high_idx = [i for i, r in enumerate(data) if r[3] == "high"]
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_not_equal_with_when")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": data[i][2] for i in range(n)},
+        "<=", 20.0, name="budget",
+    )
+    # AVG(x) <> 0.5 WHEN high ⇒ SUM(x_i for high) <> 0.5 * |high| = 2.
+    add_ne_indicator(
+        oracle_solver, {f"x_{i}": 1.0 for i in high_idx},
+        rhs=0.5 * len(high_idx), name="avg_when_ne_05",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("profit")])},
+    )
+    perf_tracker.record(
+        "avg_not_equal_with_when", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 

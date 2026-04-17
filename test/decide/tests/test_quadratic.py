@@ -1637,3 +1637,149 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+# ===========================================================================
+# Entity-scoped QP objective
+# ===========================================================================
+
+@pytest.mark.obj_minimize
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_qp_entity_scoped_objective(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(POWER(x - target, 2)) with entity-scoped ``items.x``
+    and a cross-entity resource cap.
+
+    Convex minimize QP, so runs on both Gurobi and HiGHS (placed in
+    ``test_quadratic.py`` rather than ``test_quadratic_constraints.py`` to
+    avoid the Gurobi-only `@_expect_gurobi` marker). Each distinct item gets
+    one REAL variable; the per-row squared deviation terms contribute to
+    that item's linear and quadratic coefficients. An aggregate ``SUM(x) <=
+    50`` cap couples entities — ``SUM(x)`` over join rows equals
+    ``3*x_A + 2*x_B + x_C`` (row-count-weighted by entity), so the cap
+    forces a trade-off across items rather than a decoupled per-entity
+    least-squares fit.
+    """
+    data_sql = """
+        SELECT 'A' AS item, 10.0 AS target UNION ALL
+        SELECT 'A', 12.0 UNION ALL
+        SELECT 'A', 14.0 UNION ALL
+        SELECT 'B', 20.0 UNION ALL
+        SELECT 'B', 22.0 UNION ALL
+        SELECT 'C', 5.0
+    """
+    sql = f"""
+        WITH items AS ({data_sql})
+        SELECT item, target, ROUND(x, 4) AS x FROM items
+        DECIDE items.x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+            AND SUM(x) <= 50
+        MINIMIZE SUM(POWER(x - target, 2))
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(
+        f"SELECT CAST(item AS VARCHAR), CAST(target AS DOUBLE) FROM ({data_sql})"
+    ).fetchall()
+
+    # Entity consistency: every row with the same item must have the same x.
+    item_idx = cols.index("item")
+    x_idx = cols.index("x")
+    item_x = {}
+    for row in rows:
+        it = row[item_idx]
+        xv = float(row[x_idx])
+        if it in item_x:
+            assert item_x[it] == pytest.approx(xv, abs=1e-3), (
+                f"item {it} has inconsistent x: {item_x[it]} vs {xv}"
+            )
+        else:
+            item_x[it] = xv
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_entity_scoped_objective")
+    items = sorted({r[0] for r in data})
+    for it in items:
+        oracle_solver.add_variable(
+            f"x_{it}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+        )
+
+    linear: dict = {}
+    quadratic: dict = {}
+    row_count = {it: 0 for it in items}
+    for row in data:
+        it = row[0]
+        t = float(row[1])
+        key = f"x_{it}"
+        linear[key] = linear.get(key, 0.0) - 2.0 * t
+        quadratic[(key, key)] = quadratic.get((key, key), 0.0) + 1.0
+        row_count[it] += 1
+    # SUM(x) over join rows = sum(row_count[it] * x_{it}).
+    oracle_solver.add_constraint(
+        {f"x_{it}": float(row_count[it]) for it in items},
+        "<=", 50.0, name="entity_budget",
+    )
+    oracle_solver.set_quadratic_objective(
+        linear, quadratic, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+
+    n = len(data)
+    result = _solve_and_compare(
+        oracle_solver, rows, cols,
+        lambda rs, cs: _qp_target_obj(rs, cs, x_col="x", target_col="target"),
+    )
+    perf_tracker.record(
+        "qp_entity_scoped_objective", packdb_time, build_time,
+        result.solve_time_seconds, n, len(items), 0,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+# ---------------------------------------------------------------------------
+# HiGHS-forced rejection tests (require PACKDB_FORCE_SOLVER=highs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+class TestHighsRejection:
+    """Error-path tests that pin the solver to HiGHS via ``packdb_cli_highs``.
+
+    On Gurobi-linked hosts the unforced suite would take the Gurobi path
+    (and succeed on non-convex / MIQP shapes). The ``packdb_cli_highs``
+    fixture sets ``PACKDB_FORCE_SOLVER=highs`` so these shapes reach the
+    rejection message in ``src/packdb/naive/deterministic_naive.cpp``.
+    """
+
+    def test_highs_nonconvex_qp_rejected(self, packdb_cli_highs):
+        """MAXIMIZE SUM(POWER(x, 2)) with x IS REAL is non-convex and HiGHS-rejected."""
+        sql = """
+            WITH data AS (SELECT 1 AS id UNION ALL SELECT 2)
+            SELECT id, x FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 10
+            MAXIMIZE SUM(POWER(x, 2))
+        """
+        packdb_cli_highs.assert_error(sql, match=r"[Nn]on-convex.*Gurobi")
+
+    def test_highs_miqp_rejected(self, packdb_cli_highs):
+        """MINIMIZE SUM(POWER(x, 2)) with x IS INTEGER triggers MIQP, HiGHS-rejected."""
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id, 3.0 AS target UNION ALL
+                SELECT 2, 7.0
+            )
+            SELECT id, x FROM data
+            DECIDE x IS INTEGER
+            SUCH THAT x <= 10
+            MINIMIZE SUM(POWER(x - target, 2))
+        """
+        packdb_cli_highs.assert_error(
+            sql, match=r"MIQP|integer.*quadratic.*Gurobi",
+        )

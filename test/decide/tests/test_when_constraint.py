@@ -616,3 +616,80 @@ def test_when_null_condition_column(packdb_cli, duckdb_conn, oracle_solver, perf
     null_rows = [row for row in result if row[flag_idx] is None]
     assert len(null_rows) == 2, \
         f"Expected 2 NULL-flag rows in result, got {len(null_rows)}"
+
+
+@pytest.mark.when_constraint
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_when_is_not_null_predicate(packdb_cli, oracle_solver, perf_tracker):
+    """WHEN (col IS NOT NULL) — explicit IS NOT NULL predicate in WHEN.
+
+    Companion to ``test_when_null_condition_column`` (which exercises NULL
+    *values* in an equality predicate). Here the WHEN condition itself is
+    the IS NOT NULL predicate. The parentheses around the predicate are
+    required: ``WHEN col IS NOT NULL AND ...`` produces a parser error
+    because ``NULL`` + ``AND`` is ambiguous in the DECIDE SUCH THAT grammar.
+    """
+    sql = """
+        SELECT id, val, note, x FROM (
+            VALUES (1, 10.0, 'a'), (2, 5.0, NULL),
+                   (3, 8.0, 'c'), (4, 15.0, NULL)
+        ) t(id, val, note)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) <= 15 WHEN (note IS NOT NULL)
+            AND SUM(x) <= 3
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [
+        (1, 10.0, 'a'),
+        (2, 5.0, None),
+        (3, 8.0, 'c'),
+        (4, 15.0, None),
+    ]
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("when_is_not_null")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+
+    # WHEN (note IS NOT NULL): rows 1, 3 contribute to the aggregate.
+    not_null_coeffs = {
+        vnames[i]: data[i][1] for i in range(n) if data[i][2] is not None
+    }
+    oracle_solver.add_constraint(
+        not_null_coeffs, "<=", 15.0, name="when_not_null_budget",
+    )
+    # Unconditional cap on total selections.
+    oracle_solver.add_constraint(
+        {vn: 1.0 for vn in vnames}, "<=", 3.0, name="sum_x_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    from solver.types import SolverStatus
+    assert result.status == SolverStatus.OPTIMAL
+
+    val_idx = packdb_cols.index("val")
+    x_idx = packdb_cols.index("x")
+    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
+    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    )
+
+    perf_tracker.record(
+        "when_is_not_null_predicate", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )

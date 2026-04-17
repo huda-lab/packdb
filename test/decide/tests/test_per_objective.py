@@ -31,6 +31,7 @@ from ._oracle_helpers import (
     group_indices,
     emit_inner_max, emit_inner_min,
     emit_hard_inner_max, emit_hard_inner_min,
+    emit_hard_inner_max_quadratic, emit_hard_inner_min_quadratic,
 )
 
 
@@ -1042,6 +1043,295 @@ def test_sum_avg_when_per(
 # ===========================================================================
 # Error cases — no oracle (PackDB is expected to reject these)
 # ===========================================================================
+
+@pytest.mark.per_clause
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_sum_avg_per_extreme_unequal_groups(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """SUM(AVG(x*cost)) PER grp with a 1:5 group-size ratio.
+
+    Strengthens the coverage of ``test_sum_avg_per_unequal_groups``: that
+    test's ``WHERE s_nationkey < 5`` filter yields a 3:1 max/min ratio, but
+    the 1/n_g coefficient scaling is most sensitive when ratios are extreme.
+    The singleton group contributes a coefficient of 1.0, while the 5-row
+    group's coefficients are each 0.2 — a sign-flip-or-mis-scale bug would
+    pick the wrong row between the groups.
+    """
+    data_sql = (
+        "SELECT * FROM (VALUES "
+        "(1, 'A', 2.0),"
+        " (2, 'B', 3.0),"
+        " (3, 'B', 4.0),"
+        " (4, 'B', 5.0),"
+        " (5, 'B', 6.0),"
+        " (6, 'B', 7.0)"
+        ") t(id, grp, cost)"
+    )
+    sql = f"""
+        SELECT id, grp, cost, x FROM ({data_sql})
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1 PER grp
+        MINIMIZE SUM(AVG(x * cost)) PER grp
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(
+        f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(cost AS DOUBLE) "
+        f"FROM ({data_sql})"
+    ).fetchall()
+    n = len(data)
+    groups = group_indices(data, lambda r: r[1])
+    assert max(len(g) for g in groups.values()) / min(len(g) for g in groups.values()) >= 4, (
+        "design-time: group-size ratio must be ≥ 4 to exercise the scaling "
+        "coefficient under extreme asymmetry"
+    )
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_avg_per_extreme_unequal")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for key, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{key}",
+        )
+    obj = {}
+    for key, idxs in groups.items():
+        n_g = len(idxs)
+        for i in idxs:
+            obj[vnames[i]] = data[i][2] / n_g
+    oracle_solver.set_objective(obj, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj_fn(rs, cs):
+        xi = cs.index("x"); gi = cs.index("grp"); ci = cs.index("cost")
+        per_group: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
+        for r in rs:
+            per_group[r[gi]]["n"] += 1
+            if float(r[xi]) > 0.5:
+                per_group[r[gi]]["sum"] += float(r[ci])
+        return sum(v["sum"] / v["n"] for v in per_group.values())
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj_fn,
+    )
+    perf_tracker.record(
+        "sum_avg_per_extreme_unequal_groups", packdb_time, build_time,
+        result.solve_time_seconds, n, n, len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+# ===========================================================================
+# SUM(MIN/MAX(POWER(expr, 2))) PER col — hard inner with quadratic
+# ===========================================================================
+#
+# Inner expression is POWER(x - target, 2); outer is SUM over groups. The
+# inner aggregate is hard in the direction the outer pushes (MAXIMIZE pushes
+# MAX up, MINIMIZE pushes MIN down), so per-row indicators are required —
+# exactly the pattern exercised here. The quadratic POWER also means the
+# physical layer must preserve squared terms rather than collapsing to
+# linear auxiliaries.
+
+
+_POWER_DATA_SQL = """
+    SELECT 1 AS id, 'A' AS grp, 3.0 AS target UNION ALL
+    SELECT 2, 'A', 7.0 UNION ALL
+    SELECT 3, 'A', 5.0 UNION ALL
+    SELECT 4, 'B', 2.0 UNION ALL
+    SELECT 5, 'B', 8.0
+"""
+
+
+def _power_data(duckdb_conn):
+    return duckdb_conn.execute(
+        f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), "
+        f"CAST(target AS DOUBLE) FROM ({_POWER_DATA_SQL})"
+    ).fetchall()
+
+
+def _power_group_obj(rs, cs, reducer):
+    """Evaluate SUM_g reducer({POWER(x_i - target_i, 2) : i in group g})
+    from PackDB's output rows. Uses the full (x-t)^2 value — no constant
+    stripping — so the oracle side must match."""
+    xi = cs.index("x")
+    gi = cs.index("grp")
+    ti = cs.index("target")
+    groups: dict = defaultdict(list)
+    for r in rs:
+        groups[r[gi]].append((float(r[xi]) - float(r[ti])) ** 2)
+    return sum(reducer(vs) for vs in groups.values())
+
+
+@pytest.mark.per_clause
+@pytest.mark.min_max
+@pytest.mark.quadratic
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_maximize_sum_max_power_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp — hard inner MAX,
+    quadratic per-row expression. Budget couples x's so at most some rows
+    can reach the bound extremes; the group MAX must pick among affordable
+    pushes. Non-convex (MAX of convex, then MAXIMIZE): Gurobi only — fall
+    through to the documented HiGHS rejection if PackDB is configured for
+    HiGHS.
+    """
+    sql = f"""
+        WITH data AS ({_POWER_DATA_SQL})
+        SELECT id, grp, target, ROUND(x, 4) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 20
+        MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp
+    """
+    t0 = time.perf_counter()
+    try:
+        rows, cols = packdb_cli.execute(sql)
+    except Exception as e:
+        if "require Gurobi" in str(e) or "Non-convex" in str(e):
+            pytest.skip(f"PackDB rejected non-convex shape: {e}")
+        raise
+    packdb_time = time.perf_counter() - t0
+
+    data = _power_data(duckdb_conn)
+    n = len(data)
+    groups: dict = defaultdict(list)
+    for i, r in enumerate(data):
+        groups[r[1]].append(i)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_max_power_per")
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+    oracle_solver.add_constraint(
+        {xn: 1.0 for xn in xnames}, "<=", 20.0, name="budget",
+    )
+    # Each row's expression: POWER(x_i - t_i, 2) = x_i^2 - 2 t_i x_i + t_i^2
+    # POWER is bounded by max((10 - t)^2, t^2) per row; 100 is a loose bound.
+    q_ub = 100.0
+    z_names = []
+    for grp, idxs in groups.items():
+        row_coeffs = []
+        for i in idxs:
+            t = float(data[i][2])
+            row_coeffs.append((
+                {xnames[i]: -2.0 * t},
+                {(xnames[i], xnames[i]): 1.0},
+                t * t,
+            ))
+        z = emit_hard_inner_max_quadratic(
+            oracle_solver, name_prefix=f"hmaxq_{grp}",
+            row_coeffs=row_coeffs, q_ub=q_ub,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, max),
+    )
+    perf_tracker.record(
+        "sum_max_power_per", packdb_time, build_time,
+        result.solve_time_seconds, n, 3 * n + len(groups), 2 * n + len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.per_clause
+@pytest.mark.min_max
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_minimize_sum_min_power_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp — hard inner MIN,
+    quadratic per-row expression. INTEGER x with non-integer targets forces
+    every row's POWER strictly positive. Target offsets vary per row so
+    each row's best-achievable POWER differs, meaning the indicator has to
+    pick the *specific* minimum row in each group — a bug that selects the
+    wrong row, or emits a linear auxiliary, would change the objective.
+    """
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 3.3 AS target UNION ALL
+        SELECT 2, 'A', 6.7 UNION ALL
+        SELECT 3, 'A', 1.2 UNION ALL
+        SELECT 4, 'B', 2.8 UNION ALL
+        SELECT 5, 'B', 8.1
+    """
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, grp, target, x FROM data
+        DECIDE x IS INTEGER
+        SUCH THAT x >= 0 AND x <= 10
+        MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp
+    """
+    t0 = time.perf_counter()
+    try:
+        rows, cols = packdb_cli.execute(sql)
+    except Exception as e:
+        if "require Gurobi" in str(e) or "Non-convex" in str(e):
+            pytest.skip(f"PackDB rejected non-convex shape: {e}")
+        raise
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute(
+        f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), "
+        f"CAST(target AS DOUBLE) FROM ({data_sql})"
+    ).fetchall()
+    n = len(data)
+    groups: dict = defaultdict(list)
+    for i, r in enumerate(data):
+        groups[r[1]].append(i)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_min_power_per")
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.INTEGER, lb=0.0, ub=10.0)
+    q_ub = 100.0
+    z_names = []
+    for grp, idxs in groups.items():
+        row_coeffs = []
+        for i in idxs:
+            t = float(data[i][2])
+            row_coeffs.append((
+                {xnames[i]: -2.0 * t},
+                {(xnames[i], xnames[i]): 1.0},
+                t * t,
+            ))
+        z = emit_hard_inner_min_quadratic(
+            oracle_solver, name_prefix=f"hminq_{grp}",
+            row_coeffs=row_coeffs, q_ub=q_ub,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, min),
+    )
+    perf_tracker.record(
+        "sum_min_power_per", packdb_time, build_time,
+        result.solve_time_seconds, n, 3 * n + len(groups), 2 * n + len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
 
 @pytest.mark.per_clause
 @pytest.mark.min_max

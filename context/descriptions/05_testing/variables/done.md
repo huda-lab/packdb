@@ -40,12 +40,17 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 | REAL + WHEN on aggregate constraint | `test_var_real.py` | ✓ |
 | REAL + PER on aggregate constraint | `test_var_real.py` | ✓ |
 | REAL + MINIMIZE (coefficient-sign path) | `test_var_real.py::test_real_minimize` | ✓ |
+| REAL with forced non-integer optimum (readback sanity) | `test_var_real.py::test_real_fractional_readback` | ✓ |
 
 ### Multiple variables
 
 | Scenario | Where | Oracle |
 |----------|-------|--------|
 | Two variables with separate constraints (BOOL + INTEGER) | `test_var_multi.py::test_two_variables_separate_constraints` | ✓ |
+| Two boolean variables (cross-constraint) | `test_var_multi.py::test_two_boolean_variables` | ✓ |
+| Paired INTEGER + REAL (no BOOLEAN) | `test_var_multi.py::test_integer_real_paired` | ✓ |
+| Three variables (BOOL + INTEGER + REAL) | `test_var_multi.py::test_three_decide_variables` | ✓ |
+| Mixed BOOLEAN + REAL explicit in same SUM term | `test_var_multi.py::test_mixed_types_same_aggregate_term` | ✓ |
 | Mixed BOOLEAN + REAL in same query | `test_var_real.py::test_real_mixed` | ✓ |
 | Mixed BOOLEAN + REAL with ABS | `test_abs_linearization.py::test_abs_mixed_vars` | ✓ |
 | Two variables (BOOLEAN + INTEGER) under PER grouping | `test_per_interactions.py::test_per_multi_variable` | ✓ |
@@ -67,12 +72,12 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 | BOOLEAN | all features (broadly) | ✓ |
 | INTEGER | all features (broadly) | ✓ |
 | REAL | MAXIMIZE objective | ✓ |
-| REAL | MINIMIZE objective | ✓ (`test_var_real.py::test_real_minimize`) |
+| REAL | MINIMIZE objective | ✓ |
 | REAL | PER constraint | ✓ |
 | REAL | WHEN constraint (aggregate) | ✓ |
 | BOOLEAN + INTEGER | same query | ✓ |
-| BOOLEAN + INTEGER | PER grouping (multi-var coefficient partitioning) | ✓ (`test_per_interactions.py`) |
+| BOOLEAN + INTEGER | PER grouping | ✓ |
 | BOOLEAN + REAL | same query | ✓ |
 | BOOLEAN + REAL | ABS linearization | ✓ |
 | BOOLEAN + REAL | bilinear (McCormick) | ✓ |
-| INTEGER + REAL | QP constraint | ✓ (`test_quadratic_constraints.py`) |
+| INTEGER + REAL | QP constraint | ✓ |

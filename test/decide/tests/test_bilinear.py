@@ -30,6 +30,8 @@ import pytest
 from packdb_cli import PackDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
+from ._oracle_helpers import add_bool_and
+
 
 # ===================================================================
 # Phase 1: Boolean × anything (McCormick linearization, both solvers)
@@ -669,6 +671,21 @@ class TestBilinearErrors:
             MAXIMIZE SUM(a * b * c)
         """, match=r"Triple|higher-order")
 
+    def test_quad_bilinear_chain_rejected(self, packdb_cli):
+        """SUM((b1 * x) * (b2 * y)) — degree-4 chain of two bilinear terms.
+
+        Each factor is itself a Bool × Real product, so the total shape has
+        degree 4. Must be rejected by the same higher-order-product guard
+        that catches a * b * c.
+        """
+        packdb_cli.assert_error("""
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, b1, b2, x, y FROM data
+            DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN, x IS REAL, y IS REAL
+            SUCH THAT x <= 10 AND y <= 10
+            MAXIMIZE SUM((b1 * x) * (b2 * y))
+        """, match=r"Triple|higher-order")
+
     def test_missing_upper_bound_rejected(self, packdb_cli):
         """b * x without an upper bound on x should be rejected."""
         packdb_cli.assert_error("""
@@ -1231,6 +1248,81 @@ def test_bilinear_minimize_objective(packdb_cli, duckdb_conn, oracle_solver, per
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_bool_bool_coeff_minimize(packdb_cli, oracle_solver):
+    """MINIMIZE SUM(cost * b1 * b2) with both factors BOOLEAN.
+
+    Exercises the AND-linearization branch of the 2026-04-15 bilinear
+    coefficient-extraction fix. Design is shaped so the bug manifests:
+
+      - SUM(b1) = 4 pins all b1=1, so b1 AND b2 ≡ b2 row-wise.
+      - SUM(b2) = 2 forces picking exactly two rows.
+      - Correct objective SUM(cost * b2) has a UNIQUE minimum at {b2_1=1,
+        b2_3=1} (costs 2 + 3 = 5).
+      - Bug-dropped-coeff objective SUM(b2) is degenerate at any pair,
+        so a solver returning e.g. {0, 1} yields packdb_obj = 7 + 2 = 9
+        and fails the oracle comparison against 5.
+
+    AND-linearization is encoded in the oracle via `add_bool_and`
+    (`_oracle_helpers.py:211`).
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 7.0 AS cost UNION ALL
+            SELECT 2, 2.0 UNION ALL
+            SELECT 3, 5.0 UNION ALL
+            SELECT 4, 3.0
+        )
+        SELECT id, cost, b1, b2
+        FROM data
+        DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+        SUCH THAT SUM(b1) = 4 AND SUM(b2) = 2
+        MINIMIZE SUM(cost * b1 * b2)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+
+    costs = [7.0, 2.0, 5.0, 3.0]
+    n = len(costs)
+
+    oracle_solver.create_model("bilinear_bool_bool_coeff_minimize")
+    for i in range(n):
+        oracle_solver.add_variable(f"b1_{i}", VarType.BINARY)
+        oracle_solver.add_variable(f"b2_{i}", VarType.BINARY)
+    for i in range(n):
+        add_bool_and(oracle_solver, f"b1_{i}", f"b2_{i}", f"z_{i}")
+
+    oracle_solver.add_constraint(
+        {f"b1_{i}": 1.0 for i in range(n)}, "=", 4.0, name="pin_b1",
+    )
+    oracle_solver.add_constraint(
+        {f"b2_{i}": 1.0 for i in range(n)}, "=", 2.0, name="pin_b2",
+    )
+    oracle_solver.set_objective(
+        {f"z_{i}": costs[i] for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    ci = {name: i for i, name in enumerate(packdb_cols)}
+    packdb_obj = sum(
+        float(row[ci["cost"]]) * int(row[ci["b1"]]) * int(row[ci["b2"]])
+        for row in packdb_result
+    )
+    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, "
+        f"Oracle={result.objective_value}"
+    )
+
+    n_b1 = sum(int(row[ci["b1"]]) for row in packdb_result)
+    n_b2 = sum(int(row[ci["b2"]]) for row in packdb_result)
+    assert n_b1 == 4, f"SUM(b1)={n_b1} != 4"
+    assert n_b2 == 2, f"SUM(b2)={n_b2} != 2"
 
 
 @pytest.mark.var_boolean

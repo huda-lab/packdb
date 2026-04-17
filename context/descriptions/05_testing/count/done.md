@@ -22,14 +22,15 @@ generated at execution time when M is known).
 | Equivalence: COUNT(x BOOLEAN) == SUM(x) | `test_count_rewrite.py` | ✓ |
 | COUNT(x INTEGER) constraint upper bound | `test_count_integer.py` | ✓ |
 | COUNT(x INTEGER) constraint lower bound | `test_count_integer.py` | ✓ |
-| COUNT(x INTEGER) in objective (MAXIMIZE) | `test_count_integer.py` | ✓ |
+| COUNT(x INTEGER) in objective (MAXIMIZE) | `test_count_integer.py::test_count_integer_objective` | ✓ |
+| COUNT(x INTEGER) in objective (MINIMIZE — indicator orientation) | `test_count_integer.py::test_count_integer_objective_minimize` | ✓ |
 | COUNT(x INTEGER) + WHEN | `test_count_integer.py::test_count_integer_with_when` | ✓ |
 | COUNT(x INTEGER) indicator dedup (multiple references) | `test_count_integer.py` | ✓ |
 | COUNT(x INTEGER) hidden indicator from SELECT * | `test_count_integer.py` | ✓ |
-| COUNT(x INTEGER) + PER — Big-M indicators per group, `COUNT(x)>=1 PER grp` | `test_per_interactions.py::test_count_integer_per` | ✓ |
+| COUNT(x INTEGER) + PER — Big-M indicators per group | `test_per_interactions.py::test_count_integer_per` | ✓ |
 | COUNT(x REAL) rejected | `test_error_binder.py::test_count_real_rejected` | error test |
 | Aggregate-local WHEN on COUNT | `test_aggregate_local_when.py::test_aggregate_local_when_with_count` | ✓ |
-| COUNT + entity_scope | `test_entity_scope.py::test_entity_scoped_with_count` (BOOLEAN), `::test_entity_scoped_integer_count` (INTEGER) | ✓ / constraint only |
+| COUNT + entity_scope | `test_entity_scope.py::test_entity_scoped_with_count` (BOOLEAN), `::test_entity_scoped_integer_count` (INTEGER) | ✓ |
 
 ## Feature interactions covered
 
@@ -39,6 +40,6 @@ generated at execution time when M is known).
 | COUNT (BOOLEAN) | PER | ✓ |
 | COUNT (INTEGER) | WHEN | ✓ |
 | COUNT (BOOLEAN) | entity-scoped | ✓ |
-| COUNT (INTEGER) | entity-scoped | ✓ (constraint-only) |
+| COUNT (INTEGER) | entity-scoped | ✓ |
 | COUNT | aggregate-local WHEN | ✓ |
-| COUNT (INTEGER) | PER | ✓ (`test_per_interactions.py::test_count_integer_per`) |
+| COUNT (INTEGER) | PER | ✓ |

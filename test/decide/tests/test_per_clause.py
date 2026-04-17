@@ -375,3 +375,68 @@ def test_per_different_grouping_columns(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.per_clause
+@pytest.mark.var_real
+@pytest.mark.cons_between
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_real_between_per_oracle(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """PER grouping combined with BETWEEN on a REAL variable.
+
+    Regression test for the integer-step rewrite sweep. The PER rewrite
+    iterates group-ids but introduces no integer-step discretization of its
+    own; BETWEEN desugars to `>=`/`<=`. Together, PER + BETWEEN on a REAL
+    variable with fractional bounds must produce the correct per-group
+    knapsack-style optimum.
+    """
+    sql = """
+        SELECT l_orderkey, l_linestatus, l_extendedprice, x
+        FROM lineitem WHERE l_orderkey < 25
+        DECIDE x IS REAL
+        SUCH THAT x BETWEEN 0.1 AND 2.9
+            AND SUM(x) <= 10 PER l_linestatus
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               l_linestatus,
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 25
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("real_between_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.1, ub=2.9)
+    groups = _group_indices(data, lambda r: r[1])
+    for group_key, rows in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in rows},
+            "<=", 10.0, name=f"per_{group_key}",
+        )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+    perf_tracker.record(
+        "real_between_per_oracle", packdb_time, build_time,
+        result.solve_time_seconds, n, n, len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )

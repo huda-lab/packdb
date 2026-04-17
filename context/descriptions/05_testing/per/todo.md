@@ -1,85 +1,11 @@
 # PER Clause Test Coverage — Todo
 
-PER's remaining gaps cluster in its combinations with bilinear, COUNT(INTEGER),
-and QP objectives. Each involves auxiliary variable / indicator creation that
-must be correctly partitioned by group — a class of bugs that would produce
-silent wrong results.
-
-Closed in `test_per_interactions.py` (Batch 1, 2026-04-15):
-- PER + hard MIN/MAX constraints (MAX>=K, MIN<=K, equality)
-- PER + ABS in aggregate constraint
-- Multiple variables + PER
-
-Closed in `test_per_interactions.py` (Batch 2, 2026-04-15):
-- WHEN + PER + multiple variables (`test_when_per_multi_variable`)
-- COUNT(x INTEGER) + PER (`test_count_integer_per`)
-- QP objective + PER constraint (`test_qp_objective_per_constraint`)
-
 ## Missing coverage
 
-### HIGH: PER + bilinear
-
-See [bilinear/todo.md](../bilinear/todo.md) for full details. This gap is the
-single largest cross-feature hole.
-
-Closed in `test_edge_cases.py::test_feasibility_per` (2026-04-17): `DECIDE x IS BOOLEAN SUCH THAT SUM(x) = 1 PER grp AND SUM(x*val) <= 35` (FEASIBILITY sense + PER + global cap). Oracle proves feasibility independently; structural check on PackDB output validates per-group cardinality and global budget.
-
-### MEDIUM: PER on per-row constraint rejection (error test)
-
-Documented restriction: "PER requires an aggregate constraint." No test verifies the error message when `x <= 5 PER col` is attempted. Users could accidentally write this, and error message quality matters.
-
-```sql
--- Should be rejected
-SUCH THAT x <= 5 PER grp
-```
-
-### LOW: PER with zero-coefficient groups
-
-Some PER groups where `SUM(x * col)` has all-zero coefficients (e.g., all `col` values are 0 in one group). The constraint becomes trivially satisfied for that group; the constraint-builder path for zero-row contributions within a non-empty group is a subtle edge case.
-
-### LOW: Single-row PER groups
-
-Data where each PER group has exactly one row. Degenerates to per-row bounds; the coefficient vector has a single entry per group. Tests the group-indexing path's behavior with `|group| = 1`.
-
-### LOW: NULL in PER column AND WHEN condition simultaneously
-
-Each is tested independently, but not together. A row with NULL PER key that passes the WHEN condition could cause an off-by-one or incorrect group count.
-
-```sql
-WITH data AS (
-    SELECT 1 AS id, 'A' AS grp, 10.0 AS val, true AS active UNION ALL
-    SELECT 2, NULL, 5.0, true UNION ALL
-    SELECT 3, 'B', 8.0, false
-)
-SELECT id, grp, val, active, x FROM data
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x * val) <= 10 WHEN active PER grp
-MAXIMIZE SUM(x * val)
-```
-
-### LOW: Uncorrelated subquery in PER constraint RHS
-
-`SUM(x) <= (SELECT AVG(col) FROM other_table) PER group` — the scalar RHS must be shared across all PER groups. If execution evaluates the subquery per-group, errors could occur. Positive test missing (only the error case for non-scalar RHS is tested).
-
-```sql
-SELECT l_orderkey, l_linenumber, l_extendedprice, x
-FROM lineitem WHERE l_orderkey <= 5
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x * l_extendedprice) <= (SELECT 10000) PER l_orderkey
-MAXIMIZE SUM(x)
-```
-
-## Not yet tested but low priority: PER STRICT
-
-The `PER STRICT` modifier (per-constraint/objective switch from WHEN→PER to
-PER→WHEN) was recently added. Coverage is needed across:
-- PER STRICT + WHEN (vacuously true upper bound)
-- PER STRICT + WHEN (infeasible lower bound)
-- PER STRICT + hard MIN/MAX (existential direction → infeasible)
-- PER STRICT + easy MIN/MAX (no-op)
-- ~~PER STRICT + entity-scoped~~ — covered by `test_entity_scope.py::test_entity_scoped_per_strict`
+_No open gaps._
 
 ## Cross-references
 
-- `WHEN + PER` triples in `when/done.md`
-- `PER + entity_scope` combinations in `entity_scope/done.md`
+- `WHEN + PER` triples — see `when/done.md`
+- `PER + entity_scope` combinations — see `entity_scope/done.md`
+- NULL-semantics divergence between PER and entity_scope — see `entity_scope/todo.md`

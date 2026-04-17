@@ -721,11 +721,22 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 		auto &func = expr->Cast<BoundFunctionExpression>();
 		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
 			if (BoundExprReferencesDecideVar(*func.children[0], decide.decide_index)) {
-				// Create auxiliary REAL variable
+				// Declare the auxiliary as INTEGER when the inner expression is
+				// integer-typed — |k| preserves integer-valuedness, so downstream
+				// strict-inequality rewrites (`SUM(|...|) < K → <= K-1`) stay sound.
+				// Without this, all ABS auxes are DOUBLE and the LHS-integer check
+				// in ilp_model_builder would reject valid integer-valued strict cases.
+				auto &inner_type = func.children[0]->return_type;
+				bool inner_is_integer = inner_type.IsIntegral() ||
+				                        inner_type.id() == LogicalTypeId::BOOLEAN;
+				LogicalType aux_type =
+				    inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
+
+				// Create auxiliary variable
 				idx_t aux_idx = decide.decide_variables.size();
 				string aux_name = "__abs_aux_" + to_string(abs_pairs.size()) + "__";
 				auto aux_var = make_uniq<BoundColumnRefExpression>(
-				    aux_name, LogicalType::DOUBLE,
+				    aux_name, aux_type,
 				    ColumnBinding(decide.decide_index, aux_idx));
 				decide.decide_variables.push_back(std::move(aux_var));
 				decide.num_auxiliary_vars++;
@@ -739,7 +750,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 				// Replace ABS(inner) with aux var reference
 				expr = make_uniq<BoundColumnRefExpression>(
-				    aux_name, LogicalType::DOUBLE,
+				    aux_name, aux_type,
 				    ColumnBinding(decide.decide_index, aux_idx));
 				return;
 			}
@@ -920,13 +931,39 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				// For Bool×Bool: special AND-linearization (simpler, no Big-M)
 				bool both_bool = left_is_bool && right_is_bool;
 
+				// Resolve the non-bool factor's variable index up-front so the aux type
+				// decision below can consult it. This mirrors the fallback resolution
+				// done in the non-both-bool branch (lines below), hoisted earlier.
+				idx_t resolved_other_idx = other_var_idx;
+				if (!both_bool && resolved_other_idx == DConstants::INVALID_INDEX) {
+					vector<idx_t> other_vars_resolve;
+					CollectDecideVarIndices(*other_expr, decide.decide_index, other_vars_resolve);
+					if (other_vars_resolve.size() == 1) {
+						resolved_other_idx = other_vars_resolve[0];
+					}
+				}
+
 				// Create auxiliary variable
 				idx_t aux_idx = decide.decide_variables.size();
 				string aux_name = "__bilinear_aux_" + to_string(aux_idx) + "__";
 				// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
 				// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
 				// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.
-				LogicalType aux_type = both_bool ? LogicalType::INTEGER : LogicalType::DOUBLE;
+				//
+				// Bool×Integer: the product b * y with b ∈ {0,1} and y ∈ ℤ always takes
+				// integer values, so declare the aux as INTEGER rather than DOUBLE. This
+				// preserves integer-valuedness of the LHS through McCormick linearization,
+				// which matters for the strict-inequality rewrite (`< K → <= K-1`) in
+				// ilp_model_builder.cpp.
+				bool other_is_integer_typed = false;
+				if (!both_bool && resolved_other_idx != DConstants::INVALID_INDEX &&
+				    resolved_other_idx < decide.decide_variables.size()) {
+					auto &rt = decide.decide_variables[resolved_other_idx]->return_type;
+					other_is_integer_typed = !(rt == LogicalType::DOUBLE || rt == LogicalType::FLOAT);
+				}
+				LogicalType aux_type = (both_bool || other_is_integer_typed)
+				                           ? LogicalType::INTEGER
+				                           : LogicalType::DOUBLE;
 				auto aux_var = make_uniq<BoundColumnRefExpression>(
 				    aux_name, aux_type, ColumnBinding(decide.decide_index, aux_idx));
 				decide.decide_variables.push_back(std::move(aux_var));

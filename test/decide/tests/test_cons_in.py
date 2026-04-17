@@ -402,3 +402,69 @@ def test_in_boolean_explicit(
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.cons_in
+@pytest.mark.var_real
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_real_in_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """x IN (non-integer values) on a REAL variable.
+
+    Regression test for the integer-step rewrite sweep. PackDB rewrites IN into
+    binary-indicator cardinality + linking `=` (no discretization of `x`), so
+    REAL variables with fractional domain values must solve correctly. Also
+    verifies each row's ``x`` is exactly one of the allowed values.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, x
+        FROM lineitem WHERE l_orderkey < 15
+        DECIDE x IS REAL
+        SUCH THAT x IN (0.5, 1.5, 2.75)
+            AND SUM(x) <= 20
+        MAXIMIZE SUM(x * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 15
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("real_in_domain")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=2.75)
+    for i, v in enumerate(vnames):
+        add_in_domain(oracle_solver, v, [0.5, 1.5, 2.75], name_prefix=f"in_{i}")
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(n)}, "<=", 20.0, name="sum_cap",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    x_idx = packdb_cols.index("x")
+    allowed = {0.5, 1.5, 2.75}
+    for row in packdb_rows:
+        assert any(abs(float(row[x_idx]) - a) < 1e-6 for a in allowed), (
+            f"x={row[x_idx]} not in {allowed}"
+        )
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+    perf_tracker.record(
+        "real_in_oracle", packdb_time, build_time, result.solve_time_seconds,
+        n, n * 4, 1 + n, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )

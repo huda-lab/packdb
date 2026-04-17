@@ -12,6 +12,7 @@ possibly preceded by solver-license preamble lines (e.g. Gurobi).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -34,11 +35,24 @@ class PackDBCli:
         Absolute path to the ``packdb`` binary.
     db_path : str
         Absolute path to the TPC-H database file.
+    env : dict[str, str] | None
+        Extra environment variables overlaid on ``os.environ`` for every
+        subprocess invocation. Used by fixtures (e.g. ``packdb_cli_highs``)
+        that pin ``PACKDB_FORCE_SOLVER``. Pass ``None`` to inherit the
+        parent environment unchanged.
     """
 
-    def __init__(self, exe_path: str, db_path: str) -> None:
+    def __init__(
+        self, exe_path: str, db_path: str, env: dict[str, str] | None = None
+    ) -> None:
         self.exe = exe_path
         self.db = db_path
+        self.env = env
+
+    def _subprocess_env(self) -> dict[str, str] | None:
+        if not self.env:
+            return None
+        return {**os.environ, **self.env}
 
     def execute(
         self, sql: str, *, timeout: float = 120
@@ -58,6 +72,7 @@ class PackDBCli:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=self._subprocess_env(),
         )
 
         stderr = proc.stderr.strip()
@@ -97,6 +112,7 @@ class PackDBCli:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=self._subprocess_env(),
         )
 
     def assert_error(

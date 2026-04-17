@@ -1269,8 +1269,7 @@ class TestQuadraticConstraintEdgeCases:
                 AND POWER(x, 2) <= -1
             MAXIMIZE SUM(x)
         """
-        with pytest.raises(PackDBCliError):
-            packdb_cli.execute(sql)
+        packdb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")
 
         oracle_solver.create_model("qcp_infeasible")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)

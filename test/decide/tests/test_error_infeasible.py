@@ -191,3 +191,42 @@ class TestUnboundedModels:
         assert oracle_solver.solve().status in (
             SolverStatus.UNBOUNDED, SolverStatus.INFEASIBLE,
         )
+
+    def test_mixed_unbounded_integer_var(
+        self, packdb_cli, oracle_solver
+    ):
+        """Mixed problem where one variable is unconstrained.
+
+        BOOLEAN ``x`` is bounded by ``SUM(x) <= 5``; INTEGER ``y`` appears
+        in the objective but in no constraint. Maximising ``SUM(x*val + y)``
+        drives ``y`` to infinity. A bounds-propagation bug that treats the
+        model as bounded because *some* variable is constrained would miss
+        this — hence the separate test from the lone-integer case.
+        """
+        packdb_cli.assert_error("""
+            SELECT id, val, x, y FROM (
+                VALUES (1, 10.0), (2, 20.0), (3, 30.0)
+            ) t(id, val)
+            DECIDE x IS BOOLEAN, y IS INTEGER
+            SUCH THAT SUM(x) <= 5
+            MAXIMIZE SUM(x * val + y)
+        """, match=r"(?i)unbounded")
+
+        data = [(1, 10.0), (2, 20.0), (3, 30.0)]
+        n = len(data)
+        oracle_solver.create_model("mixed_unbounded_int")
+        for i in range(n):
+            oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+            # INTEGER y with no upper bound mirrors PackDB's default.
+            oracle_solver.add_variable(f"y_{i}", VarType.INTEGER, lb=0.0)
+        oracle_solver.add_constraint(
+            {f"x_{i}": 1.0 for i in range(n)}, "<=", 5.0, name="sum_x_cap",
+        )
+        obj: dict = {}
+        for i in range(n):
+            obj[f"x_{i}"] = data[i][1]
+            obj[f"y_{i}"] = 1.0
+        oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+        assert oracle_solver.solve().status in (
+            SolverStatus.UNBOUNDED, SolverStatus.INFEASIBLE,
+        )

@@ -12,12 +12,19 @@ Tests live in:
 | Scenario | Where | Oracle |
 |----------|-------|--------|
 | Zero rows matching (empty result) | `test_edge_cases.py::test_zero_rows_empty_input` | ✓ |
+| Aggregate LHS vs aggregate RHS (`SUM(x*v) <= SUM(y*v)`) rejected | `test_error_binder.py::test_aggregate_vs_aggregate_constraint_rejected` | error test |
+| 10-column linear combination in constraint + objective | `test_edge_cases.py::test_many_terms_objective` | ✓ |
+| 6 heterogeneous constraints in one query | `test_edge_cases.py::test_five_plus_heterogeneous_constraints` | ✓ |
+| Large-coefficient numeric stability (1e9 coeffs + NE Big-M) | `test_edge_cases.py::test_large_coefficient_numeric_stability` | ✓ |
+| Row-scoped variables on 1-to-many fan-out JOIN | `test_entity_scope.py::test_row_scoped_vars_on_fanout_join` | ✓ |
 | Single row input (trivial problem) | `test_edge_cases.py::test_single_row` | ✓ |
 | All variables forced to same value (RHS=0) | `test_edge_cases.py::test_rhs_zero_forces_all_zero` | ✓ |
 | Trivially loose constraint (all selected) | `test_edge_cases.py::test_trivial_all_selected` | ✓ |
 | Negative objective coefficients | `test_edge_cases.py::test_negative_objective_coefficients` | ✓ |
 | NULL coefficients (with COALESCE hint) | `test_edge_cases.py::test_null_coefficients` | error test |
 | Feasibility problem (no objective) | `test_edge_cases.py::test_feasibility_no_objective` | ✓ |
+| All-zero objective coefficients (`MAXIMIZE SUM(x * 0)`) | `test_edge_cases.py::test_all_zero_objective` | ✓ |
+| Unconstrained INTEGER var in objective (mixed w/ bounded BOOLEAN) | `test_error_infeasible.py::TestUnboundedModels::test_mixed_unbounded_integer_var` | error test |
 
 ## Data shapes
 
@@ -47,13 +54,22 @@ Tests live in:
 |----------|-------|--------|
 | 501-row knapsack | `test_large_scale.py::test_knapsack_large` | ✓ |
 | 2204-row order selection | `test_large_scale.py::test_order_selection_large` | ✓ |
-| 1500-customer problem | `test_entity_scope.py::test_entity_scoped_mixed_when_per` | constraint only (HiGHS reliability at scale) |
+| 1500-customer problem | `test_entity_scope.py::test_entity_scoped_mixed_when_per` | ✓ (Gurobi-only) |
 
 ## Solver coverage
 
-From `test/decide/solver/factory.py`: the oracle picks ONE solver per session
-(Gurobi if `gurobipy` is installed, HiGHS otherwise). The `_expect_gurobi`
-decorator in QP/bilinear tests skips or accepts-error on HiGHS.
+The oracle always picks Gurobi (gurobipy required; oracle fixtures skip if
+unavailable). The `_expect_gurobi` decorator in QP/bilinear tests accepts the
+rejection message on HiGHS-only hosts. The `PACKDB_FORCE_SOLVER` env var pins
+PackDB's backend for specific tests via the `packdb_cli_highs` and
+`packdb_cli_gurobi` fixtures.
+
+| Scenario | Where | Oracle |
+|----------|-------|--------|
+| HiGHS rejects non-convex QP (MAXIMIZE SUM(POWER)) | `test_quadratic.py::TestHighsRejection::test_highs_nonconvex_qp_rejected` | error test |
+| HiGHS rejects MIQP (integer vars + quadratic obj) | `test_quadratic.py::TestHighsRejection::test_highs_miqp_rejected` | error test |
+| Gurobi ↔ HiGHS objective agreement on linear IP | `test_edge_cases.py::test_gurobi_highs_agree_on_objective` | cross-check |
+| Infeasible QP constraint (tight `match=`) | `test_quadratic_constraints.py::test_infeasible_negative_budget` | error test |
 
 ## Infrastructure / meta-tests
 
