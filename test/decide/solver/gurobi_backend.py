@@ -61,8 +61,15 @@ class GurobiSolver(OracleSolver):
         expr = gp.LinExpr()
         for vname, coeff in coeffs.items():
             expr.add(self._vars[vname], coeff)
-        sense_map = {"<=": gp.GRB.LESS_EQUAL, ">=": gp.GRB.GREATER_EQUAL, "=": gp.GRB.EQUAL}
-        self._model.addConstr(expr, sense_map[sense], rhs, name=name)
+        if sense == "<=":
+            tc = expr <= rhs
+        elif sense == ">=":
+            tc = expr >= rhs
+        elif sense == "=":
+            tc = expr == rhs
+        else:
+            raise ValueError(f"unsupported sense: {sense!r}")
+        self._model.addConstr(tc, name=name)
 
     def set_objective(
         self,
@@ -77,6 +84,81 @@ class GurobiSolver(OracleSolver):
             gp.GRB.MAXIMIZE if sense == ObjSense.MAXIMIZE else gp.GRB.MINIMIZE
         )
         self._model.setObjective(expr, grb_sense)
+
+    def set_quadratic_objective(
+        self,
+        linear: dict[str, float],
+        quadratic: dict[tuple[str, str], float],
+        sense: ObjSense,
+        constant: float = 0.0,
+    ) -> None:
+        gp = self._gp
+        expr = gp.QuadExpr()
+        for vname, coeff in linear.items():
+            expr.add(self._vars[vname] * coeff)
+        merged = _merge_symmetric_quadratic(quadratic)
+        for (a, b), coeff in merged.items():
+            expr.add(self._vars[a] * self._vars[b] * coeff)
+        grb_sense = (
+            gp.GRB.MAXIMIZE if sense == ObjSense.MAXIMIZE else gp.GRB.MINIMIZE
+        )
+        self._model.setObjective(expr, grb_sense)
+        if constant:
+            self._model.ObjCon = constant
+        if merged:
+            self._model.Params.NonConvex = 2
+
+    def add_quadratic_constraint(
+        self,
+        linear: dict[str, float],
+        quadratic: dict[tuple[str, str], float],
+        sense: str,
+        rhs: float,
+        name: str = "",
+    ) -> None:
+        gp = self._gp
+        expr = gp.QuadExpr()
+        for vname, coeff in linear.items():
+            expr.add(self._vars[vname] * coeff)
+        merged = _merge_symmetric_quadratic(quadratic)
+        for (a, b), coeff in merged.items():
+            expr.add(self._vars[a] * self._vars[b] * coeff)
+        if sense == "<=":
+            tc = expr <= rhs
+        elif sense == ">=":
+            tc = expr >= rhs
+        elif sense == "=":
+            tc = expr == rhs
+        else:
+            raise ValueError(f"unsupported sense: {sense!r}")
+        self._model.addQConstr(tc, name=name)
+        if merged:
+            self._model.Params.NonConvex = 2
+
+    def add_indicator_constraint(
+        self,
+        indicator_var: str,
+        indicator_val: int,
+        coeffs: dict[str, float],
+        sense: str,
+        rhs: float,
+        name: str = "",
+    ) -> None:
+        gp = self._gp
+        expr = gp.LinExpr()
+        for vname, coeff in coeffs.items():
+            expr.add(self._vars[vname], coeff)
+        if sense == "<=":
+            tc = expr <= rhs
+        elif sense == ">=":
+            tc = expr >= rhs
+        elif sense == "=":
+            tc = expr == rhs
+        else:
+            raise ValueError(f"unsupported sense: {sense!r}")
+        self._model.addGenConstrIndicator(
+            self._vars[indicator_var], bool(indicator_val), tc, name=name,
+        )
 
     def solve(self, time_limit: float = 60.0) -> SolverResult:
         gp = self._gp
@@ -110,3 +192,19 @@ class GurobiSolver(OracleSolver):
 
     def solver_name(self) -> str:
         return "Gurobi"
+
+
+def _merge_symmetric_quadratic(
+    quadratic: dict[tuple[str, str], float],
+) -> dict[tuple[str, str], float]:
+    """Combine (a, b) and (b, a) entries into one canonical key.
+
+    Off-diagonal terms in a Q matrix are symmetric: the coefficient of x·y is
+    the sum of (x, y) and (y, x). Callers may pass either or both; this
+    normalizes to a single entry with the combined coefficient.
+    """
+    merged: dict[tuple[str, str], float] = {}
+    for (a, b), coeff in quadratic.items():
+        key = (a, b) if a <= b else (b, a)
+        merged[key] = merged.get(key, 0.0) + coeff
+    return merged

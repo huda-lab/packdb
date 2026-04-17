@@ -79,8 +79,9 @@ def compare_solutions(
     oracle_result: SolverResult,
     oracle_data: list[tuple],
     decide_var_names: list[str],
-    coeff_fn: Callable[[tuple], dict[str, float]],
+    coeff_fn: Callable[[tuple], dict[str, float]] | None = None,
     tolerance: float = 1e-4,
+    packdb_objective_fn: Callable[[list[tuple], list[str]], float] | None = None,
 ) -> ComparisonResult:
     """Compare PackDB output against the oracle solution.
 
@@ -110,9 +111,16 @@ def compare_solutions(
     )
     assert oracle_result.objective_value is not None
 
-    packdb_obj = compute_packdb_objective(
-        packdb_rows, packdb_cols, decide_var_names, coeff_fn
-    )
+    if packdb_objective_fn is not None:
+        packdb_obj = packdb_objective_fn(packdb_rows, packdb_cols)
+    else:
+        if coeff_fn is None:
+            raise ValueError(
+                "compare_solutions: pass either coeff_fn (linear) or packdb_objective_fn"
+            )
+        packdb_obj = compute_packdb_objective(
+            packdb_rows, packdb_cols, decide_var_names, coeff_fn
+        )
     oracle_obj = oracle_result.objective_value
 
     obj_diff = abs(packdb_obj - oracle_obj)

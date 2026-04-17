@@ -137,9 +137,20 @@ class CachedOracleSolver:
         self._cache = cache
         self._cached_result: SolverResult | None = None
         self._model_active = False
+        # A single test may call create_model() more than once (e.g.
+        # parametric loops over multiple budgets). We give each model a
+        # unique cache key by suffixing the call count so earlier solves
+        # don't shadow later ones.
+        self._model_count = 0
+        self._current_cache_key = test_id
 
     def create_model(self, name: str) -> None:
-        cached = self._cache.lookup(self._test_id, self._test_fn)
+        self._model_count += 1
+        self._current_cache_key = (
+            self._test_id if self._model_count == 1
+            else f"{self._test_id}#{self._model_count}"
+        )
+        cached = self._cache.lookup(self._current_cache_key, self._test_fn)
         if cached is not None:
             self._cached_result = cached
             self._model_active = False
@@ -148,7 +159,7 @@ class CachedOracleSolver:
         if self._real is None:
             import pytest
             pytest.skip(
-                f"No solver available and no cached oracle for {self._test_id}"
+                f"No solver available and no cached oracle for {self._current_cache_key}"
             )
         self._real.create_model(name)
         self._model_active = True
@@ -181,16 +192,51 @@ class CachedOracleSolver:
         if self._model_active:
             self._real.set_objective(coeffs, sense)
 
+    def set_quadratic_objective(
+        self,
+        linear: dict[str, float],
+        quadratic: dict[tuple[str, str], float],
+        sense: ObjSense,
+        constant: float = 0.0,
+    ) -> None:
+        if self._model_active:
+            self._real.set_quadratic_objective(linear, quadratic, sense, constant)
+
+    def add_quadratic_constraint(
+        self,
+        linear: dict[str, float],
+        quadratic: dict[tuple[str, str], float],
+        sense: str,
+        rhs: float,
+        name: str = "",
+    ) -> None:
+        if self._model_active:
+            self._real.add_quadratic_constraint(linear, quadratic, sense, rhs, name)
+
+    def add_indicator_constraint(
+        self,
+        indicator_var: str,
+        indicator_val: int,
+        coeffs: dict[str, float],
+        sense: str,
+        rhs: float,
+        name: str = "",
+    ) -> None:
+        if self._model_active:
+            self._real.add_indicator_constraint(
+                indicator_var, indicator_val, coeffs, sense, rhs, name,
+            )
+
     def solve(self, time_limit: float = 60.0) -> SolverResult:
         if self._cached_result is not None:
             return self._cached_result
         if self._real is None:
             import pytest
             pytest.skip(
-                f"No solver available and no cached oracle for {self._test_id}"
+                f"No solver available and no cached oracle for {self._current_cache_key}"
             )
         result = self._real.solve(time_limit)
-        self._cache.store(self._test_id, self._test_fn, result)
+        self._cache.store(self._current_cache_key, self._test_fn, result)
         return result
 
     def solver_name(self) -> str:
