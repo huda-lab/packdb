@@ -164,13 +164,21 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 					                        decide_var.alias);
 				}
 
+				// Snapshot the per-aggregate FILTER (from aggregate-local WHEN) BEFORE
+				// reassigning *expr below. After `expr = BindAggregateFunction(...)`
+				// the old BoundAggregateExpression that `agg` references is freed,
+				// so `agg.filter` would be a dangling read — which silently dropped
+				// the WHEN filter from COUNT(x) WHEN cond.
+				unique_ptr<Expression> filter_copy =
+				    agg.filter ? agg.filter->Copy() : nullptr;
+
 				if (decide_var.return_type == LogicalType::BOOLEAN) {
 					// BOOLEAN: COUNT(x) = SUM(x) — replace with SUM over same variable
 					vector<unique_ptr<Expression>> sum_children;
 					sum_children.push_back(child->Copy());
 					expr = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-					if (agg.filter) {
-						expr->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
+					if (filter_copy) {
+						expr->Cast<BoundAggregateExpression>().filter = std::move(filter_copy);
 					}
 				} else {
 					// INTEGER: COUNT(x) → SUM(indicator)
@@ -221,8 +229,8 @@ void DecideOptimizer::RewriteCountInExpression(unique_ptr<Expression> &expr, Log
 					vector<unique_ptr<Expression>> sum_children;
 					sum_children.push_back(std::move(ind_ref));
 					expr = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-					if (agg.filter) {
-						expr->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
+					if (filter_copy) {
+						expr->Cast<BoundAggregateExpression>().filter = std::move(filter_copy);
 					}
 				}
 				return; // Node replaced, no need to recurse into it
