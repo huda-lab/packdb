@@ -6,6 +6,7 @@ Covers:
   - test_real_mixed: mixed BOOLEAN + REAL variables
   - test_real_with_when: REAL variable + WHEN conditional
   - test_real_with_per: REAL variable + PER grouping
+  - test_real_minimize: REAL variable with MINIMIZE (coefficient-sign path)
 """
 
 import time
@@ -249,6 +250,66 @@ def test_real_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     perf_tracker.record(
         "real_with_when", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_real_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """REAL variable with MINIMIZE — exercises the coefficient-sign path distinct
+    from MAXIMIZE (negation happens at the solver boundary or in the objective
+    builder). Constraint SUM(x) >= 10 forces a non-zero optimum; MINIMIZE picks
+    the smallest-cost row to carry the load."""
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, ROUND(x, 4) AS x
+        FROM lineitem
+        WHERE l_orderkey <= 5
+        DECIDE x IS REAL
+        SUCH THAT x <= 100 AND SUM(x) >= 10
+        MINIMIZE SUM(x * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 5
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("real_minimize")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(len(data))},
+        ">=", 10.0, name="floor",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(len(data))},
+        ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+
+    perf_tracker.record(
+        "real_minimize", packdb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

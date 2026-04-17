@@ -296,6 +296,108 @@ def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_t
 
 
 @pytest.mark.edge_case
+@pytest.mark.per_clause
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Feasibility problem (no objective) combined with PER constraints.
+
+    Exercises the FEASIBILITY sense path through PER constraint generation:
+    `SUM(x) = 1 PER grp` becomes one equality per group, and the PER
+    constraint-builder must work even when the model builder sets all
+    objective coefficients to zero (DecideSense::FEASIBILITY).
+
+    Also adds a global aggregate constraint `SUM(x * val) <= 35` that
+    rules out picking the heaviest item from each group, so the test
+    distinguishes "any per-group selection" from "a per-group selection
+    that also respects the global cap".
+
+    Oracle role: build the same feasibility problem in gurobipy and assert
+    OPTIMAL — this is independent verification that the constraints are
+    satisfiable. Then structurally validate PackDB's chosen feasible
+    point (per-group cardinality + global budget). Cannot compare
+    variable values directly because feasibility problems admit multiple
+    optima and PackDB / Gurobi may pick different ones.
+    """
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
+        SELECT 2, 'A', 20.0 UNION ALL
+        SELECT 3, 'A', 30.0 UNION ALL
+        SELECT 4, 'B', 5.0 UNION ALL
+        SELECT 5, 'B', 25.0
+    """
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, grp, val, x
+        FROM data
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) = 1 PER grp
+            AND SUM(x * val) <= 35
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute(f"""
+        SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(val AS DOUBLE)
+        FROM ({data_sql})
+    """).fetchall()
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("feasibility_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    # Per-group SUM(x) = 1 constraints.
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for i, row in enumerate(data):
+        groups[row[1]].append(i)
+    for grp, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, "=", 1.0, name=f"pick_one_{grp}",
+        )
+    # Global cap.
+    oracle_solver.add_constraint(
+        {vnames[i]: float(data[i][2]) for i in range(n)},
+        "<=", 35.0, name="budget",
+    )
+    # Feasibility: empty objective (zero vector) keeps the sense well-defined.
+    oracle_solver.set_objective({}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+
+    from solver.types import SolverStatus
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL, (
+        f"Oracle reports infeasible/error for feasibility+PER: status={result.status}. "
+        f"PackDB returned {len(rows)} rows, so PackDB thinks it is feasible — divergence."
+    )
+
+    # Structural validation of PackDB's chosen point.
+    assert len(rows) == n, f"row count mismatch: PackDB returned {len(rows)}, expected {n}"
+    x_idx, grp_idx, val_idx = cols.index("x"), cols.index("grp"), cols.index("val")
+    by_grp: dict = defaultdict(int)
+    for r in rows:
+        by_grp[str(r[grp_idx])] += int(r[x_idx])
+    for grp, total in by_grp.items():
+        assert total == 1, (
+            f"Group {grp} SUM(x)={total} but PER constraint requires exactly 1"
+        )
+    weighted = sum(int(r[x_idx]) * float(r[val_idx]) for r in rows)
+    assert weighted <= 35 + 1e-4, (
+        f"PackDB violates global budget: SUM(x*val)={weighted} > 35"
+    )
+
+    perf_tracker.record(
+        "feasibility_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n, len(groups) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.edge_case
 @pytest.mark.error
 def test_null_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """NULL values in coefficient columns — PackDB rejects with helpful COALESCE hint."""

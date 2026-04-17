@@ -1,238 +1,457 @@
 """Tests for AVG() over decision variables.
 
-AVG(expr) is rewritten to SUM(expr) with RHS scaling by row count N.
-For objectives, AVG and SUM share the same argmax/argmin so no scaling needed.
-For constraints, AVG(expr) op K becomes SUM(expr) op K*N where N depends on
-WHEN/PER context.
+``AVG(expr) op K`` rewrites to ``SUM(expr) op K*N`` at bind time, where the
+divisor N is:
+  - total rows for a vanilla AVG
+  - the count of WHEN-qualifying rows for AVG(..) WHEN cond
+  - the per-group size for AVG(..) PER col
+  - the intersection for AVG(..) WHEN cond PER col
 
-Covers:
-  - test_avg_objective: MAXIMIZE AVG(x * col) same result as MAXIMIZE SUM(x * col)
-  - test_avg_constraint: AVG(x * weight) <= K
-  - test_avg_with_when: N_when used (not total N)
-  - test_avg_with_per: N_g used per group
-  - test_avg_with_when_per: combined case
-  - test_avg_boolean: AVG(x) for BOOLEAN vars
-  - test_avg_integer: AVG(x) for INTEGER vars
-  - test_avg_bilinear_constraint: AVG(x * y) bilinear constraint (Bool×Bool)
-  - test_avg_no_decide_var: AVG(col) passes through to normal DuckDB
+Objectives share argmax/argmin with SUM (N is a positive constant) so an
+AVG objective is compared against an ordinary linear objective.
 """
 
+import time
+from collections import defaultdict
+
 import pytest
+
+from solver.types import VarType, ObjSense
+from comparison.compare import compare_solutions
+from ._oracle_helpers import add_bool_and, group_indices
+
+
+_VALUES_4 = "VALUES ('a', 10), ('b', 5), ('c', 8), ('d', 3)"
+_DATA_SQL_4 = f"SELECT * FROM ({_VALUES_4}) t(name, value)"
+
+
+def _fetch(duckdb_conn, sql):
+    return duckdb_conn.execute(sql).fetchall()
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_objective(packdb_cli):
-    """MAXIMIZE AVG(x * col) should give same assignment as MAXIMIZE SUM(x * col)."""
-    base_sql = """
-        SELECT name, x FROM (
-            VALUES ('a', 10), ('b', 5), ('c', 8), ('d', 3)
-        ) t(name, value)
+def test_avg_objective(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE AVG(x * col) should give the same argmax as MAXIMIZE SUM(x * col)."""
+    base = """
+        SELECT name, value, x FROM ({data_sql})
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <= 2
         {objective}
     """
-    rows_avg, cols_avg = packdb_cli.execute(base_sql.format(objective="MAXIMIZE AVG(x * value)"))
-    rows_sum, cols_sum = packdb_cli.execute(base_sql.format(objective="MAXIMIZE SUM(x * value)"))
+    sql_avg = base.format(data_sql=_DATA_SQL_4, objective="MAXIMIZE AVG(x * value)")
+    sql_sum = base.format(data_sql=_DATA_SQL_4, objective="MAXIMIZE SUM(x * value)")
 
-    ci_avg = {name: i for i, name in enumerate(cols_avg)}
-    ci_sum = {name: i for i, name in enumerate(cols_sum)}
+    t0 = time.perf_counter()
+    rows_avg, cols_avg = packdb_cli.execute(sql_avg)
+    rows_sum, cols_sum = packdb_cli.execute(sql_sum)
+    packdb_time = time.perf_counter() - t0
 
-    # Same rows should be selected (same argmax)
+    ci_avg = {c: i for i, c in enumerate(cols_avg)}
+    ci_sum = {c: i for i, c in enumerate(cols_sum)}
     selected_avg = {r[ci_avg["name"]] for r in rows_avg if r[ci_avg["x"]] == 1}
     selected_sum = {r[ci_sum["name"]] for r in rows_sum if r[ci_sum["x"]] == 1}
-    assert selected_avg == selected_sum, f"AVG and SUM objectives should select same rows: {selected_avg} vs {selected_sum}"
+    assert selected_avg == selected_sum, (
+        f"AVG and SUM objectives should select same rows: {selected_avg} vs {selected_sum}"
+    )
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE) FROM ({_DATA_SQL_4})",
+    )
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_objective_sum_equiv")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": 1.0 for i in range(n)}, "<=", 2.0, name="sum_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows_sum, cols_sum, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[cols_sum.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_objective", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_constraint(packdb_cli):
-    """AVG(x * weight) <= K constrains the average, not the sum."""
-    # 4 rows with weights [10, 5, 8, 3]. AVG(x * weight) <= 5 means SUM(x * weight) <= 20.
-    # With x IS BOOLEAN, selecting a=10, c=8 gives SUM=18 <= 20 (AVG=4.5 <= 5). OK.
-    # Selecting a=10, c=8, b=5 gives SUM=23 > 20 (AVG=5.75 > 5). Not OK.
-    sql = """
-        SELECT name, value, x FROM (
-            VALUES ('a', 10), ('b', 5), ('c', 8), ('d', 3)
-        ) t(name, value)
+def test_avg_constraint(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x*value) <= 5 with N=4 rows ⇒ SUM(x*value) <= 20."""
+    sql = f"""
+        SELECT name, value, x FROM ({_DATA_SQL_4})
         DECIDE x IS BOOLEAN
         SUCH THAT AVG(x * value) <= 5
         MAXIMIZE SUM(x * value)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    total = sum(r[ci["x"]] * r[ci["value"]] for r in rows)
-    n = len(rows)
-    avg = total / n
-    assert avg <= 5.0 + 1e-6, f"AVG should be <= 5, got {avg}"
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE) FROM ({_DATA_SQL_4})",
+    )
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_constraint")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": data[i][1] for i in range(n)},
+        "<=", 5.0 * n, name="avg_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_constraint", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_with_when(packdb_cli):
-    """AVG(x * weight) <= K WHEN cond uses N_when (matching row count), not total N."""
-    # 4 rows: 2 are 'high', 2 are 'low'.
-    # AVG(x * value) <= 6 WHEN tier = 'high' means SUM among high rows <= 6 * 2 = 12.
-    # High rows have values 10 and 8. Selecting both gives SUM=18 > 12. So at most one high row.
-    sql = """
-        SELECT name, value, tier, x FROM (
-            VALUES ('a', 10, 'high'), ('b', 5, 'low'), ('c', 8, 'high'), ('d', 3, 'low')
-        ) t(name, value, tier)
+def test_avg_with_when(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x*value) <= 6 WHEN tier='high' uses N_when (number of high rows)."""
+    values = (
+        "VALUES ('a', 10, 'high'), ('b', 5, 'low'), "
+        "('c', 8, 'high'), ('d', 3, 'low')"
+    )
+    data_sql = f"SELECT * FROM ({values}) t(name, value, tier)"
+    sql = f"""
+        SELECT name, value, tier, x FROM ({data_sql})
         DECIDE x IS BOOLEAN
         SUCH THAT AVG(x * value) <= 6 WHEN tier = 'high'
         MAXIMIZE SUM(x * value)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    # Check: among 'high' tier rows, AVG(x*value) <= 6
-    high_rows = [r for r in rows if r[ci["tier"]] == "high"]
-    high_sum = sum(r[ci["x"]] * r[ci["value"]] for r in high_rows)
-    high_avg = high_sum / len(high_rows)
-    assert high_avg <= 6.0 + 1e-6, f"AVG among 'high' rows should be <= 6, got {high_avg}"
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(tier AS VARCHAR) FROM ({data_sql})",
+    )
+    n = len(data)
+    high_idx = [i for i, r in enumerate(data) if r[2] == "high"]
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_when")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": data[i][1] for i in high_idx},
+        "<=", 6.0 * len(high_idx), name="avg_when_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_with_when", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_with_per(packdb_cli):
-    """AVG(x * value) <= K PER group uses N_g per group."""
-    # Group A has 2 rows (values 10, 8), group B has 2 rows (values 5, 3).
-    # AVG(x * value) <= 4 PER grp means:
-    #   Group A: SUM(x*value) <= 4*2 = 8. Can select c=8 but not a=10.
-    #   Group B: SUM(x*value) <= 4*2 = 8. Can select both b=5, d=3 (sum=8).
-    sql = """
-        SELECT name, value, grp, x FROM (
-            VALUES ('a', 10, 'A'), ('b', 5, 'B'), ('c', 8, 'A'), ('d', 3, 'B')
-        ) t(name, value, grp)
+def test_avg_with_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x*value) <= 4 PER grp uses N_g per group."""
+    values = (
+        "VALUES ('a', 10, 'A'), ('b', 5, 'B'), ('c', 8, 'A'), ('d', 3, 'B')"
+    )
+    data_sql = f"SELECT * FROM ({values}) t(name, value, grp)"
+    sql = f"""
+        SELECT name, value, grp, x FROM ({data_sql})
         DECIDE x IS BOOLEAN
         SUCH THAT AVG(x * value) <= 4 PER grp
         MAXIMIZE SUM(x * value)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    # Check per-group AVG constraint
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for r in rows:
-        groups[r[ci["grp"]]].append(r)
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(grp AS VARCHAR) FROM ({data_sql})",
+    )
+    n = len(data)
 
-    for grp_name, grp_rows in groups.items():
-        grp_sum = sum(r[ci["x"]] * r[ci["value"]] for r in grp_rows)
-        grp_avg = grp_sum / len(grp_rows)
-        assert grp_avg <= 4.0 + 1e-6, f"AVG for group '{grp_name}' should be <= 4, got {grp_avg}"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_per")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for grp, idxs in group_indices(data, lambda r: r[2]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": data[i][1] for i in idxs},
+            "<=", 4.0 * len(idxs), name=f"avg_per_{grp}",
+        )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_with_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 2, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_with_when_per(packdb_cli):
-    """AVG with both WHEN and PER: filters then groups."""
-    sql = """
-        SELECT name, value, grp, tier, x FROM (
-            VALUES ('a', 10, 'A', 'high'), ('b', 5, 'B', 'high'),
-                   ('c', 8, 'A', 'low'),  ('d', 3, 'B', 'low'),
-                   ('e', 6, 'A', 'high'), ('f', 4, 'B', 'high')
-        ) t(name, value, grp, tier)
+def test_avg_with_when_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG with both WHEN and PER: filter WHEN first, then group by PER."""
+    values = (
+        "VALUES ('a', 10, 'A', 'high'), ('b', 5, 'B', 'high'),"
+        " ('c', 8, 'A', 'low'),  ('d', 3, 'B', 'low'),"
+        " ('e', 6, 'A', 'high'), ('f', 4, 'B', 'high')"
+    )
+    data_sql = f"SELECT * FROM ({values}) t(name, value, grp, tier)"
+    sql = f"""
+        SELECT name, value, grp, tier, x FROM ({data_sql})
         DECIDE x IS BOOLEAN
         SUCH THAT AVG(x * value) <= 5 WHEN tier = 'high' PER grp
         MAXIMIZE SUM(x * value)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    # Check: for each group, among 'high' tier rows, AVG(x*value) <= 5
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for r in rows:
-        if r[ci["tier"]] == "high":
-            groups[r[ci["grp"]]].append(r)
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), "
+        f"CAST(grp AS VARCHAR), CAST(tier AS VARCHAR) FROM ({data_sql})",
+    )
+    n = len(data)
 
-    for grp_name, grp_rows in groups.items():
-        grp_sum = sum(r[ci["x"]] * r[ci["value"]] for r in grp_rows)
-        grp_avg = grp_sum / len(grp_rows)
-        assert grp_avg <= 5.0 + 1e-6, f"AVG for group '{grp_name}' (high tier) should be <= 5, got {grp_avg}"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_when_per")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for grp, idxs in group_indices(data, lambda r: r[2]).items():
+        qualifying = [i for i in idxs if data[i][3] == "high"]
+        if not qualifying:
+            continue
+        oracle_solver.add_constraint(
+            {f"x_{i}": data[i][1] for i in qualifying},
+            "<=", 5.0 * len(qualifying), name=f"avg_when_per_{grp}",
+        )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_with_when_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 2, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_boolean(packdb_cli):
-    """AVG(x) for BOOLEAN variables = fraction of selected rows."""
-    # AVG(x) <= 0.5 means SUM(x) <= 0.5 * 4 = 2
-    sql = """
-        SELECT name, value, x FROM (
-            VALUES ('a', 10), ('b', 5), ('c', 8), ('d', 3)
-        ) t(name, value)
+def test_avg_boolean(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x) <= 0.5 with 4 BOOLEAN rows ⇒ SUM(x) <= 2."""
+    sql = f"""
+        SELECT name, value, x FROM ({_DATA_SQL_4})
         DECIDE x IS BOOLEAN
         SUCH THAT AVG(x) <= 0.5
         MAXIMIZE SUM(x * value)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
-    selected = sum(r[ci["x"]] for r in rows)
-    assert selected <= 2, f"AVG(x) <= 0.5 with 4 rows means at most 2 selected, got {selected}"
-    # Should pick top 2 by value: a=10, c=8
-    assert selected == 2, f"Should select exactly 2 to maximize, got {selected}"
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE) FROM ({_DATA_SQL_4})",
+    )
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_boolean")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": 1.0 for i in range(n)}, "<=", 0.5 * n, name="avg_x_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_boolean", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_integer(packdb_cli):
-    """AVG(x) for INTEGER variables."""
-    # 3 rows. AVG(x) <= 3 means SUM(x) <= 9.
-    sql = """
-        SELECT name, value, x FROM (
-            VALUES ('a', 10), ('b', 5), ('c', 8)
-        ) t(name, value)
+def test_avg_integer(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x) <= 3 with 3 INTEGER rows (x <= 5) ⇒ SUM(x) <= 9."""
+    values = "VALUES ('a', 10), ('b', 5), ('c', 8)"
+    data_sql = f"SELECT * FROM ({values}) t(name, value)"
+    sql = f"""
+        SELECT name, value, x FROM ({data_sql})
         DECIDE x
         SUCH THAT x <= 5 AND AVG(x) <= 3
         MAXIMIZE SUM(x * value)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
-    total_x = sum(r[ci["x"]] for r in rows)
-    n = len(rows)
-    avg_x = total_x / n
-    assert avg_x <= 3.0 + 1e-6, f"AVG(x) should be <= 3, got {avg_x}"
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE) FROM ({data_sql})",
+    )
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_integer")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=5.0)
+    oracle_solver.add_constraint(
+        {f"x_{i}": 1.0 for i in range(n)}, "<=", 3.0 * n, name="avg_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_integer", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
-def test_avg_bilinear_constraint(packdb_cli):
-    """AVG(x * y) where both x and y are BOOLEAN decision variables — bilinear constraint.
-
-    With bilinear support, Bool×Bool products are linearized via AND-linearization.
-    AVG(x*y) <= 0.5 with 3 rows means SUM(x*y) <= 1.5, i.e., at most 1 row has both x=1 and y=1.
-    """
-    sql = """
-        SELECT x, y FROM (
-            VALUES (1), (2), (3)
-        ) t(value)
+def test_avg_bilinear_constraint(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(x*y) <= 0.5 with 3 rows, both x,y BOOLEAN. AND-linearize the product."""
+    data_sql = "SELECT * FROM (VALUES (1), (2), (3)) t(value)"
+    sql = f"""
+        SELECT value, x, y FROM ({data_sql})
         DECIDE x IS BOOLEAN, y IS BOOLEAN
         SUCH THAT AVG(x * y) <= 0.5
         MAXIMIZE SUM(x + y)
     """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
-    # Verify constraint: AVG(x*y) <= 0.5 → at most 1 row with both x=1 and y=1
-    both_selected = sum(1 for r in rows if r[ci["x"]] == 1 and r[ci["y"]] == 1)
-    n = len(rows)
-    avg_xy = both_selected / n
-    assert avg_xy <= 0.5 + 1e-6, f"AVG(x*y) should be <= 0.5, got {avg_xy}"
-    # Objective MAXIMIZE SUM(x+y): should maximize total selections
-    total = sum(r[ci["x"]] + r[ci["y"]] for r in rows)
-    assert total >= 4, f"Should select at least 4 total (x+y across rows), got {total}"
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(value AS BIGINT) FROM ({data_sql})",
+    )
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_bilinear")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+        oracle_solver.add_variable(f"y_{i}", VarType.BINARY)
+        add_bool_and(oracle_solver, f"x_{i}", f"y_{i}", f"z_{i}")
+    oracle_solver.add_constraint(
+        {f"z_{i}": 1.0 for i in range(n)}, "<=", 0.5 * n, name="avg_xy_cap",
+    )
+    obj = {}
+    for i in range(n):
+        obj[f"x_{i}"] = 1.0
+        obj[f"y_{i}"] = 1.0
+    oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        coeff_fn=lambda row: {"x": 1.0, "y": 1.0},
+    )
+    perf_tracker.record(
+        "avg_bilinear_constraint", packdb_time, build_time, result.solve_time_seconds,
+        n, 3 * n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.avg_rewrite
-@pytest.mark.correctness
 def test_avg_no_decide_var(packdb_cli):
-    """AVG(col) without decide variables should pass through to normal DuckDB."""
-    sql = """
+    """AVG(col) without decide variables must pass through to normal DuckDB.
+
+    This is a pass-through test — no decision problem means no oracle to
+    compare against. Kept as PackDB-only behavior verification.
+    """
+    rows, cols = packdb_cli.execute("""
         SELECT AVG(value) as avg_val FROM (
             VALUES (10), (5), (8), (3)
         ) t(value)
-    """
-    rows, cols = packdb_cli.execute(sql)
-    ci = {name: i for i, name in enumerate(cols)}
-    assert abs(rows[0][ci["avg_val"]] - 6.5) < 1e-6, f"Expected AVG=6.5, got {rows[0][ci['avg_val']]}"
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    assert abs(rows[0][ci["avg_val"]] - 6.5) < 1e-6, \
+        f"Expected AVG=6.5, got {rows[0][ci['avg_val']]}"

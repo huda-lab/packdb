@@ -12,8 +12,10 @@ import time
 
 import pytest
 
-from solver.types import VarType, ObjSense
+from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
+
+from ._oracle_helpers import add_ne_indicator
 
 
 @pytest.mark.cons_comparison
@@ -280,12 +282,9 @@ def test_sum_not_equal_with_when(packdb_cli):
 @pytest.mark.when
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_not_equal_with_when_binding(packdb_cli):
+def test_sum_not_equal_with_when_binding(packdb_cli, oracle_solver):
     """SUM(x) <> K WHEN cond — expression-level WHEN where NE is binding.
-
-    Without <> 2, the optimal picks a+b+c (value=23, active_sum=2).
-    With <> 2 enforced, the optimal shifts to active_sum=1 or 3 (value=18).
-    """
+    Oracle emits an NE indicator over the active-row sum only."""
     rows, cols = packdb_cli.execute("""
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true),
@@ -298,9 +297,31 @@ def test_sum_not_equal_with_when_binding(packdb_cli):
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
     """)
+
+    data = [("a", 10, True), ("b", 5, True), ("c", 8, False), ("d", 3, True)]
+    n = len(data)
+    oracle_solver.create_model("sum_not_equal_with_when_binding")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+    active_coeffs = {vnames[i]: 1.0 for i in range(n) if data[i][2]}
+    add_ne_indicator(oracle_solver, active_coeffs, 2.0, name="ne_active")
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(n)}, "<=", 3.0, name="sum_le_3",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: float(data[i][1]) for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
     ci = {name: i for i, name in enumerate(cols)}
-    active_sum = sum(1 for r in rows if r[ci["active"]] and r[ci["x"]] == 1)
-    assert active_sum != 2, f"SUM(x) among active rows must not be 2, got {active_sum}"
+    packdb_obj = sum(
+        int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
+    )
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
 
 
 @pytest.mark.cons_comparison
@@ -308,14 +329,9 @@ def test_sum_not_equal_with_when_binding(packdb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_not_equal_no_when_binding(packdb_cli):
+def test_sum_not_equal_no_when_binding(packdb_cli, oracle_solver):
     """SUM(x) <> K without WHEN where NE is the binding constraint.
-
-    Regression test: ensures aggregate NE without WHEN still works after
-    the global-z refactor.
-    Without <> 2, optimal picks a+c (value=18, sum=2).
-    With <> 2, optimal shifts to sum=1 (a only, value=10) or sum=3 (a+c+d, value=21).
-    """
+    Regression test: aggregate NE without WHEN after the global-z refactor."""
     rows, cols = packdb_cli.execute("""
         SELECT name, value, x FROM (
             VALUES ('a', 10),
@@ -329,6 +345,30 @@ def test_sum_not_equal_no_when_binding(packdb_cli):
             AND SUM(x * value) <= 21
         MAXIMIZE SUM(x * value)
     """)
+
+    data = [("a", 10), ("b", 5), ("c", 8), ("d", 3)]
+    n = len(data)
+    oracle_solver.create_model("sum_not_equal_no_when_binding")
+    vnames = [f"x_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.BINARY)
+    sum_coeffs = {vnames[i]: 1.0 for i in range(n)}
+    add_ne_indicator(oracle_solver, sum_coeffs, 2.0, name="ne_sum")
+    oracle_solver.add_constraint(sum_coeffs, "<=", 3.0, name="sum_le_3")
+    oracle_solver.add_constraint(
+        {vnames[i]: float(data[i][1]) for i in range(n)},
+        "<=", 21.0, name="value_le_21",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: float(data[i][1]) for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
     ci = {name: i for i, name in enumerate(cols)}
-    total = sum(r[ci["x"]] for r in rows)
-    assert total != 2, f"SUM(x) must not be 2, got {total}"
+    packdb_obj = sum(
+        int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
+    )
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )

@@ -40,12 +40,8 @@ from solver.types import VarType, ObjSense, SolverStatus
 class TestBilinearBooleanObjectives:
     """Bilinear objectives where at least one factor is Boolean (linearizable)."""
 
-    def test_bool_times_bool_objective(self, packdb_cli):
-        """MAXIMIZE SUM(b1 * b2) — AND-linearization.
-
-        Two binary variables with a cardinality constraint.
-        Optimal: both are 1 → product = 1.
-        """
+    def test_bool_times_bool_objective(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(b1 * b2) — AND-linearization, oracle-compared."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
@@ -56,19 +52,44 @@ class TestBilinearBooleanObjectives:
             SUCH THAT SUM(b1) <= 3 AND SUM(b2) <= 3
             MAXIMIZE SUM(b1 * b2)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        n = 3
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bool_times_bool_objective")
+        b1n = [f"b1_{i}" for i in range(n)]
+        b2n = [f"b2_{i}" for i in range(n)]
+        wn = [f"w_{i}" for i in range(n)]
+        for v in b1n + b2n:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in wn:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=1.0)
+        for i in range(n):
+            _mccormick_link(oracle_solver, wn[i], b1n[i], b2n[i], 1.0, f"mc_{i}")
+        oracle_solver.add_constraint({b: 1.0 for b in b1n}, "<=", 3.0, name="cap_b1")
+        oracle_solver.add_constraint({b: 1.0 for b in b2n}, "<=", 3.0, name="cap_b2")
+        oracle_solver.set_objective({w: 1.0 for w in wn}, ObjSense.MAXIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         b1_col = cols.index("b1")
         b2_col = cols.index("b2")
+        packdb_obj = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
+        assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "bool_times_bool_objective", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3 + 2,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        total = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
-        # All should be 1*1 = 1, total = 3
-        assert total == 3, f"Expected total product = 3, got {total}"
-
-    def test_bool_times_bool_constrained(self, packdb_cli):
-        """MAXIMIZE SUM(b1 * b2) with SUM(b1) <= 2.
-
-        Only 2 of 3 rows can have b1=1, so max total product = 2.
-        """
+    def test_bool_times_bool_constrained(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(b1 * b2) with SUM(b1) <= 2 — oracle-compared."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
@@ -79,19 +100,44 @@ class TestBilinearBooleanObjectives:
             SUCH THAT SUM(b1) <= 2 AND SUM(b2) <= 3
             MAXIMIZE SUM(b1 * b2)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        n = 3
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bool_times_bool_constrained")
+        b1n = [f"b1_{i}" for i in range(n)]
+        b2n = [f"b2_{i}" for i in range(n)]
+        wn = [f"w_{i}" for i in range(n)]
+        for v in b1n + b2n:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in wn:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=1.0)
+        for i in range(n):
+            _mccormick_link(oracle_solver, wn[i], b1n[i], b2n[i], 1.0, f"mc_{i}")
+        oracle_solver.add_constraint({b: 1.0 for b in b1n}, "<=", 2.0, name="cap_b1")
+        oracle_solver.add_constraint({b: 1.0 for b in b2n}, "<=", 3.0, name="cap_b2")
+        oracle_solver.set_objective({w: 1.0 for w in wn}, ObjSense.MAXIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         b1_col = cols.index("b1")
         b2_col = cols.index("b2")
+        packdb_obj = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
+        assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "bool_times_bool_constrained", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3 + 2,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        total = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
-        assert total == 2, f"Expected total product = 2, got {total}"
-
-    def test_bool_times_real_objective(self, packdb_cli):
-        """MAXIMIZE SUM(b * profit) — classic selection with profit maximization.
-
-        select IS BOOLEAN, profit is data column, alloc IS REAL.
-        Here: b * x where b IS BOOLEAN and x IS REAL with bounds.
-        """
+    def test_bool_times_real_objective(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(b * x) with SUM(b) <= 2, x ∈ [0,100] — McCormick oracle."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 10.0 AS profit UNION ALL
@@ -104,20 +150,48 @@ class TestBilinearBooleanObjectives:
             SUCH THAT x >= 0 AND x <= 100 AND SUM(b) <= 2
             MAXIMIZE SUM(b * x)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        n = 3
+        U = 100.0
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bool_times_real_objective")
+        bnames = [f"b_{i}" for i in range(n)]
+        xnames = [f"x_{i}" for i in range(n)]
+        wnames = [f"w_{i}" for i in range(n)]
+        for v in bnames:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in xnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for v in wnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for i in range(n):
+            _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
+        oracle_solver.add_constraint({b: 1.0 for b in bnames}, "<=", 2.0, name="cap")
+        oracle_solver.set_objective({w: 1.0 for w in wnames}, ObjSense.MAXIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         b_col = cols.index("b")
         x_col = cols.index("x")
+        packdb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result)
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "bool_times_real_objective", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3 + 1,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        # With SUM(b) <= 2, the two selected rows should have x = 100 (max)
-        for row in result:
-            b_val = int(row[b_col])
-            x_val = float(row[x_col])
-            if b_val == 1:
-                # b=1 → maximize b*x = x, so x should be at upper bound
-                assert x_val == 100.0, f"Expected x=100 when b=1, got {x_val}"
-
-    def test_bool_times_integer_objective(self, packdb_cli):
-        """MAXIMIZE SUM(b * n) where b IS BOOLEAN, n IS INTEGER."""
+    def test_bool_times_integer_objective(
+        self, packdb_cli, oracle_solver, perf_tracker,
+    ):
+        """MAXIMIZE SUM(b * n) where b IS BOOLEAN, n IS INTEGER ∈ [0,5]."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
@@ -128,28 +202,50 @@ class TestBilinearBooleanObjectives:
             SUCH THAT n >= 0 AND n <= 5 AND SUM(b) <= 2
             MAXIMIZE SUM(b * n)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        n_rows = 3
+        U = 5.0
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bool_times_integer_objective")
+        bnames = [f"b_{i}" for i in range(n_rows)]
+        nnames = [f"n_{i}" for i in range(n_rows)]
+        wnames = [f"w_{i}" for i in range(n_rows)]
+        for v in bnames:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in nnames:
+            oracle_solver.add_variable(v, VarType.INTEGER, lb=0.0, ub=U)
+        for v in wnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for i in range(n_rows):
+            _mccormick_link(oracle_solver, wnames[i], bnames[i], nnames[i], U, f"mc_{i}")
+        oracle_solver.add_constraint({b: 1.0 for b in bnames}, "<=", 2.0, name="cap")
+        oracle_solver.set_objective({w: 1.0 for w in wnames}, ObjSense.MAXIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         b_col = cols.index("b")
-        n_col = cols.index("n")
+        ncol = cols.index("n")
+        packdb_obj = sum(int(row[b_col]) * int(row[ncol]) for row in result)
+        assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "bool_times_integer_objective", packdb_time, build_time,
+            res.solve_time_seconds, n_rows, n_rows * 3, n_rows * 3 + 1,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        total = 0
-        for row in result:
-            b_val = int(row[b_col])
-            n_val = int(row[n_col])
-            total += b_val * n_val
-            if b_val == 1:
-                assert n_val == 5, f"Expected n=5 when b=1, got {n_val}"
-
-        # Best 2 of 3 rows: 2 * 5 = 10
-        assert total == 10, f"Expected total = 10, got {total}"
-
-    def test_bool_times_real_with_data_coefficient(self, packdb_cli):
-        """SUM(profit * b * x) — data coefficient scaling bilinear term.
-
-        Parses as (profit * b) * x (left-associative). The optimizer must
-        detect that b is the only decide var on the left side and x on
-        the right, identify b as Boolean, and apply McCormick.
-        """
+    def test_bool_times_real_with_data_coefficient(
+        self, packdb_cli, oracle_solver, perf_tracker,
+    ):
+        """SUM(profit * b * x) parses as (profit * b) * x; bilinear in (b, x)
+        with profit as a per-row coefficient. Oracle uses the same McCormick
+        aux w = b*x and puts profit on the objective linear coefficient."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 3.0 AS profit UNION ALL
@@ -161,16 +257,50 @@ class TestBilinearBooleanObjectives:
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(profit * b * x)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        data = [(1, 3.0), (2, 1.0)]
+        n = len(data)
+        U = 10.0
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bool_times_real_with_data_coefficient")
+        bnames = [f"b_{i}" for i in range(n)]
+        xnames = [f"x_{i}" for i in range(n)]
+        wnames = [f"w_{i}" for i in range(n)]
+        for v in bnames:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in xnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for v in wnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for i in range(n):
+            _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
+        oracle_solver.set_objective(
+            {wnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         b_col = cols.index("b")
         x_col = cols.index("x")
-
-        # Both rows should have b=1 and x=10
-        for row in result:
-            b_val = int(row[b_col])
-            x_val = float(row[x_col])
-            assert b_val == 1, f"Expected b=1, got {b_val}"
-            assert abs(x_val - 10.0) < 0.01, f"Expected x=10, got {x_val}"
+        id_col = cols.index("id")
+        profit_by_id = dict(data)
+        packdb_obj = sum(
+            profit_by_id[int(row[id_col])] * int(row[b_col]) * float(row[x_col])
+            for row in result
+        )
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "bool_times_real_with_data_coefficient", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
 # ===================================================================
@@ -182,10 +312,12 @@ class TestBilinearBooleanObjectives:
 class TestBilinearNonConvexObjectives:
     """Non-convex bilinear objectives (Real×Real, Int×Int) — Gurobi only."""
 
-    def test_real_times_real_objective(self, packdb_cli):
-        """MAXIMIZE SUM(x * y) with box constraints.
+    def test_real_times_real_objective(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(x * y) with x, y ∈ [0, 10] — non-convex QP.
 
-        Non-convex — Gurobi only. With x,y ∈ [0, 10], maximize x*y → x=y=10.
+        Oracle uses off-diagonal Q entry (x, y) = 1.0; Gurobi's NonConvex=2
+        is activated automatically. If PackDB's solver is HiGHS, the query
+        is rejected and we exit without running the oracle.
         """
         sql = """
             WITH data AS (SELECT 1 AS id)
@@ -196,19 +328,40 @@ class TestBilinearNonConvexObjectives:
             MAXIMIZE SUM(x * y)
         """
         try:
+            t0 = time.perf_counter()
             result, cols = packdb_cli.execute(sql)
-            x_val = float(result[0][cols.index("x")])
-            y_val = float(result[0][cols.index("y")])
-            # Maximize x*y with box constraints → corner: x=10, y=10
-            assert abs(x_val - 10.0) < 0.1, f"Expected x=10, got {x_val}"
-            assert abs(y_val - 10.0) < 0.1, f"Expected y=10, got {y_val}"
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
-            # HiGHS: non-convex rejection expected
             assert re.search(r"Non-convex|require Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
+            return
 
-    def test_int_times_int_objective(self, packdb_cli):
-        """MAXIMIZE SUM(x * y) where x, y IS INTEGER."""
+        t_build = time.perf_counter()
+        oracle_solver.create_model("real_times_real_objective")
+        oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.add_variable("y", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {("x", "y"): 1.0}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
+        x_val = float(result[0][cols.index("x")])
+        y_val = float(result[0][cols.index("y")])
+        packdb_obj = x_val * y_val
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "real_times_real_objective", packdb_time, build_time,
+            res.solve_time_seconds, 1, 2, 0,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_int_times_int_objective(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(x * y) with x, y INTEGER ∈ [0, 5] — non-convex MIQP."""
         sql = """
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y
@@ -218,17 +371,40 @@ class TestBilinearNonConvexObjectives:
             MAXIMIZE SUM(x * y)
         """
         try:
+            t0 = time.perf_counter()
             result, cols = packdb_cli.execute(sql)
-            x_val = int(result[0][cols.index("x")])
-            y_val = int(result[0][cols.index("y")])
-            assert x_val == 5, f"Expected x=5, got {x_val}"
-            assert y_val == 5, f"Expected y=5, got {y_val}"
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
             assert re.search(r"Non-convex|require Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
+            return
 
-    def test_int_times_real_objective(self, packdb_cli):
-        """MAXIMIZE SUM(n * x) where n IS INTEGER, x IS REAL."""
+        t_build = time.perf_counter()
+        oracle_solver.create_model("int_times_int_objective")
+        oracle_solver.add_variable("x", VarType.INTEGER, lb=0.0, ub=5.0)
+        oracle_solver.add_variable("y", VarType.INTEGER, lb=0.0, ub=5.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {("x", "y"): 1.0}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
+        x_val = int(result[0][cols.index("x")])
+        y_val = int(result[0][cols.index("y")])
+        packdb_obj = x_val * y_val
+        assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "int_times_int_objective", packdb_time, build_time,
+            res.solve_time_seconds, 1, 2, 0,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_int_times_real_objective(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(n * x) with n INTEGER ∈ [0,5], x REAL ∈ [0,10] — non-convex."""
         sql = """
             WITH data AS (SELECT 1 AS id)
             SELECT id, n, ROUND(x, 2) AS x
@@ -238,14 +414,37 @@ class TestBilinearNonConvexObjectives:
             MAXIMIZE SUM(n * x)
         """
         try:
+            t0 = time.perf_counter()
             result, cols = packdb_cli.execute(sql)
-            n_val = int(result[0][cols.index("n")])
-            x_val = float(result[0][cols.index("x")])
-            assert n_val == 5, f"Expected n=5, got {n_val}"
-            assert abs(x_val - 10.0) < 0.1, f"Expected x=10, got {x_val}"
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
             assert re.search(r"Non-convex|require Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
+            return
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("int_times_real_objective")
+        oracle_solver.add_variable("n", VarType.INTEGER, lb=0.0, ub=5.0)
+        oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {("n", "x"): 1.0}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
+        n_val = int(result[0][cols.index("n")])
+        x_val = float(result[0][cols.index("x")])
+        packdb_obj = n_val * x_val
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "int_times_real_objective", packdb_time, build_time,
+            res.solve_time_seconds, 1, 2, 0,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
 # ===================================================================
@@ -257,8 +456,11 @@ class TestBilinearNonConvexObjectives:
 class TestBilinearMixedObjectives:
     """Mixed linear + bilinear and bilinear + POWER objectives."""
 
-    def test_linear_plus_bilinear(self, packdb_cli):
-        """MAXIMIZE SUM(cost + b * x) — mix of linear and bilinear terms."""
+    def test_linear_plus_bilinear(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(cost + b * x) — mixed linear (cost is a data constant
+        per row) plus bilinear (b * x). The cost contribution is constant
+        w.r.t. the decision variables, so the oracle drops it and we compare
+        only the bilinear portion on both sides."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 5.0 AS cost UNION ALL
@@ -270,13 +472,43 @@ class TestBilinearMixedObjectives:
             SUCH THAT x >= 0 AND x <= 20
             MAXIMIZE SUM(cost + b * x)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
-        # All b should be 1, x should be at upper bound
-        for row in result:
-            b_val = int(row[cols.index("b")])
-            x_val = float(row[cols.index("x")])
-            assert b_val == 1, f"Expected b=1, got {b_val}"
-            assert abs(x_val - 20.0) < 0.01, f"Expected x=20, got {x_val}"
+        packdb_time = time.perf_counter() - t0
+
+        n = 2
+        U = 20.0
+        t_build = time.perf_counter()
+        oracle_solver.create_model("linear_plus_bilinear")
+        bnames = [f"b_{i}" for i in range(n)]
+        xnames = [f"x_{i}" for i in range(n)]
+        wnames = [f"w_{i}" for i in range(n)]
+        for v in bnames:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in xnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for v in wnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for i in range(n):
+            _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
+        oracle_solver.set_objective({w: 1.0 for w in wnames}, ObjSense.MAXIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
+        b_col = cols.index("b")
+        x_col = cols.index("x")
+        packdb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result)
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch (bilinear part): PackDB={packdb_obj}, "
+            f"Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "linear_plus_bilinear", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
 # ===================================================================
@@ -288,8 +520,12 @@ class TestBilinearMixedObjectives:
 class TestBilinearFeatureInteractions:
     """Bilinear with WHEN, PER, and other features."""
 
-    def test_bilinear_with_when(self, packdb_cli):
-        """MAXIMIZE SUM(b * x) WHEN category = 'A' — filtered bilinear."""
+    def test_bilinear_with_when(self, packdb_cli, oracle_solver, perf_tracker):
+        """MAXIMIZE SUM(b * x) WHEN category = 'A' — filtered bilinear.
+
+        Oracle includes only rows where category='A' in the objective.
+        Rows where category='B' still have their b/x variables in the
+        oracle model but are unconstrained by the objective."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 'A' AS category UNION ALL
@@ -302,20 +538,50 @@ class TestBilinearFeatureInteractions:
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(b * x) WHEN category = 'A'
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        data = [(1, "A"), (2, "B"), (3, "A")]
+        n = len(data)
+        U = 10.0
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bilinear_with_when")
+        bnames = [f"b_{i}" for i in range(n)]
+        xnames = [f"x_{i}" for i in range(n)]
+        wnames = [f"w_{i}" for i in range(n)]
+        for v in bnames:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in xnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for v in wnames:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=U)
+        for i in range(n):
+            _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
+        oracle_solver.set_objective(
+            {wnames[i]: 1.0 for i in range(n) if data[i][1] == "A"},
+            ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         cat_col = cols.index("category")
         b_col = cols.index("b")
         x_col = cols.index("x")
-
-        for row in result:
-            cat = row[cat_col]
-            b_val = int(row[b_col])
-            x_val = float(row[x_col])
-            if cat == 'A':
-                # WHEN filter means these rows contribute to objective
-                # Maximize b*x → b=1, x=10
-                assert b_val == 1, f"Expected b=1 for category A, got {b_val}"
-                assert abs(x_val - 10.0) < 0.01, f"Expected x=10 for A, got {x_val}"
+        packdb_obj = sum(
+            int(row[b_col]) * float(row[x_col])
+            for row in result if row[cat_col] == "A"
+        )
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "bilinear_with_when", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
 # ===================================================================
@@ -327,8 +593,11 @@ class TestBilinearFeatureInteractions:
 class TestBilinearConstraints:
     """Bilinear terms in SUCH THAT constraints."""
 
-    def test_bool_bilinear_constraint(self, packdb_cli):
-        """SUCH THAT SUM(b1 * b2) <= 1 — limits AND of booleans."""
+    def test_bool_bilinear_constraint(self, packdb_cli, oracle_solver, perf_tracker):
+        """SUCH THAT SUM(b1 * b2) <= 1 — bilinear constraint, linear objective.
+
+        Oracle encodes z_i = b1_i AND b2_i via McCormick and constrains
+        SUM(z_i) <= 1; objective is linear SUM(b1 + b2)."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
@@ -339,19 +608,46 @@ class TestBilinearConstraints:
             SUCH THAT SUM(b1 * b2) <= 1
             MAXIMIZE SUM(b1 + b2)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        n = 3
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bool_bilinear_constraint")
+        b1n = [f"b1_{i}" for i in range(n)]
+        b2n = [f"b2_{i}" for i in range(n)]
+        zn = [f"z_{i}" for i in range(n)]
+        for v in b1n + b2n:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in zn:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=1.0)
+        for i in range(n):
+            _mccormick_link(oracle_solver, zn[i], b1n[i], b2n[i], 1.0, f"mc_{i}")
+        oracle_solver.add_constraint({z: 1.0 for z in zn}, "<=", 1.0, name="cap_z")
+        oracle_solver.set_objective(
+            {**{b: 1.0 for b in b1n}, **{b: 1.0 for b in b2n}}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         b1_col = cols.index("b1")
         b2_col = cols.index("b2")
+        packdb_sum = sum(int(row[b1_col]) + int(row[b2_col]) for row in result)
+        assert abs(packdb_sum - res.objective_value) <= 1e-6, (
+            f"Objective mismatch: PackDB={packdb_sum}, Oracle={res.objective_value}"
+        )
 
-        # SUM(b1*b2) <= 1: at most 1 row has both b1=1 and b2=1
         total_product = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
-        assert total_product <= 1, f"Expected SUM(b1*b2) <= 1, got {total_product}"
+        assert total_product <= 1, f"Constraint violated: SUM(b1*b2)={total_product}"
 
-        # Maximize SUM(b1+b2) subject to SUM(b1*b2) <= 1
-        total_sum = sum(int(row[b1_col]) + int(row[b2_col]) for row in result)
-        # Optimal: 1 row has both=1 (contributes 2), other rows have only one or none
-        # Max with constraint: 1*(1+1) + 2*(1+0) or similar
-        assert total_sum >= 4, f"Expected SUM(b1+b2) >= 4, got {total_sum}"
+        perf_tracker.record(
+            "bool_bilinear_constraint", packdb_time, build_time,
+            res.solve_time_seconds, n, n * 3, n * 3 + 1,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
 # ===================================================================
@@ -412,8 +708,13 @@ class TestBilinearErrors:
 class TestBilinearBackwardCompat:
     """Ensure existing QP and linear objectives still work."""
 
-    def test_power_still_works(self, packdb_cli):
-        """POWER(x - target, 2) should still work as before."""
+    def test_power_still_works(self, packdb_cli, oracle_solver, perf_tracker):
+        """MINIMIZE SUM(POWER(x - target, 2)) — oracle mirrors the expanded QP.
+
+        Expansion of (x_i - t_i)^2 drops the constant t_i^2 term (PackDB's
+        reported objective does the same), leaving linear=-2*t_i*x_i and
+        quadratic=x_i^2. The packdb-side objective subtracts t_i^2 to match.
+        """
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 10.0 AS target UNION ALL
@@ -425,18 +726,46 @@ class TestBilinearBackwardCompat:
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 2))
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        data = [(1, 10.0), (2, 20.0)]
+        n = len(data)
+        t_build = time.perf_counter()
+        oracle_solver.create_model("power_still_works")
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        linear = {xnames[i]: -2.0 * data[i][1] for i in range(n)}
+        quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         x_col = cols.index("x")
         id_col = cols.index("id")
+        target_by_id = dict(data)
+        packdb_obj = sum(
+            (float(row[x_col]) - target_by_id[int(row[id_col])]) ** 2
+            - target_by_id[int(row[id_col])] ** 2
+            for row in result
+        )
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={res.objective_value:.4f}"
+        )
+        perf_tracker.record(
+            "power_still_works", packdb_time, build_time,
+            res.solve_time_seconds, n, n, 0,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 10.0, 2: 20.0}[rid]
-            assert abs(x_val - expected) < 0.01
-
-    def test_linear_objective_still_works(self, packdb_cli):
-        """Simple linear MAXIMIZE SUM(profit * x) should still work."""
+    def test_linear_objective_still_works(
+        self, packdb_cli, oracle_solver, perf_tracker,
+    ):
+        """Simple linear MAXIMIZE SUM(profit * x) — oracle-compared."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 10.0 AS profit UNION ALL
@@ -449,16 +778,47 @@ class TestBilinearBackwardCompat:
             SUCH THAT SUM(x) <= 2
             MAXIMIZE SUM(profit * x)
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        data = [(1, 10.0), (2, 5.0), (3, 8.0)]
+        n = len(data)
+        t_build = time.perf_counter()
+        oracle_solver.create_model("linear_objective_still_works")
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.BINARY)
+        oracle_solver.add_constraint(
+            {xn: 1.0 for xn in xnames}, "<=", 2.0, name="cap",
+        )
+        oracle_solver.set_objective(
+            {xnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         x_col = cols.index("x")
         profit_col = cols.index("profit")
+        packdb_obj = sum(
+            float(row[profit_col]) * int(row[x_col]) for row in result
+        )
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+        )
+        perf_tracker.record(
+            "linear_objective_still_works", packdb_time, build_time,
+            res.solve_time_seconds, n, n, 1,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        total = sum(float(row[profit_col]) * int(row[x_col]) for row in result)
-        # Best 2 of 3: ids 1 (10) and 3 (8) = 18
-        assert abs(total - 18.0) < 0.01, f"Expected 18, got {total}"
-
-    def test_identical_multiplication_still_qp(self, packdb_cli):
-        """(x - target) * (x - target) should still be treated as QP, not bilinear."""
+    def test_identical_multiplication_still_qp(
+        self, packdb_cli, oracle_solver, perf_tracker,
+    ):
+        """(x - target) * (x - target) should still be treated as QP, not bilinear.
+        Oracle mirrors the expanded form with diagonal Q entry x_i^2."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 7.0 AS target UNION ALL
@@ -470,15 +830,41 @@ class TestBilinearBackwardCompat:
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM((x - target) * (x - target))
         """
+        t0 = time.perf_counter()
         result, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+
+        data = [(1, 7.0), (2, 42.0)]
+        n = len(data)
+        t_build = time.perf_counter()
+        oracle_solver.create_model("identical_multiplication_still_qp")
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        linear = {xnames[i]: -2.0 * data[i][1] for i in range(n)}
+        quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
         x_col = cols.index("x")
         id_col = cols.index("id")
-
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 7.0, 2: 42.0}[rid]
-            assert abs(x_val - expected) < 0.01
+        target_by_id = dict(data)
+        packdb_obj = sum(
+            (float(row[x_col]) - target_by_id[int(row[id_col])]) ** 2
+            - target_by_id[int(row[id_col])] ** 2
+            for row in result
+        )
+        assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+            f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={res.objective_value:.4f}"
+        )
+        perf_tracker.record(
+            "identical_multiplication_still_qp", packdb_time, build_time,
+            res.solve_time_seconds, n, n, 0,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
 # ===================================================================

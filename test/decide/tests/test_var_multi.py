@@ -4,7 +4,12 @@ Multiple DECIDE variables allow modeling richer problems where rows have
 more than one decision per tuple.
 """
 
+import time
+
 import pytest
+
+from solver.types import VarType, ObjSense
+from comparison.compare import compare_solutions
 
 
 @pytest.mark.var_multi
@@ -12,9 +17,12 @@ import pytest
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-def test_two_variables_separate_constraints(packdb_cli):
+@pytest.mark.correctness
+def test_two_variables_separate_constraints(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """DECIDE x IS BOOLEAN, y IS INTEGER with independent constraints."""
-    result, _ = packdb_cli.execute("""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x, y
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN, y IS INTEGER
@@ -22,22 +30,122 @@ def test_two_variables_separate_constraints(packdb_cli):
             AND y <= 5
             AND SUM(y) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
-    assert len(result) > 0
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 50
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("var_multi_bool_int")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+        oracle_solver.add_variable(f"y_{i}", VarType.INTEGER, lb=0.0, ub=5.0)
+
+    oracle_solver.add_constraint(
+        {f"x_{i}": data[i][3] for i in range(n)},
+        "<=", 100.0, name="x_quantity_cap",
+    )
+    oracle_solver.add_constraint(
+        {f"y_{i}": 1.0 for i in range(n)},
+        "<=", 20.0, name="y_sum_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        coeff_fn=lambda row: {
+            "x": float(row[packdb_cols.index("l_extendedprice")]),
+            "y": 0.0,
+        },
+    )
+
+    perf_tracker.record(
+        "two_variables_separate_constraints", packdb_time, build_time,
+        result.solve_time_seconds, n, 2 * n, 3,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.var_multi
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-def test_two_boolean_variables(packdb_cli):
+@pytest.mark.correctness
+def test_two_boolean_variables(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """Two boolean variables with a cross-constraint."""
-    result, _ = packdb_cli.execute("""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x, y
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN, y IS BOOLEAN
         SUCH THAT SUM(x * l_quantity) <= 100
             AND SUM(y * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice + y * l_quantity)
-    """)
-    assert len(result) > 0
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 50
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("var_multi_bool_bool")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+        oracle_solver.add_variable(f"y_{i}", VarType.BINARY)
+
+    oracle_solver.add_constraint(
+        {f"x_{i}": data[i][3] for i in range(n)},
+        "<=", 100.0, name="x_quantity_cap",
+    )
+    oracle_solver.add_constraint(
+        {f"y_{i}": data[i][3] for i in range(n)},
+        "<=", 200.0, name="y_quantity_cap",
+    )
+    objective = {}
+    for i in range(n):
+        objective[f"x_{i}"] = data[i][2]
+        objective[f"y_{i}"] = data[i][3]
+    oracle_solver.set_objective(objective, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        coeff_fn=lambda row: {
+            "x": float(row[packdb_cols.index("l_extendedprice")]),
+            "y": float(row[packdb_cols.index("l_quantity")]),
+        },
+    )
+
+    perf_tracker.record(
+        "two_boolean_variables", packdb_time, build_time,
+        result.solve_time_seconds, n, 2 * n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status,
+        decide_vector=cmp.oracle_vector,
+    )

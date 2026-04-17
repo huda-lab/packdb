@@ -818,22 +818,15 @@ def test_count_integer_per(packdb_cli, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_qp_objective_per_constraint(packdb_cli, perf_tracker):
+def test_qp_objective_per_constraint(
+    packdb_cli, oracle_solver, perf_tracker,
+):
     """QP objective (MINIMIZE SUM(POWER(x - target, 2))) with a linear PER
     constraint (SUM(x) >= 5 PER grp).
 
-    Uses an analytical oracle rather than `oracle_solver` because the
-    `OracleSolver` interface only supports linear objectives (no QP). This
-    matches the pattern in `test_quadratic.py`.
-
-    Both the QP objective path and the PER constraint path must fire together.
-    Targets are 0.5 per row, so the unconstrained QP optimum (x=0.5) gives
-    SUM(x)=1 per group, violating SUM(x)>=5. The PER constraint forces
-    x to 2.5 per row (by symmetry), making obj=4*(2.5-0.5)^2=16.
-
-    If the PER path is silently dropped: x_i=0.5, obj=0 (fails the ~16 check).
-    If the QP path is silently dropped: solver finds any feasible point, which
-    would not minimise the sum of squared deviations to 16.
+    Oracle-compared via ``set_quadratic_objective`` so both the QP path and
+    the PER path are exercised together; a silently-dropped PER constraint
+    would produce obj≈0 instead of matching the oracle's ~16.
     """
     sql = """
         WITH data AS (
@@ -852,32 +845,50 @@ def test_qp_objective_per_constraint(packdb_cli, perf_tracker):
     packdb_result, packdb_cols = packdb_cli.execute(sql)
     packdb_time = time.perf_counter() - t0
 
-    # Analytical oracle:
-    #   Each group: minimize (x_1-0.5)^2 + (x_2-0.5)^2 s.t. x_1+x_2 >= 5, x_i >= 0
-    #   Lagrangian: by symmetry x_1=x_2=2.5, group_obj = 2*(2.5-0.5)^2 = 8
-    #   Total: 2 groups × 8 = 16
-    EXPECTED_OBJ = 16.0
-    EXPECTED_X = 2.5  # each row
+    # Oracle: mirror the SQL with row-indexed continuous vars, a PER-group
+    # SUM(x) >= 5 constraint, and the expanded POWER quadratic. Expansion of
+    # (x_i - t_i)^2 drops the constant t_i^2 term (PackDB's reported
+    # objective does the same), leaving linear = -2*t_i * x_i and
+    # quadratic = x_i^2.
+    data = [
+        (1, "A", 0.5), (2, "A", 0.5), (3, "B", 0.5), (4, "B", 0.5),
+    ]
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_objective_per_constraint")
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
 
-    ci = {name: j for j, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
-        (float(row[ci["x"]]) - float(row[ci["target"]])) ** 2
-        for row in packdb_result
-    )
-    assert abs(packdb_obj - EXPECTED_OBJ) <= 1e-4, (
-        f"QP+PER objective mismatch: got {packdb_obj:.6f}, expected ~{EXPECTED_OBJ} "
-        f"(if ~0: PER constraint was silently dropped; targets were not pushed to 2.5)"
-    )
-
-    # Sanity: each x_i ≈ 2.5 (the per-group optimum under SUM(x)>=5)
-    for row in packdb_result:
-        x_val = float(row[ci["x"]])
-        assert abs(x_val - EXPECTED_X) <= 1e-4, (
-            f"id={row[ci['id']]} x={x_val:.6f} should be ~{EXPECTED_X} "
-            f"(PER-constrained QP optimum)"
+    groups: dict[str, list[int]] = {}
+    for i, row in enumerate(data):
+        groups.setdefault(row[1], []).append(i)
+    for g, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {xnames[i]: 1.0 for i in idxs}, ">=", 5.0, name=f"per_{g}",
         )
 
-    # Sanity: per-group SUM(x) >= 5
+    linear = {xnames[i]: -2.0 * float(data[i][2]) for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    ci = {name: j for j, name in enumerate(packdb_cols)}
+    # Packdb-side objective: strip the constant t_i^2 term to match the
+    # oracle's constant-free formulation.
+    packdb_obj = sum(
+        (float(row[ci["x"]]) - float(row[ci["target"]])) ** 2
+        - float(row[ci["target"]]) ** 2
+        for row in packdb_result
+    )
+    assert abs(packdb_obj - result.objective_value) <= 1e-3, (
+        f"QP+PER objective mismatch: PackDB={packdb_obj:.6f}, "
+        f"Oracle={result.objective_value:.6f}"
+    )
+
+    # Invariant: PER constraint must hold per group.
     by_grp: dict[str, float] = {}
     for row in packdb_result:
         g = str(row[ci["grp"]])
@@ -888,8 +899,8 @@ def test_qp_objective_per_constraint(packdb_cli, perf_tracker):
         )
 
     perf_tracker.record(
-        "qp_objective_per", packdb_time, 0.0, 0.0,
-        4, 4, 2 + 4 * 2,
-        EXPECTED_OBJ, "analytical",
+        "qp_objective_per", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2 + n,
+        result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )

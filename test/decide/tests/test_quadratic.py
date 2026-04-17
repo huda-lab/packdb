@@ -1,5 +1,11 @@
 """Tests for quadratic programming (QP) objectives.
 
+Every correctness test formulates the same QP independently via
+``oracle_solver.set_quadratic_objective(linear, quadratic, sense)`` and
+compares objective values. PackDB's reported objective drops the constant
+``t^2`` term from ``POWER(x - t, 2)`` expansion, so the oracle also omits
+that constant and the test's packdb-side evaluator strips it on the fly.
+
 Covers:
   - POWER(linear_expr, 2) syntax
   - ** operator form
@@ -7,9 +13,9 @@ Covers:
   - MINIMIZE convex QP (standard)
   - MAXIMIZE concave QP (negated quadratic, Case A)
   - MAXIMIZE convex QP (non-convex, Case B — Gurobi only)
-  - Mixed linear + quadratic (linear constraints with quadratic objective)
-  - REAL variable QP (continuous)
-  - Error rejection: POWER with exponent != 2, product of different vars
+  - Mixed linear + quadratic objective
+  - REAL/INTEGER variable QP (continuous and MIQP)
+  - Error rejection cases
 """
 
 import re
@@ -18,558 +24,890 @@ import time
 import pytest
 
 from packdb_cli import PackDBCliError
+from solver.types import ObjSense, SolverStatus, VarType
 
 
-# ===================================================================
-# Basic QP correctness tests (using inline tables via packdb_cli)
-# ===================================================================
+# ---------------------------------------------------------------------------
+# Common plumbing
+# ---------------------------------------------------------------------------
 
+def _solve_and_compare(
+    oracle_solver, packdb_rows, packdb_cols, packdb_obj_fn,
+):
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL, (
+        f"Oracle failed to solve: status={result.status}"
+    )
+    packdb_obj = packdb_obj_fn(packdb_rows, packdb_cols)
+    diff = abs(packdb_obj - result.objective_value)
+    assert diff <= 1e-3, (
+        f"QP objective mismatch: PackDB={packdb_obj:.6f}, "
+        f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
+    )
+    return result
+
+
+def _qp_target_obj(packdb_rows, packdb_cols, *, x_col="x", target_col="target",
+                   scale=1.0, mask_fn=None, linear_coeff=None):
+    """PackDB-side evaluator for SUM(scale * POWER(x - target, 2)
+       (+ linear_coeff * x)), with the t^2 constant stripped to match
+       the oracle's ``set_quadratic_objective`` (no constant offset)."""
+    xi = packdb_cols.index(x_col)
+    ti = packdb_cols.index(target_col)
+    total = 0.0
+    for row in packdb_rows:
+        if mask_fn is not None and not mask_fn(row):
+            continue
+        x = float(row[xi]); t = float(row[ti])
+        total += scale * ((x - t) ** 2 - t ** 2)
+        if linear_coeff is not None:
+            total += linear_coeff(row) * x
+    return total
+
+
+def _qp_simple_obj(packdb_rows, packdb_cols, *, x_col="x", scale=1.0):
+    """PackDB-side evaluator for SUM(scale * POWER(x, 2)) (no target)."""
+    xi = packdb_cols.index(x_col)
+    return sum(scale * float(row[xi]) ** 2 for row in packdb_rows)
+
+
+# ===========================================================================
+# Basic MINIMIZE QP
+# ===========================================================================
 
 @pytest.mark.obj_minimize
 @pytest.mark.quadratic
 @pytest.mark.correctness
 class TestQuadraticBasic:
-    """Basic QP smoke tests using small inline data."""
+    """Inline-data QP smoke tests, each oracle-compared."""
 
-    def test_power_syntax_unconstrained(self, packdb_cli):
-        """MINIMIZE SUM(POWER(x - target, 2)) with box constraints.
-
-        Optimal: x_i = target_i (closest point in [0, 100] to target).
+    def test_power_syntax_unconstrained(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """MINIMIZE SUM(POWER(x - target, 2)) with bounds [0, 100]."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0
         """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0 UNION ALL
-                SELECT 3, 30.0
-            )
-            SELECT id, ROUND(x, 4) AS x
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x
             FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 10.0, 2: 20.0, 3: 30.0}[rid]
-            assert abs(x_val - expected) < 0.01, \
-                f"Row {rid}: expected x={expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_unconstrained")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        linear = {xnames[i]: -2.0 * data[i][1] for i in range(n)}
+        quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_power_unconstrained", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_starstar_operator(self, packdb_cli):
-        """** operator should behave identically to POWER."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 15.0 AS target UNION ALL
-                SELECT 2, 25.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_starstar_operator(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """** operator behaves identically to POWER."""
+        data_sql = (
+            "SELECT 1 AS id, 15.0 AS target UNION ALL SELECT 2, 25.0"
+        )
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM((x - target) ** 2)
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 15.0, 2: 25.0}[rid]
-            assert abs(x_val - expected) < 0.01
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_starstar")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        oracle_solver.set_quadratic_objective(
+            {xnames[i]: -2.0 * data[i][1] for i in range(n)},
+            {(xnames[i], xnames[i]): 1.0 for i in range(n)},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_starstar", packdb_time, build_time, result.solve_time_seconds,
+            n, n, 0, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_multiplication_form(self, packdb_cli):
-        """(expr)*(expr) form should behave identically to POWER."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 7.0 AS target UNION ALL
-                SELECT 2, 42.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_multiplication_form(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """(expr)*(expr) == POWER."""
+        data_sql = (
+            "SELECT 1 AS id, 7.0 AS target UNION ALL SELECT 2, 42.0"
+        )
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM((x - target) * (x - target))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 7.0, 2: 42.0}[rid]
-            assert abs(x_val - expected) < 0.01
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_multform")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        oracle_solver.set_quadratic_objective(
+            {xnames[i]: -2.0 * data[i][1] for i in range(n)},
+            {(xnames[i], xnames[i]): 1.0 for i in range(n)},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_multform", packdb_time, build_time, result.solve_time_seconds,
+            n, n, 0, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_qp_with_binding_constraint(self, packdb_cli):
-        """QP where box constraints clip the solution.
-
-        target = [5, 50], bounds = [10, 40]
-        Expected: x = [10, 40] (clipped to bounds).
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 5.0 AS target UNION ALL
-                SELECT 2, 50.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_qp_with_binding_constraint(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Box constraints bind: target=[5, 50] with bounds [10, 40]."""
+        data_sql = "SELECT 1 AS id, 5.0 AS target UNION ALL SELECT 2, 50.0"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 10 AND x <= 40
             MINIMIZE SUM(POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 10.0, 2: 40.0}[rid]
-            assert abs(x_val - expected) < 0.01
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_binding")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=10.0, ub=40.0)
+        oracle_solver.set_quadratic_objective(
+            {xnames[i]: -2.0 * data[i][1] for i in range(n)},
+            {(xnames[i], xnames[i]): 1.0 for i in range(n)},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_binding", packdb_time, build_time, result.solve_time_seconds,
+            n, n, 2, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_qp_with_aggregate_constraint(self, packdb_cli):
-        """QP with an aggregate constraint: SUM(x) = 60.
-
-        targets = [10, 20, 30]. Unconstrained optimum sums to 60,
-        so the constraint is exactly satisfied at the unconstrained optimum.
+    def test_qp_with_aggregate_constraint(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """SUM(x) = 60 matches unconstrained optimum — constraint not binding."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0
         """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0 UNION ALL
-                SELECT 3, 30.0
-            )
-            SELECT ROUND(SUM(x), 2) AS total_x
-            FROM data
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 60
             MINIMIZE SUM(POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        total = float(result[0][cols.index("total_x")])
-        assert abs(total - 60.0) < 0.1
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-    def test_qp_simple_squared_variable(self, packdb_cli):
-        """MINIMIZE SUM(POWER(x, 2)) — simplest QP: x should be 0 everywhere."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_aggregate")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        oracle_solver.add_constraint(
+            {xn: 1.0 for xn in xnames}, "=", 60.0, name="sum_fix",
+        )
+        oracle_solver.set_quadratic_objective(
+            {xnames[i]: -2.0 * data[i][1] for i in range(n)},
+            {(xnames[i], xnames[i]): 1.0 for i in range(n)},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_aggregate_constraint", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 1,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_qp_simple_squared_variable(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """MINIMIZE SUM(POWER(x, 2)) — pure squared variable, optimum at 0."""
+        data_sql = "SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        for row in result:
-            x_val = float(row[x_col])
-            assert abs(x_val) < 0.01, f"Expected x=0, got x={x_val}"
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT) FROM ({data_sql})"
+        ).fetchall()
 
-    def test_qp_with_when(self, packdb_cli):
-        """QP with WHEN filter — only matching rows contribute to objective."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target, 'A' AS grp UNION ALL
-                SELECT 2, 20.0, 'B' UNION ALL
-                SELECT 3, 30.0, 'A' UNION ALL
-                SELECT 4, 40.0, 'B'
-            )
-            SELECT id, target, grp, ROUND(x, 4) AS x
-            FROM data
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_squared")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {(xn, xn): 1.0 for xn in xnames}, ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_simple_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_squared_simple", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_qp_with_when(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """QP with WHEN — only grp='A' rows contribute to the objective."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target, 'A' AS grp UNION ALL
+            SELECT 2, 20.0, 'B' UNION ALL
+            SELECT 3, 30.0, 'A' UNION ALL
+            SELECT 4, 40.0, 'B'
+        """
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, grp, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 2)) WHEN grp = 'A'
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
-        grp_col = cols.index("grp")
-        target_col = cols.index("target")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(grp AS VARCHAR) FROM ({data_sql})"
+        ).fetchall()
 
-        # Rows matching WHEN (grp='A') should track their target
-        for row in result:
-            grp = str(row[grp_col])
-            x_val = float(row[x_col])
-            target = float(row[target_col])
-            if grp == 'A':
-                assert abs(x_val - target) < 0.01, \
-                    f"Row {row[id_col]} (grp=A): expected x≈{target}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_when")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        # Only grp='A' rows appear in linear/quadratic; grp='B' rows are free.
+        linear, quadratic = {}, {}
+        for i, row in enumerate(data):
+            if row[2] == "A":
+                linear[xnames[i]] = -2.0 * row[1]
+                quadratic[(xnames[i], xnames[i])] = 1.0
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+        grp_idx = cols.index("grp")
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(
+                rs, cs, mask_fn=lambda r: r[grp_idx] == "A",
+            ),
+        )
+        perf_tracker.record(
+            "qp_with_when", packdb_time, build_time, result.solve_time_seconds,
+            n, n, 0, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_qp_multiple_variables(self, packdb_cli):
-        """QP with two REAL decision variables — both in constraints, one in QP objective.
-
-        Tests that multiple variables coexist correctly when the QP objective
-        references only one variable. x should track targets; y is constrained
-        independently via a per-row upper bound.
+    def test_qp_multiple_variables(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Two REAL vars; only x appears in the QP objective. y is unconstrained by Q."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target, 50.0 AS cap UNION ALL
+            SELECT 2, 20.0, 50.0 UNION ALL
+            SELECT 3, 30.0, 50.0
         """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target, 50.0 AS cap UNION ALL
-                SELECT 2, 20.0, 50.0 UNION ALL
-                SELECT 3, 30.0, 50.0
-            )
-            SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x, ROUND(y, 4) AS y
             FROM data
             DECIDE x IS REAL, y IS REAL
             SUCH THAT x >= 0 AND x <= 100
                 AND y >= 0 AND y <= cap
             MINIMIZE SUM(POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(cap AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        expected_x = {1: 10.0, 2: 20.0, 3: 30.0}
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            assert abs(x_val - expected_x[rid]) < 0.01, \
-                f"Row {rid}: expected x={expected_x[rid]}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_multivar")
+        n = len(data)
+        for i, row in enumerate(data):
+            oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0)
+            oracle_solver.add_variable(f"y_{i}", VarType.CONTINUOUS, lb=0.0, ub=row[2])
+        linear = {f"x_{i}": -2.0 * data[i][1] for i in range(n)}
+        quadratic = {(f"x_{i}", f"x_{i}"): 1.0 for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_multivar", packdb_time, build_time, result.solve_time_seconds,
+            n, 2 * n, 0, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
-# ===================================================================
-# Error tests
-# ===================================================================
-
-
-# ===================================================================
-# MAXIMIZE quadratic tests (Case A: concave, Case B: convex non-convex)
-# ===================================================================
-
+# ===========================================================================
+# MAXIMIZE quadratic
+# ===========================================================================
 
 @pytest.mark.quadratic
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 class TestQuadraticMaximize:
-    """Tests for MAXIMIZE with quadratic objectives."""
+    """MAXIMIZE with quadratic: Case A (negated, concave) and Case B (non-convex)."""
 
-    def test_maximize_negated_power_case_a(self, packdb_cli):
-        """Case A: MAXIMIZE SUM(-POWER(x - target, 2)) — concave quadratic.
+    def _solve_case_a(self, oracle_solver, data, *, scale=-1.0, linear_target_factor=2.0,
+                      bounds=(0.0, 100.0), var_type=VarType.CONTINUOUS,
+                      extra_constraint=None):
+        """Shared setup for Case A: MAXIMIZE scale * SUM(POWER(x - t, 2))
+        expansions. ``scale`` is -1 for the standard concave form, -0.5 and
+        -2 for the fractional-coefficient variants."""
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, var_type, lb=bounds[0], ub=bounds[1])
+        if extra_constraint is not None:
+            extra_constraint(oracle_solver, xnames)
+        linear = {xnames[i]: -scale * linear_target_factor * data[i][1] for i in range(n)}
+        quadratic = {(xnames[i], xnames[i]): scale for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MAXIMIZE)
+        return xnames
 
-        Equivalent to MINIMIZE SUM(POWER(x - target, 2)).
-        Optimal: x_i = target_i (minimizes squared deviation = maximizes negative).
-        Both Gurobi and HiGHS support this (convex after internal sense+Hessian flip).
+    def test_maximize_negated_power_case_a(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0
         """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0 UNION ALL
-                SELECT 3, 30.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 10.0, 2: 20.0, 3: 30.0}[rid]
-            assert abs(x_val - expected) < 0.01, \
-                f"Row {rid}: expected x={expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_case_a")
+        self._solve_case_a(oracle_solver, data)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_case_a", packdb_time, build_time, result.solve_time_seconds,
+            len(data), len(data), 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_maximize_negated_power_with_binding_constraint(self, packdb_cli):
-        """Case A with binding constraints: targets outside bounds get clipped.
-
-        target = [5, 50], bounds = [10, 40]
-        Expected: x = [10, 40] (same as MINIMIZE SUM(POWER(x - target, 2))).
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 5.0 AS target UNION ALL
-                SELECT 2, 50.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_maximize_negated_power_with_binding_constraint(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        data_sql = "SELECT 1 AS id, 5.0 AS target UNION ALL SELECT 2, 50.0"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 10 AND x <= 40
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 10.0, 2: 40.0}[rid]
-            assert abs(x_val - expected) < 0.01, \
-                f"Row {rid}: expected x={expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_case_a_binding")
+        self._solve_case_a(oracle_solver, data, bounds=(10.0, 40.0))
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_case_a_binding", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 2,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_maximize_negated_starstar_syntax(self, packdb_cli):
-        """Case A with ** syntax: MAXIMIZE SUM(-(x - target) ** 2)."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 15.0 AS target UNION ALL
-                SELECT 2, 25.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_maximize_negated_starstar_syntax(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        data_sql = "SELECT 1 AS id, 15.0 AS target UNION ALL SELECT 2, 25.0"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(-((x - target) ** 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 15.0, 2: 25.0}[rid]
-            assert abs(x_val - expected) < 0.01
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_starstar")
+        self._solve_case_a(oracle_solver, data)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_starstar", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_maximize_convex_power_case_b(self, packdb_cli):
-        """Case B: MAXIMIZE SUM(POWER(x, 2)) — non-convex (Gurobi only).
-
-        With bounds [0, 10], the maximum of x² is at x=10 (boundary).
-        Succeeds on Gurobi (NonConvex=2), errors on HiGHS.
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_maximize_convex_power_case_b(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Case B (non-convex, Gurobi-only): MAXIMIZE SUM(POWER(x, 2))."""
+        data_sql = "SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x, 2))
         """
         try:
-            result, cols = packdb_cli.execute(sql)
-            # Gurobi path: should push x to boundary (x=10 maximizes x²)
-            x_col = cols.index("x")
-            for row in result:
-                x_val = float(row[x_col])
-                assert abs(x_val - 10.0) < 0.01, \
-                    f"Expected x=10 (boundary), got x={x_val}"
+            t0 = time.perf_counter()
+            rows, cols = packdb_cli.execute(sql)
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
-            # HiGHS path: non-convex quadratic rejected
-            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
+            return
 
-    def test_maximize_convex_power_integer_case_b(self, packdb_cli):
-        """Case B with INTEGER variables: MAXIMIZE SUM(POWER(x - 5, 2)).
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT) FROM ({data_sql})"
+        ).fetchall()
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_case_b")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {(xn, xn): 1.0 for xn in xnames}, ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_simple_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "qp_max_case_b", packdb_time, build_time, result.solve_time_seconds,
+            n, n, 0, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-        With bounds [0, 10], maximum distance from 5 is at x=0 or x=10.
-        Both give (x-5)² = 25.
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id UNION ALL SELECT 2
-            )
-            SELECT id, x
-            FROM data
+    def test_maximize_convex_power_integer_case_b(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Non-convex MIQP: MAXIMIZE SUM(POWER(x - 5, 2)) with INTEGER x."""
+        data_sql = "SELECT 1 AS id UNION ALL SELECT 2"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, x FROM data
             DECIDE x IS INTEGER
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x - 5, 2))
         """
         try:
-            result, cols = packdb_cli.execute(sql)
-            # Gurobi path: x should be 0 or 10 (both maximize distance from 5)
-            x_col = cols.index("x")
-            for row in result:
-                x_val = int(row[x_col])
-                assert x_val in (0, 10), \
-                    f"Expected x=0 or x=10, got x={x_val}"
+            t0 = time.perf_counter()
+            rows, cols = packdb_cli.execute(sql)
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
-            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
+            return
 
-    def test_maximize_negated_coefficient_not_one(self, packdb_cli):
-        """(-2) * POWER(x - target, 2) must preserve the factor of 2.
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT) FROM ({data_sql})"
+        ).fetchall()
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_case_b_int")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.INTEGER, lb=0.0, ub=10.0)
+        # POWER(x - 5, 2) = x^2 - 10 x + 25; drop the +25 constant.
+        oracle_solver.set_quadratic_objective(
+            {xn: -10.0 for xn in xnames},
+            {(xn, xn): 1.0 for xn in xnames},
+            ObjSense.MAXIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
 
-        MAXIMIZE SUM((-2) * POWER(x - target, 2)) is concave (Case A).
-        Optimal: x_i = target_i (same optimum as coefficient -1, but
-        the objective value should be 0, not some wrong number).
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0 UNION ALL
-                SELECT 3, 30.0
+        def packdb_obj(rs, cs):
+            xi = cs.index("x")
+            return sum(
+                (float(row[xi]) - 5.0) ** 2 - 25.0 for row in rs
             )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+
+        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        perf_tracker.record(
+            "qp_max_case_b_int", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_maximize_negated_coefficient_not_one(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Coefficient -2 on POWER(x - t, 2) must be preserved."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0
+        """
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM((-2) * POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 10.0, 2: 20.0, 3: 30.0}[rid]
-            assert abs(x_val - expected) < 0.01, \
-                f"Row {rid}: expected x={expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_coef_neg2")
+        self._solve_case_a(oracle_solver, data, scale=-2.0, linear_target_factor=2.0)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-2.0),
+        )
+        perf_tracker.record(
+            "qp_max_coef_neg2", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_maximize_half_negated_coefficient(self, packdb_cli):
-        """(-0.5) * POWER(x - target, 2) — fractional negative coefficient.
-
-        Ensures magnitude 0.5 is preserved, not collapsed to -1.
-        With binding constraint SUM(x) = 90 (targets sum to 60),
-        excess of 30 is distributed equally (+10 each) by QP optimality.
+    def test_maximize_half_negated_coefficient(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Fractional coefficient -0.5 with binding constraint SUM(x)=90."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0
         """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0 UNION ALL
-                SELECT 3, 30.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 90
             MAXIMIZE SUM((-0.5) * POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        # Excess 30 distributed equally: each x = target + 10
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 20.0, 2: 30.0, 3: 40.0}[rid]
-            assert abs(x_val - expected) < 0.5, \
-                f"Row {rid}: expected x≈{expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_coef_halfneg")
 
-    def test_maximize_power_times_neg_one_rhs(self, packdb_cli):
-        """POWER(x - target, 2) * (-1) — constant on right side of multiply.
+        def add_sum_eq_90(oracle, xns):
+            oracle.add_constraint({xn: 1.0 for xn in xns}, "=", 90.0, name="sum_90")
 
-        Same as -POWER(...) but tests the right-hand constant path.
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 15.0 AS target UNION ALL
-                SELECT 2, 25.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+        self._solve_case_a(
+            oracle_solver, data, scale=-0.5, linear_target_factor=2.0,
+            extra_constraint=add_sum_eq_90,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-0.5),
+        )
+        perf_tracker.record(
+            "qp_max_coef_halfneg", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 1,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_maximize_power_times_neg_one_rhs(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """POWER(x - t, 2) * (-1) — negation on RHS of multiply."""
+        data_sql = "SELECT 1 AS id, 15.0 AS target UNION ALL SELECT 2, 25.0"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(POWER(x - target, 2) * (-1))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 15.0, 2: 25.0}[rid]
-            assert abs(x_val - expected) < 0.01, \
-                f"Row {rid}: expected x={expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_neg_rhs")
+        self._solve_case_a(oracle_solver, data)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_neg_rhs", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_maximize_negated_multiplication_form(self, packdb_cli):
-        """MAXIMIZE SUM(-((x-t) * (x-t))) — negated identical-child multiply."""
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 12.0 AS target UNION ALL
-                SELECT 2, 35.0
-            )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+    def test_maximize_negated_multiplication_form(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """-((x-t) * (x-t)) — negated identical-child multiply."""
+        data_sql = "SELECT 1 AS id, 12.0 AS target UNION ALL SELECT 2, 35.0"
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(-((x - target) * (x - target)))
         """
-        result, cols = packdb_cli.execute(sql)
-        x_col = cols.index("x")
-        id_col = cols.index("id")
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
 
-        for row in result:
-            rid = int(row[id_col])
-            x_val = float(row[x_col])
-            expected = {1: 12.0, 2: 35.0}[rid]
-            assert abs(x_val - expected) < 0.01, \
-                f"Row {rid}: expected x={expected}, got x={x_val}"
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_neg_mult")
+        self._solve_case_a(oracle_solver, data)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_neg_mult", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
-    def test_maximize_negated_power_integer_case_a(self, packdb_cli):
-        """Case A with INTEGER variables (MIQP): MAXIMIZE SUM(-POWER(x - target, 2)).
-
-        Targets are integers, so optimal x_i = target_i exactly.
-        Succeeds on Gurobi (MIQP support), errors on HiGHS.
+    def test_maximize_negated_power_integer_case_a(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Case A with INTEGER (MIQP) — Gurobi required, HiGHS rejects."""
+        data_sql = """
+            SELECT 1 AS id, 3 AS target UNION ALL
+            SELECT 2, 7 UNION ALL
+            SELECT 3, 15
         """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 3 AS target UNION ALL
-                SELECT 2, 7 UNION ALL
-                SELECT 3, 15
-            )
-            SELECT id, x
-            FROM data
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, x FROM data
             DECIDE x IS INTEGER
             SUCH THAT x >= 0 AND x <= 20
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
         try:
-            result, cols = packdb_cli.execute(sql)
-            # Gurobi path: optimal x_i = target_i
-            x_col = cols.index("x")
-            id_col = cols.index("id")
-
-            for row in result:
-                rid = int(row[id_col])
-                x_val = int(row[x_col])
-                expected = {1: 3, 2: 7, 3: 15}[rid]
-                assert x_val == expected, \
-                    f"Row {rid}: expected x={expected}, got x={x_val}"
+            t0 = time.perf_counter()
+            rows, cols = packdb_cli.execute(sql)
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
-            # HiGHS path: MIQP not supported
-            assert re.search(r"MIQP.*require Gurobi|integer.*require Gurobi", e.message, re.IGNORECASE), \
-                f"Unexpected error: {e.message}"
-
-    def test_maximize_negated_power_with_sum_constraint(self, packdb_cli):
-        """Case A with aggregate constraint: MAXIMIZE SUM(-POWER(x - target, 2)) + SUM(x) = K.
-
-        targets = [10, 20, 30], SUM(x) = 60 (sum equals unconstrained optimum).
-        Constraint is not binding — solution should match targets exactly.
-        """
-        sql = """
-            WITH data AS (
-                SELECT 1 AS id, 10.0 AS target UNION ALL
-                SELECT 2, 20.0 UNION ALL
-                SELECT 3, 30.0
+            assert re.search(
+                r"MIQP.*require Gurobi|integer.*require Gurobi",
+                e.message, re.IGNORECASE,
             )
-            SELECT ROUND(SUM(x), 2) AS total_x
-            FROM data
+            return
+
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_int_case_a")
+        self._solve_case_a(
+            oracle_solver, data,
+            bounds=(0.0, 20.0), var_type=VarType.INTEGER,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_int_case_a", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_maximize_negated_power_with_sum_constraint(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """Case A with aggregate constraint SUM(x)=60 (not binding)."""
+        data_sql = """
+            SELECT 1 AS id, 10.0 AS target UNION ALL
+            SELECT 2, 20.0 UNION ALL
+            SELECT 3, 30.0
+        """
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 60
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
-        result, cols = packdb_cli.execute(sql)
-        total = float(result[0][cols.index("total_x")])
-        assert abs(total - 60.0) < 0.1
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_max_case_a_sum")
+
+        def sum60(oracle, xns):
+            oracle.add_constraint({xn: 1.0 for xn in xns}, "=", 60.0, name="sum60")
+
+        self._solve_case_a(oracle_solver, data, extra_constraint=sum60)
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
+        )
+        perf_tracker.record(
+            "qp_max_case_a_sum", packdb_time, build_time,
+            result.solve_time_seconds, len(data), len(data), 1,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
 
-# ===================================================================
-# Error tests
-# ===================================================================
-
+# ===========================================================================
+# Error cases (no oracle)
+# ===========================================================================
 
 @pytest.mark.error
 @pytest.mark.quadratic
 class TestQuadraticErrors:
-    """Queries that should be rejected by the binder or physical operator."""
+    """Queries rejected by the binder or physical operator."""
 
     def test_power_exponent_3_rejected(self, packdb_cli):
-        """POWER(expr, 3) is not supported — expanded form is non-linear."""
         packdb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target)
             SELECT id, x FROM data
@@ -578,11 +916,10 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x - target, 3))
         """, match=r"Triple or higher-order products|Product of different DECIDE variable expressions|must remain linear")
 
-    def test_product_of_different_vars_now_supported(self, packdb_cli):
-        """x * y where both are DECIDE variables is now supported as bilinear.
-
-        Non-convex: Gurobi handles via NonConvex=2, HiGHS rejects.
-        """
+    def test_product_of_different_vars_now_supported(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """x * y bilinear: now accepted (Gurobi) or rejected (HiGHS)."""
         sql = """
             WITH data AS (SELECT 1 AS id, 10.0 AS val)
             SELECT id, ROUND(x, 2) AS x, ROUND(y, 2) AS y FROM data
@@ -591,49 +928,80 @@ class TestQuadraticErrors:
             MINIMIZE SUM(x * y)
         """
         try:
-            result, cols = packdb_cli.execute(sql)
-            # Gurobi: minimize x*y with box [0,10] → optimal at a corner with min product
-            x_val = float(result[0][cols.index("x")])
-            y_val = float(result[0][cols.index("y")])
-            # Minimum of x*y on [0,10]² is 0 (at any boundary with x=0 or y=0)
-            assert abs(x_val * y_val) < 0.1, \
-                f"Expected x*y ≈ 0 (minimum), got x={x_val}, y={y_val}, product={x_val*y_val}"
+            t0 = time.perf_counter()
+            rows, cols = packdb_cli.execute(sql)
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
-            # HiGHS: non-convex rejection expected
-            import re
-            assert re.search(r"Non-convex|require Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"Non-convex|require Gurobi", e.message)
+            return
 
-    def test_minimize_negated_power_nonconvex(self, packdb_cli):
-        """MINIMIZE SUM(-POWER(x, 2)) is non-convex (MINIMIZE + NSD Q).
+        # Oracle: minimize x*y with both in [0,10].
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bilinear_min")
+        oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.add_variable("y", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {("x", "y"): 1.0}, ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
 
-        Should succeed on Gurobi (NonConvex=2) or error on HiGHS.
-        """
+        def packdb_obj(rs, cs):
+            xi = cs.index("x"); yi = cs.index("y")
+            return float(rs[0][xi]) * float(rs[0][yi])
+
+        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        perf_tracker.record(
+            "qp_bilinear_min", packdb_time, build_time,
+            result.solve_time_seconds, 1, 2, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_minimize_negated_power_nonconvex(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """MINIMIZE -POWER(x, 2) is non-convex; Gurobi pushes x to boundary."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
             )
-            SELECT id, ROUND(x, 4) AS x
-            FROM data
+            SELECT id, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 10
             MINIMIZE SUM(-POWER(x, 2))
         """
         try:
-            result, cols = packdb_cli.execute(sql)
-            # Gurobi path: minimizing -x² pushes x to boundary (x=10)
-            x_col = cols.index("x")
-            for row in result:
-                x_val = float(row[x_col])
-                assert abs(x_val - 10.0) < 0.01, \
-                    f"Expected x=10 (boundary), got x={x_val}"
+            t0 = time.perf_counter()
+            rows, cols = packdb_cli.execute(sql)
+            packdb_time = time.perf_counter() - t0
         except PackDBCliError as e:
-            # HiGHS path: non-convex quadratic rejected
-            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message), \
-                f"Unexpected error: {e.message}"
+            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
+            return
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_min_neg_nonconvex")
+        n = len(rows)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.set_quadratic_objective(
+            {}, {(xn, xn): -1.0 for xn in xnames}, ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+
+        def packdb_obj(rs, cs):
+            xi = cs.index("x")
+            return sum(-float(row[xi]) ** 2 for row in rs)
+
+        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        perf_tracker.record(
+            "qp_min_neg_nonconvex", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
 
     def test_power_with_variable_exponent_rejected(self, packdb_cli):
-        """POWER(expr, non_constant) should be rejected."""
         packdb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target, 2 AS exp)
             SELECT id, x FROM data
@@ -642,25 +1010,67 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x - target, exp))
         """, match=r"Non-integer exponents are not supported")
 
+    def test_qp_multiple_quadratic_groups_rejected(self, packdb_cli):
+        packdb_cli.assert_error("""
+            WITH data AS (
+                SELECT 1 AS id, 1.0 AS a, 2.0 AS b UNION ALL
+                SELECT 2, 3.0, 4.0
+            )
+            SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
+            FROM data
+            DECIDE x IS REAL, y IS REAL
+            SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
+            MINIMIZE SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))
+        """, match=r"multiple quadratic")
 
-# ===================================================================
-# TPC-H based QP tests (with oracle comparison)
-# ===================================================================
+    def test_qp_self_product_of_power_rejected(self, packdb_cli):
+        # POWER(x, 2) * POWER(x, 2) = x^4 — identical-children self-product with
+        # a quadratic inner must be rejected, not silently reduced to x^2.
+        packdb_cli.assert_error("""
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, ROUND(x, 4) AS x FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 3
+            MINIMIZE SUM(POWER(x - 1, 2) * POWER(x - 1, 2)) + SUM(-2 * x)
+        """, match=r"self-product .* non-linear|degree > 2")
 
+    def test_qp_product_of_two_powers_rejected(self, packdb_cli):
+        # POWER(x, 2) * POWER(y, 2) = x^2 y^2 — falls into the bilinear branch
+        # of ExtractLinearAndBilinearTerms with a degree-2 "coefficient"; must
+        # be rejected before the coefficient evaluator touches it.
+        packdb_cli.assert_error("""
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, x, y FROM data
+            DECIDE x IS REAL, y IS REAL
+            SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
+            MINIMIZE SUM(POWER(x, 2) * POWER(y, 2))
+        """, match=r"degree > 2")
+
+    def test_qp_variable_times_power_rejected(self, packdb_cli):
+        # a * POWER(x, 2) with a a DECIDE var — total degree 3; same bilinear
+        # misclassification as (2) and previously crashed the engine.
+        packdb_cli.assert_error("""
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, a, x FROM data
+            DECIDE a IS REAL, x IS REAL
+            SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
+            MAXIMIZE SUM(a * POWER(x, 2))
+        """, match=r"degree > 2")
+
+
+# ===========================================================================
+# TPC-H based QP tests — oracle-compared
+# ===========================================================================
 
 @pytest.mark.quadratic
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_qp_minimize_squared_deviation_tpch(packdb_cli, duckdb_conn, perf_tracker):
-    """QP on TPC-H partsupp: minimize squared deviation from mean supply cost.
-
-    Each row gets a REAL decision variable x that is constrained to [0, 1000].
-    Objective: MINIMIZE SUM(POWER(x - ps_supplycost, 2))
-    Without aggregate constraints, optimal x_i = ps_supplycost_i.
-    We verify the objective value is near 0.
-    """
+def test_qp_minimize_squared_deviation_tpch(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Minimize squared deviation from ps_supplycost on partsupp (ps_partkey<=10)."""
     sql = """
-        SELECT ps_partkey, ps_suppkey, ps_supplycost, ROUND(x, 2) AS x
+        SELECT ps_partkey, ps_suppkey, ps_supplycost, ROUND(x, 4) AS x
         FROM partsupp
         WHERE ps_partkey <= 10
         DECIDE x IS REAL
@@ -668,48 +1078,56 @@ def test_qp_minimize_squared_deviation_tpch(packdb_cli, duckdb_conn, perf_tracke
         MINIMIZE SUM(POWER(x - ps_supplycost, 2))
     """
     t0 = time.perf_counter()
-    result, cols = packdb_cli.execute(sql)
-    elapsed = time.perf_counter() - t0
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT), CAST(ps_suppkey AS BIGINT),
+               CAST(ps_supplycost AS DOUBLE)
+        FROM partsupp WHERE ps_partkey <= 10
+    """).fetchall()
 
-    x_col = cols.index("x")
-    cost_col = cols.index("ps_supplycost")
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_tpch_deviation")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=1000.0)
+    linear = {xnames[i]: -2.0 * data[i][2] for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
 
-    total_sq_dev = 0.0
-    for row in result:
-        x_val = float(row[x_col])
-        cost = float(row[cost_col])
-        total_sq_dev += (x_val - cost) ** 2
+    cost_col = cols.index("ps_supplycost"); x_col = cols.index("x")
 
-    assert total_sq_dev < 1.0, \
-        f"Total squared deviation should be near 0, got {total_sq_dev}"
+    def packdb_obj(rs, cs):
+        return sum(
+            (float(r[x_col]) - float(r[cost_col])) ** 2 - float(r[cost_col]) ** 2
+            for r in rs
+        )
 
+    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
     perf_tracker.record(
-        "qp_squared_deviation", elapsed, 0, 0,
-        len(result), len(result), 0, total_sq_dev, "packdb",
+        "qp_tpch_deviation", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 0, result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
     )
 
 
 @pytest.mark.quadratic
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_qp_with_sum_constraint_tpch(packdb_cli, duckdb_conn, perf_tracker):
-    """QP with SUM constraint on TPC-H data.
-
-    MINIMIZE SUM(POWER(x - ps_supplycost, 2))
-    SUCH THAT SUM(x) >= total_cost * 1.1 (inflate by 10%)
-
-    The constraint forces x values above their targets on average,
-    distributing the excess equally (QP property).
-    """
+def test_qp_with_sum_constraint_tpch(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Inflate total cost by 10% via SUM(x) >= 1.1 * total_cost."""
     total_cost = duckdb_conn.execute("""
         SELECT SUM(CAST(ps_supplycost AS DOUBLE))
         FROM partsupp WHERE ps_partkey <= 10
     """).fetchone()[0]
-
     inflated = round(total_cost * 1.1, 2)
 
     sql = f"""
-        SELECT ps_partkey, ps_suppkey, ps_supplycost, ROUND(x, 2) AS x
+        SELECT ps_partkey, ps_suppkey, ps_supplycost, ROUND(x, 4) AS x
         FROM partsupp
         WHERE ps_partkey <= 10
         DECIDE x IS REAL
@@ -717,16 +1135,505 @@ def test_qp_with_sum_constraint_tpch(packdb_cli, duckdb_conn, perf_tracker):
         MINIMIZE SUM(POWER(x - ps_supplycost, 2))
     """
     t0 = time.perf_counter()
-    result, cols = packdb_cli.execute(sql)
-    elapsed = time.perf_counter() - t0
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT), CAST(ps_suppkey AS BIGINT),
+               CAST(ps_supplycost AS DOUBLE)
+        FROM partsupp WHERE ps_partkey <= 10
+    """).fetchall()
 
-    x_col = cols.index("x")
-    actual_sum = sum(float(row[x_col]) for row in result)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_tpch_inflated")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10000.0)
+    oracle_solver.add_constraint(
+        {xn: 1.0 for xn in xnames}, ">=", inflated, name="sum_inflate",
+    )
+    linear = {xnames[i]: -2.0 * data[i][2] for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
 
-    assert actual_sum >= inflated - 0.1, \
-        f"SUM(x) = {actual_sum} should be >= {inflated}"
+    cost_col = cols.index("ps_supplycost"); x_col = cols.index("x")
 
+    def packdb_obj(rs, cs):
+        return sum(
+            (float(r[x_col]) - float(r[cost_col])) ** 2 - float(r[cost_col]) ** 2
+            for r in rs
+        )
+
+    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
     perf_tracker.record(
-        "qp_sum_constraint", elapsed, 0, 0,
-        len(result), len(result), 1, actual_sum, "packdb",
+        "qp_tpch_sum_inflate", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+# ===========================================================================
+# Mixed linear + quadratic objective — already oracle-verified, unchanged
+# ===========================================================================
+#
+# PackDB extracts a mixed objective SUM(POWER(x-t, 2) + c*x) into
+# ``squared_terms`` (Q matrix) and ``terms`` (linear c vector) simultaneously.
+# The oracle mirrors this via ``set_quadratic_objective(linear, quadratic)``.
+
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_mixed_linear_quadratic(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(POWER(x - target, 2) + penalty * x) — mixed inside one SUM."""
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 10.0 AS target, 4.0 AS penalty UNION ALL
+            SELECT 2, 20.0, -6.0 UNION ALL
+            SELECT 3, 30.0, 0.0
+        )
+        SELECT id, target, penalty, ROUND(x, 6) AS x
+        FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+        MINIMIZE SUM(POWER(x - target, 2) + penalty * x)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute("""
+        SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(penalty AS DOUBLE)
+        FROM (
+            SELECT 1 AS id, 10.0 AS target, 4.0 AS penalty UNION ALL
+            SELECT 2, 20.0, -6.0 UNION ALL
+            SELECT 3, 30.0, 0.0
+        )
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_mixed_linear_quadratic")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    linear = {xnames[i]: (-2.0 * data[i][1] + data[i][2]) for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+
+    pen_col = cols.index("penalty")
+
+    def packdb_obj(rs, cs):
+        return _qp_target_obj(
+            rs, cs, linear_coeff=lambda r: float(r[pen_col]),
+        )
+
+    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    perf_tracker.record(
+        "qp_mixed_linear_quadratic", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 0,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_mixed_separate_sums(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Same as test_qp_mixed_linear_quadratic but split across sibling SUMs."""
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 10.0 AS target, 4.0 AS penalty UNION ALL
+            SELECT 2, 20.0, -6.0 UNION ALL
+            SELECT 3, 30.0, 0.0
+        )
+        SELECT id, target, penalty, ROUND(x, 6) AS x
+        FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+        MINIMIZE SUM(POWER(x - target, 2)) + SUM(penalty * x)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute("""
+        SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(penalty AS DOUBLE)
+        FROM (
+            SELECT 1 AS id, 10.0 AS target, 4.0 AS penalty UNION ALL
+            SELECT 2, 20.0, -6.0 UNION ALL
+            SELECT 3, 30.0, 0.0
+        )
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_mixed_separate_sums")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    linear = {xnames[i]: (-2.0 * data[i][1] + data[i][2]) for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+
+    pen_col = cols.index("penalty")
+
+    def packdb_obj(rs, cs):
+        return _qp_target_obj(
+            rs, cs, linear_coeff=lambda r: float(r[pen_col]),
+        )
+
+    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    perf_tracker.record(
+        "qp_mixed_separate_sums", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 0,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.quadratic
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_qp_mixed_negated_quadratic(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE SUM(-POWER(x - target, 2) + penalty * x) — concave mixed."""
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 10.0 AS target, 4.0 AS penalty UNION ALL
+            SELECT 2, 20.0, -6.0 UNION ALL
+            SELECT 3, 30.0, 2.0
+        )
+        SELECT id, target, penalty, ROUND(x, 6) AS x
+        FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+        MAXIMIZE SUM(-POWER(x - target, 2) + penalty * x)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute("""
+        SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(penalty AS DOUBLE)
+        FROM (
+            SELECT 1 AS id, 10.0 AS target, 4.0 AS penalty UNION ALL
+            SELECT 2, 20.0, -6.0 UNION ALL
+            SELECT 3, 30.0, 2.0
+        )
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_mixed_negated_quadratic")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    linear = {xnames[i]: (2.0 * data[i][1] + data[i][2]) for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): -1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+
+    pen_col = cols.index("penalty")
+
+    def packdb_obj(rs, cs):
+        return _qp_target_obj(
+            rs, cs, scale=-1.0,
+            linear_coeff=lambda r: float(r[pen_col]),
+        )
+
+    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    perf_tracker.record(
+        "qp_mixed_negated_quadratic", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 0,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+# ===========================================================================
+# Nested outer-SUM of aggregate-of-quadratic (PER on QP objective)
+# ===========================================================================
+# These tests exercise the SumInnerIsQuadratic nested-aggregate extension in
+# decide_symbolic.cpp. Before the fix, MINIMIZE SUM(SUM(POWER(x - const, 2)))
+# PER grp was rejected by the binder because POWER expansion produced a
+# __SUM__ placeholder that leaked through the nested-SUM validator. After the
+# fix, normalization preserves the raw AST and the post-bind optimizer's
+# nested-aggregate strip flattens the form.
+#
+# Semantically SUM(SUM(expr)) PER grp ≡ SUM(expr), and SUM(AVG(expr)) PER grp
+# weights each row by 1/n_g (group size). SUM(MIN/MAX(expr)) PER grp needs
+# quadratic per-row auxiliary constraints downstream; those shapes now bind
+# successfully but their physical-layer correctness is tracked separately.
+
+
+@pytest.mark.quadratic
+@pytest.mark.per_clause
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_nested_sum_sum_per_binding(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp with a binding PER upper
+    bound that forces x below each row's target.
+
+    The nested form is algebraically equivalent to flat SUM(POWER(x - t, 2)),
+    so the oracle is formulated as the flat QP with the same per-group SUM(x)
+    <= K constraints.
+    """
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
+        SELECT 2, 'A', 12.0 UNION ALL
+        SELECT 3, 'B', 30.0 UNION ALL
+        SELECT 4, 'B', 32.0
+    """
+    # Caps chosen below per-group target sums (22 for A, 62 for B) so the
+    # constraint binds and pulls each group's optimum away from x = target.
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, grp, target, ROUND(x, 4) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+            AND SUM(x) <= 10 WHEN grp = 'A'
+            AND SUM(x) <= 40 WHEN grp = 'B'
+        MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute(f"""
+        SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE)
+        FROM ({data_sql})
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_nested_sum_sum_per_binding")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    # Flat QP (outer SUM is stripped by the optimizer).
+    linear = {xnames[i]: -2.0 * data[i][2] for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    # Per-group upper bounds matching the SQL.
+    for grp, cap in (("A", 10.0), ("B", 40.0)):
+        idxs = [i for i in range(n) if data[i][1] == grp]
+        oracle_solver.add_constraint(
+            {xnames[i]: 1.0 for i in idxs}, "<=", cap, name=f"cap_{grp}",
+        )
+    build_time = time.perf_counter() - t_build
+
+    result = _solve_and_compare(
+        oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+    )
+    perf_tracker.record(
+        "qp_nested_sum_sum_per_binding", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.quadratic
+@pytest.mark.per_clause
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_nested_sum_sum_per_unconstrained(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Unconstrained nested-PER QP: each x_i = target_i, objective = -Σ t²
+    (after PackDB's constant-stripping convention). Sanity test confirming
+    the nested form degenerates to flat SUM(POWER(x-t,2)) semantically.
+    """
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
+        SELECT 2, 'A', 15.0 UNION ALL
+        SELECT 3, 'B', 20.0 UNION ALL
+        SELECT 4, 'B', 25.0
+    """
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, grp, target, ROUND(x, 4) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+        MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute(f"""
+        SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE)
+        FROM ({data_sql})
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_nested_sum_sum_per_uncon")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    linear = {xnames[i]: -2.0 * data[i][2] for i in range(n)}
+    quadratic = {(xnames[i], xnames[i]): 1.0 for i in range(n)}
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+
+    result = _solve_and_compare(
+        oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+    )
+    perf_tracker.record(
+        "qp_nested_sum_sum_per_unconstrained", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 0,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.quadratic
+@pytest.mark.per_clause
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_nested_sum_avg_per_binding(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp with unequal group
+    sizes (A: 2 rows, B: 3 rows). Inner AVG scales each row's contribution
+    by 1/n_g. Verifies the per_inner_was_avg path in decide_optimizer.cpp
+    together with the nested-aggregate-of-quadratic binding fix.
+    """
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
+        SELECT 2, 'A', 20.0 UNION ALL
+        SELECT 3, 'B', 30.0 UNION ALL
+        SELECT 4, 'B', 35.0 UNION ALL
+        SELECT 5, 'B', 40.0
+    """
+    # Per-group caps chosen below target sums to force a binding interior
+    # optimum distinct from x = target.
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, grp, target, ROUND(x, 4) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+            AND SUM(x) <= 20 WHEN grp = 'A'
+            AND SUM(x) <= 60 WHEN grp = 'B'
+        MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute(f"""
+        SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE)
+        FROM ({data_sql})
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_nested_sum_avg_per_binding")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    # Count rows per group for the 1/n_g scaling.
+    from collections import Counter
+    grp_size = Counter(row[1] for row in data)
+    linear, quadratic = {}, {}
+    for i, row in enumerate(data):
+        w = 1.0 / grp_size[row[1]]
+        linear[xnames[i]] = -2.0 * row[2] * w
+        quadratic[(xnames[i], xnames[i])] = w
+    oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+    for grp, cap in (("A", 20.0), ("B", 60.0)):
+        idxs = [i for i in range(n) if data[i][1] == grp]
+        oracle_solver.add_constraint(
+            {xnames[i]: 1.0 for i in idxs}, "<=", cap, name=f"cap_{grp}",
+        )
+    build_time = time.perf_counter() - t_build
+
+    grp_col = cols.index("grp")
+    x_col = cols.index("x")
+    target_col = cols.index("target")
+
+    def packdb_obj(rs, cs):
+        # Mirror PackDB's per-group 1/n_g weighting with constant t² stripped.
+        counts = Counter(r[grp_col] for r in rs)
+        total = 0.0
+        for r in rs:
+            w = 1.0 / counts[r[grp_col]]
+            x = float(r[x_col]); t = float(r[target_col])
+            total += w * ((x - t) ** 2 - t ** 2)
+        return total
+
+    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    perf_tracker.record(
+        "qp_nested_sum_avg_per_binding", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.quadratic
+@pytest.mark.per_clause
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_qp_nested_sum_sum_per_constant_free_regression(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Regression: MINIMIZE SUM(SUM(POWER(x, 2))) PER grp — no constant term
+    in POWER. This form accidentally passed validation pre-fix (the factoring
+    didn't leak a __SUM__ placeholder because there was no data-only sum to
+    fold). Post-fix it takes the SumInnerIsQuadratic nested path instead;
+    end-to-end result must be identical.
+    """
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp UNION ALL
+        SELECT 2, 'A' UNION ALL
+        SELECT 3, 'B' UNION ALL
+        SELECT 4, 'B'
+    """
+    sql = f"""
+        WITH data AS ({data_sql})
+        SELECT id, grp, ROUND(x, 4) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 100
+            AND SUM(x) >= 4 WHEN grp = 'A'
+            AND SUM(x) >= 6 WHEN grp = 'B'
+        MINIMIZE SUM(SUM(POWER(x, 2))) PER grp
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+    data = duckdb_conn.execute(f"""
+        SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR) FROM ({data_sql})
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("qp_nested_sum_sum_per_cf")
+    n = len(data)
+    xnames = [f"x_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+    oracle_solver.set_quadratic_objective(
+        {}, {(xn, xn): 1.0 for xn in xnames}, ObjSense.MINIMIZE,
+    )
+    for grp, floor in (("A", 4.0), ("B", 6.0)):
+        idxs = [i for i in range(n) if data[i][1] == grp]
+        oracle_solver.add_constraint(
+            {xnames[i]: 1.0 for i in idxs}, ">=", floor, name=f"floor_{grp}",
+        )
+    build_time = time.perf_counter() - t_build
+
+    result = _solve_and_compare(
+        oracle_solver, rows, cols, lambda rs, cs: _qp_simple_obj(rs, cs),
+    )
+    perf_tracker.record(
+        "qp_nested_sum_sum_per_constant_free", packdb_time, build_time,
+        result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
     )

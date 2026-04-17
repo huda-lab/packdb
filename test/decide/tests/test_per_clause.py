@@ -10,37 +10,127 @@ Also covers:
   - Two PER constraints on different grouping columns
 """
 
+import time
+
 import pytest
+
+from solver.types import VarType, ObjSense
+from comparison.compare import compare_solutions
+from ._oracle_helpers import group_indices as _group_indices, add_ne_bigm as _add_ne_bigm
 
 
 @pytest.mark.per_clause
-def test_per_basic(packdb_cli):
+@pytest.mark.correctness
+def test_per_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """PER keyword should partition constraints by group."""
-    packdb_cli.execute("""
-        SELECT s_suppkey, s_acctbal, x FROM supplier
+    sql = """
+        SELECT s_suppkey, s_acctbal, s_nationkey, x FROM supplier
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
-    """)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(s_suppkey AS BIGINT),
+               CAST(s_acctbal AS DOUBLE),
+               CAST(s_nationkey AS BIGINT)
+        FROM supplier
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_basic")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for group_key, rows in _group_indices(data, lambda r: r[2]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": 1.0 for i in rows},
+            "<=", 5.0, name=f"per_{group_key}",
+        )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("s_acctbal")])},
+    )
+    perf_tracker.record(
+        "per_basic", packdb_time, build_time, result.solve_time_seconds,
+        n, n, len(set(r[2] for r in data)),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
-def test_per_with_integer_variable(packdb_cli):
+@pytest.mark.correctness
+def test_per_with_integer_variable(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """PER with integer variables and a weighted constraint."""
-    packdb_cli.execute("""
-        SELECT ps_partkey, ps_availqty, ps_supplycost, x
+    sql = """
+        SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
         DECIDE x IS INTEGER
         SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
         MAXIMIZE SUM(x * ps_availqty)
-    """)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT),
+               CAST(ps_suppkey AS BIGINT),
+               CAST(ps_availqty AS DOUBLE),
+               CAST(ps_supplycost AS DOUBLE)
+        FROM partsupp WHERE ps_partkey < 50
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_integer")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0)
+    for group_key, rows in _group_indices(data, lambda r: r[0]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": data[i][3] for i in rows},
+            "<=", 1000.0, name=f"per_{group_key}",
+        )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+    )
+    perf_tracker.record(
+        "per_with_integer_variable", packdb_time, build_time,
+        result.solve_time_seconds, n, n, len(set(r[0] for r in data)),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
-def test_per_combined_with_when(packdb_cli):
+@pytest.mark.correctness
+def test_per_combined_with_when(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """PER and WHEN used together — group-level constraint with row filter."""
-    packdb_cli.execute("""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
@@ -48,76 +138,189 @@ def test_per_combined_with_when(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 50 PER l_returnflag
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
-    """)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_extendedprice AS DOUBLE),
+               CAST(l_quantity AS DOUBLE),
+               CAST(l_returnflag AS VARCHAR)
+        FROM lineitem WHERE l_orderkey < 100
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_when")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for group_key, rows in _group_indices(data, lambda r: r[4]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": data[i][3] for i in rows},
+            "<=", 50.0, name=f"per_{group_key}",
+        )
+    oracle_solver.add_constraint(
+        {f"x_{i}": 1.0 for i in range(n)},
+        "<=", 30.0, name="global_cap",
+    )
+    oracle_solver.set_objective(
+        {
+            f"x_{i}": data[i][2] if data[i][4] == "R" else 0.0
+            for i in range(n)
+        },
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {
+            "x": (
+                float(row[packdb_cols.index("l_extendedprice")])
+                if row[packdb_cols.index("l_returnflag")] == "R"
+                else 0.0
+            )
+        },
+    )
+    perf_tracker.record(
+        "per_combined_with_when", packdb_time, build_time,
+        result.solve_time_seconds, n, n, len(set(r[4] for r in data)) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.cons_comparison
-def test_per_not_equal(packdb_cli):
+@pytest.mark.correctness
+def test_per_not_equal(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """PER with <> operator — Big-M disjunction generated per group."""
-    result, cols = packdb_cli.execute("""
-        SELECT l_orderkey, l_linenumber, l_returnflag, x
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_returnflag, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <> 3 PER l_returnflag
             AND SUM(x) <= 15
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
-    assert len(result) > 0
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    flag_idx = cols.index("l_returnflag")
-    x_idx = cols.index("x")
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_returnflag AS VARCHAR),
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 50
+    """).fetchall()
 
-    # Verify per-group <> constraint
-    group_sums = {}
-    for row in result:
-        flag = str(row[flag_idx])
-        group_sums[flag] = group_sums.get(flag, 0) + int(row[x_idx])
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_ne")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for group_key, rows in _group_indices(data, lambda r: r[2]).items():
+        _add_ne_bigm(
+            oracle_solver,
+            {f"x_{i}": 1.0 for i in rows},
+            rhs=3.0, row_count=len(rows), name=f"ne_{group_key}",
+        )
+    oracle_solver.add_constraint(
+        {f"x_{i}": 1.0 for i in range(n)},
+        "<=", 15.0, name="global_cap",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][3] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    for flag, total in group_sums.items():
-        assert total != 3, \
-            f"PER <> constraint violated: SUM(x) = {total} for flag='{flag}' (expected <> 3)"
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+    perf_tracker.record(
+        "per_not_equal", packdb_time, build_time, result.solve_time_seconds,
+        n, n, len(set(r[2] for r in data)) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.edge_case
-def test_per_null_group_key(packdb_cli):
+@pytest.mark.correctness
+def test_per_null_group_key(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """NULL values in PER column should be excluded from all groups."""
-    result, cols = packdb_cli.execute("""
-        WITH data AS (
-            SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
-            SELECT 2, NULL, 50.0 UNION ALL
-            SELECT 3, 'B', 8.0 UNION ALL
-            SELECT 4, NULL, 30.0 UNION ALL
-            SELECT 5, 'A', 12.0
-        )
+    data_sql = """
+        SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
+        SELECT 2, NULL, 50.0 UNION ALL
+        SELECT 3, 'B', 8.0 UNION ALL
+        SELECT 4, NULL, 30.0 UNION ALL
+        SELECT 5, 'A', 12.0
+    """
+    sql = f"""
+        WITH data AS ({data_sql})
         SELECT id, grp, val, x
         FROM data
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <= 1 PER grp
         MAXIMIZE SUM(x * val)
-    """)
-    assert len(result) > 0
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    grp_idx = cols.index("grp")
-    x_idx = cols.index("x")
+    data = duckdb_conn.execute(
+        f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(val AS DOUBLE) FROM ({data_sql})"
+    ).fetchall()
 
-    # Verify per-group constraint for non-NULL groups
-    group_sums = {}
-    for row in result:
-        grp = row[grp_idx]
-        if grp is not None:
-            group_sums[grp] = group_sums.get(grp, 0) + int(row[x_idx])
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_null_group")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for group_key, rows in _group_indices(data, lambda r: r[1]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": 1.0 for i in rows},
+            "<=", 1.0, name=f"per_{group_key}",
+        )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    for grp, total in group_sums.items():
-        assert total <= 1, \
-            f"PER constraint violated: SUM(x) = {total} > 1 for group '{grp}'"
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("val")])},
+    )
+    perf_tracker.record(
+        "per_null_group_key", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
-def test_per_different_grouping_columns(packdb_cli):
+@pytest.mark.correctness
+def test_per_different_grouping_columns(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
     """Two PER constraints on different columns — overlapping group structures."""
-    result, cols = packdb_cli.execute("""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
@@ -125,26 +328,50 @@ def test_per_different_grouping_columns(packdb_cli):
         SUCH THAT SUM(x) <= 5 PER l_returnflag
             AND SUM(x) <= 8 PER l_linestatus
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
-    assert len(result) > 0
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    flag_idx = cols.index("l_returnflag")
-    status_idx = cols.index("l_linestatus")
-    x_idx = cols.index("x")
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_returnflag AS VARCHAR),
+               CAST(l_linestatus AS VARCHAR),
+               CAST(l_extendedprice AS DOUBLE)
+        FROM lineitem WHERE l_orderkey < 100
+    """).fetchall()
 
-    # Verify both PER constraints
-    flag_sums = {}
-    status_sums = {}
-    for row in result:
-        x_val = int(row[x_idx])
-        flag = str(row[flag_idx])
-        status = str(row[status_idx])
-        flag_sums[flag] = flag_sums.get(flag, 0) + x_val
-        status_sums[status] = status_sums.get(status, 0) + x_val
+    t_build = time.perf_counter()
+    oracle_solver.create_model("per_two_groupings")
+    n = len(data)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    for group_key, rows in _group_indices(data, lambda r: r[2]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": 1.0 for i in rows},
+            "<=", 5.0, name=f"per_rflag_{group_key}",
+        )
+    for group_key, rows in _group_indices(data, lambda r: r[3]).items():
+        oracle_solver.add_constraint(
+            {f"x_{i}": 1.0 for i in rows},
+            "<=", 8.0, name=f"per_lstatus_{group_key}",
+        )
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][4] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    for flag, total in flag_sums.items():
-        assert total <= 5, \
-            f"PER l_returnflag violated: SUM(x) = {total} > 5 for flag='{flag}'"
-    for status, total in status_sums.items():
-        assert total <= 8, \
-            f"PER l_linestatus violated: SUM(x) = {total} > 8 for status='{status}'"
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+    )
+    perf_tracker.record(
+        "per_different_grouping_columns", packdb_time, build_time,
+        result.solve_time_seconds, n, n,
+        len(set(r[2] for r in data)) + len(set(r[3] for r in data)),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )

@@ -6,6 +6,7 @@ Covers:
   - test_abs_objective_with_per: ABS in objective with PER grouping
   - test_abs_constraint_per_row: ABS(x - col) <= tolerance (per-row)
   - test_abs_constraint_aggregate: SUM(ABS(x - col)) <= total_tolerance
+  - test_abs_constraint_aggregate_with_when: aggregate constraint with expression-level WHEN
   - test_abs_multiple_terms: two ABS terms in one expression
   - test_abs_no_decide_var: ABS without decide variable (regular SQL)
   - test_abs_mixed_vars: BOOLEAN + REAL with ABS on REAL only
@@ -398,6 +399,103 @@ def test_abs_constraint_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_t
 
     perf_tracker.record(
         "abs_constraint_agg", packdb_time, build_time,
+        result.solve_time_seconds, n, n * 2, 1 + n * 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.when_constraint
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_abs_constraint_aggregate_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'.
+
+    Exercises WHEN mask propagation to ABS-linearization auxiliaries in an
+    aggregate constraint. The d_i auxiliaries exist for all rows (their linking
+    constraints are unconditional), but only WHEN-matching rows contribute to
+    SUM(d_i). A bug that sums d_i over all rows would over-constrain the
+    problem and produce a different optimum.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_returnflag,
+               ROUND(new_qty, 4) AS new_qty
+        FROM lineitem
+        WHERE l_orderkey <= 5
+        DECIDE new_qty IS REAL
+        SUCH THAT new_qty <= 60
+            AND SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(new_qty * l_extendedprice)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE),
+               CAST(l_extendedprice AS DOUBLE),
+               l_returnflag
+        FROM lineitem WHERE l_orderkey <= 5
+    """).fetchall()
+
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("abs_constraint_agg_when")
+    vnames = [f"new_qty_{i}" for i in range(n)]
+    dnames = [f"d_{i}" for i in range(n)]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=60.0)
+    for dn in dnames:
+        oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
+
+    # ABS linearization is unconditional (d_i >= |new_qty_i - qty_i| for every row)
+    for i in range(n):
+        qty = data[i][2]
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, vnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+        )
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, vnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+        )
+
+    # Aggregate upper bound only over WHEN-matching (R) rows
+    r_rows = {dnames[i]: 1.0 for i in range(n) if data[i][4] == 'R'}
+    if r_rows:
+        oracle_solver.add_constraint(r_rows, "<=", 30.0, name="when_abs_sum")
+
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    assert result.status == SolverStatus.OPTIMAL
+    ci = {name: i for i, name in enumerate(packdb_cols)}
+
+    # Sanity check: PackDB actually respected the WHEN-filtered ABS bound
+    r_total_dev = sum(
+        abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
+        for row in packdb_result
+        if row[ci["l_returnflag"]] == 'R'
+    )
+    assert r_total_dev <= 30.0 + 1e-4, (
+        f"WHEN-filtered ABS sum exceeded 30: {r_total_dev}"
+    )
+
+    packdb_obj = sum(
+        float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
+        for row in packdb_result
+    )
+    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    )
+
+    perf_tracker.record(
+        "abs_constraint_agg_when", packdb_time, build_time,
         result.solve_time_seconds, n, n * 2, 1 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",

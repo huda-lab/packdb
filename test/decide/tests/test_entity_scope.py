@@ -16,7 +16,9 @@ Covers:
 
 import pytest
 from packdb_cli import PackDBCliError
-from solver.types import VarType, ObjSense
+from solver.types import VarType, ObjSense, SolverStatus
+
+from ._oracle_helpers import add_ne_indicator, add_count_integer_indicators
 
 
 # ---------------------------------------------------------------------------
@@ -854,12 +856,13 @@ def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, p
 
 @pytest.mark.correctness
 @pytest.mark.count_rewrite
-def test_entity_scoped_integer_count(packdb_cli, duckdb_conn):
-    """COUNT(qty) where qty IS INTEGER with entity-scoped variable.
+def test_entity_scoped_integer_count(packdb_cli, duckdb_conn, oracle_solver):
+    """COUNT(qty) where qty IS INTEGER with entity-scoped variable — oracle-compared.
 
-    COUNT(qty) for INTEGER uses the Big-M indicator rewrite. Tests that
-    indicator variables interact correctly with entity-scoped variable indexing.
-    Each join row in a nation shares qty_n, so COUNT counts rows where qty_n > 0.
+    Each join row in a nation shares qty_n, so COUNT counts rows where
+    qty_n > 0. Oracle introduces a binary indicator z_n per nation
+    (z_n=1 ⇔ qty_n >= 1) and maps the join-row COUNT to
+    SUM_n cnt_n * z_n.
     """
     sql = """
         SELECT c.c_custkey, n.n_nationkey, qty
@@ -876,7 +879,6 @@ def test_entity_scoped_integer_count(packdb_cli, duckdb_conn):
     qty_idx = cols.index("qty")
     nkey_idx = cols.index("n_nationkey")
 
-    # Verify entity consistency
     nation_values = {}
     for row in result:
         nkey = int(row[nkey_idx])
@@ -887,14 +889,41 @@ def test_entity_scoped_integer_count(packdb_cli, duckdb_conn):
         else:
             nation_values[nkey] = q
 
-    # Verify per-row bound: qty <= 5
-    for nkey, q in nation_values.items():
-        assert q <= 5, f"Nation {nkey} has qty={q} > 5"
+    # Build oracle: one integer var per nation; binary indicator per nation
+    # mapping qty_n > 0. Join-row COUNT(qty) = SUM_n cnt_n * z_n.
+    raw = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT), COUNT(*) as cnt
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0 AND n.n_nationkey <= 4
+        GROUP BY n.n_nationkey
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in raw)
+    nation_cnt = {int(r[0]): int(r[1]) for r in raw}
 
-    # Verify COUNT constraint: at least 5 join rows have qty > 0
-    nonzero_rows = sum(1 for row in result if int(row[qty_idx]) > 0)
-    assert nonzero_rows >= 5, \
-        f"COUNT(qty) >= 5 violated: only {nonzero_rows} non-zero rows"
+    oracle_solver.create_model("entity_scoped_integer_count")
+    qnames = {nk: f"qty_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(qnames[nk], VarType.INTEGER, lb=0.0, ub=5.0)
+    zs = add_count_integer_indicators(
+        oracle_solver, [qnames[nk] for nk in nation_ids], prefix="z",
+    )
+    z_by_nation = dict(zip(nation_ids, zs))
+    oracle_solver.add_constraint(
+        {z_by_nation[nk]: float(nation_cnt[nk]) for nk in nation_ids},
+        ">=", 5.0, name="count_ge_5",
+    )
+    # MAXIMIZE SUM(qty) in join rows = SUM_n cnt_n * qty_n
+    oracle_solver.set_objective(
+        {qnames[nk]: float(nation_cnt[nk]) for nk in nation_ids},
+        ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    packdb_obj = sum(int(row[qty_idx]) for row in result)
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -903,12 +932,12 @@ def test_entity_scoped_integer_count(packdb_cli, duckdb_conn):
 
 @pytest.mark.correctness
 @pytest.mark.cons_comparison
-def test_entity_scoped_ne_constraint(packdb_cli):
-    """SUM(keepN) <> K with entity-scoped variable.
+def test_entity_scoped_ne_constraint(packdb_cli, duckdb_conn, oracle_solver):
+    """SUM(keepN) <> K with entity-scoped variable — oracle-compared.
 
-    Tests Big-M indicator rewrite for NE with entity-scoped variables.
-    Uses nation table directly (no join) so SUM(keepN) = number of nations selected.
-    """
+    Nation table only (no join) so SUM(keepN) = number of nations selected.
+    Oracle uses add_ne_indicator to encode SUM(keepN) != 2 via Gurobi
+    indicator constraints (Big-M-free)."""
     sql = """
         SELECT n.n_nationkey, n.n_name, keepN
         FROM nation n
@@ -921,12 +950,28 @@ def test_entity_scoped_ne_constraint(packdb_cli):
     result, cols = packdb_cli.execute(sql)
     assert len(result) > 0
 
+    raw = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT)
+        FROM nation n WHERE n.n_regionkey = 0
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in raw)
+
+    oracle_solver.create_model("entity_scoped_ne_constraint")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+    sum_coeffs = {vnames[nk]: 1.0 for nk in nation_ids}
+    add_ne_indicator(oracle_solver, sum_coeffs, 2.0, name="ne_2")
+    oracle_solver.add_constraint(sum_coeffs, "<=", 4.0, name="sum_le_4")
+    oracle_solver.set_objective(sum_coeffs, ObjSense.MAXIMIZE)
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
     keepN_idx = cols.index("keepN")
-    total = sum(int(row[keepN_idx]) for row in result)
-    assert total != 2, \
-        f"NE constraint violated: SUM(keepN) = {total}, expected != 2"
-    assert total <= 4, \
-        f"SUM(keepN) <= 4 violated: SUM={total}"
+    packdb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1012,13 +1057,12 @@ def test_entity_scoped_max_hard_case(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
-def test_entity_scoped_mixed_when_per(packdb_cli):
-    """All-four interaction: entity-scoped + row-scoped + WHEN + PER.
-
-    keepN (entity-scoped per nation) and x (row-scoped per customer).
-    WHEN+PER constraint exercises all four features in one query, testing
-    that VarIndexer three-block layout, WHEN row filtering, and PER
-    group partitioning all compose correctly.
+def test_entity_scoped_mixed_when_per(
+    packdb_cli, duckdb_conn, oracle_solver,
+):
+    """All-four interaction: entity-scoped keepN + row-scoped x + WHEN + PER
+    — oracle-compared. Customer-level MIP (~1500 binaries) is trivial for
+    Gurobi; the prior HiGHS-based oracle skip no longer applies.
     """
     sql = """
         SELECT c.c_custkey, n.n_nationkey, r.r_name, c.c_acctbal, x, keepN
@@ -1038,37 +1082,90 @@ def test_entity_scoped_mixed_when_per(packdb_cli):
     region_idx = cols.index("r_name")
     acctbal_idx = cols.index("c_acctbal")
     nkey_idx = cols.index("n_nationkey")
+    ckey_idx = cols.index("c_custkey")
 
-    # Verify entity consistency for keepN
+    # Oracle mirrors the query exactly: one binary x_i per customer row, one
+    # binary keepN_n per nation, linked by x_i <= keepN_{n(i)}. PER grouping
+    # partitions WHEN-filtered rows by region; the objective sums over all
+    # rows (the optimizer will naturally set x_i=0 for negative acctbal).
+    data = duckdb_conn.execute("""
+        SELECT CAST(c.c_custkey AS BIGINT),
+               CAST(n.n_nationkey AS BIGINT),
+               CAST(r.r_name AS VARCHAR),
+               CAST(c.c_acctbal AS DOUBLE)
+        FROM customer c
+        JOIN nation n ON c.c_nationkey = n.n_nationkey
+        JOIN region r ON n.n_regionkey = r.r_regionkey
+    """).fetchall()
+    nation_ids = sorted({int(row[1]) for row in data})
+
+    oracle_solver.create_model("entity_scoped_mixed_when_per")
+    knames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(knames[nk], VarType.BINARY)
+    xnames = [f"x_{i}" for i in range(len(data))]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.BINARY)
+
+    for i, row in enumerate(data):
+        nk = int(row[1])
+        oracle_solver.add_constraint(
+            {xnames[i]: 1.0, knames[nk]: -1.0}, "<=", 0.0,
+            name=f"link_{i}",
+        )
+
+    # WHEN→PER: partition rows with acctbal > 0 by region.
+    region_rows: dict[str, list[int]] = {}
+    for i, row in enumerate(data):
+        if float(row[3]) > 0:
+            region_rows.setdefault(str(row[2]), []).append(i)
+    for rname, idxs in region_rows.items():
+        oracle_solver.add_constraint(
+            {xnames[i]: float(data[i][3]) for i in idxs},
+            "<=", 15000.0, name=f"per_{rname.replace(' ', '_')[:8]}",
+        )
+
+    oracle_solver.set_objective(
+        {xnames[i]: float(data[i][3]) for i in range(len(data))},
+        ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve(time_limit=120.0)
+    assert res.status == SolverStatus.OPTIMAL
+
+    packdb_obj = sum(
+        int(row[x_idx]) * float(row[acctbal_idx]) for row in result
+    )
+    # Both solvers stop at Gurobi's default MIPGap (1e-4) from the true
+    # optimum, so the two incumbents can differ by up to ~2*MIPGap of obj.
+    tol = max(1e-3, 2e-4 * abs(res.objective_value))
+    assert abs(packdb_obj - res.objective_value) <= tol, (
+        f"Objective mismatch: PackDB={packdb_obj:.4f}, "
+        f"Oracle={res.objective_value:.4f}, tol={tol:.4f}"
+    )
+
+    # Invariants: entity consistency + per-row x<=keepN + WHEN+PER group cap.
     nation_values = {}
     for row in result:
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
         if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
+            assert nation_values[nkey] == keep
         else:
             nation_values[nkey] = keep
-
-    # Verify per-row: x <= keepN
     for row in result:
         nkey = int(row[nkey_idx])
-        assert int(row[x_idx]) <= nation_values[nkey], \
-            f"x <= keepN violated for nation {nkey}"
-
-    # Verify WHEN+PER constraint: per region, SUM(x * acctbal) where acctbal > 0 <= 15000
-    region_sums = {}
+        assert int(row[x_idx]) <= nation_values[nkey]
+    region_sums: dict[str, float] = {}
     for row in result:
-        acctbal = float(row[acctbal_idx])
-        if acctbal > 0:
+        ab = float(row[acctbal_idx])
+        if ab > 0:
             region = str(row[region_idx])
-            region_sums[region] = region_sums.get(region, 0.0) + int(row[x_idx]) * acctbal
+            region_sums[region] = (
+                region_sums.get(region, 0.0) + int(row[x_idx]) * ab
+            )
     for region, total in region_sums.items():
         assert total <= 15000 + 1e-4, \
             f"WHEN+PER violated for region '{region}': {total:.2f} > 15000"
-    # Note: oracle omitted — 1500-variable customer-level MIP exceeds HiGHS reliability.
-    # PackDB consistently outperforms HiGHS on this problem; constraint checks above
-    # confirm feasibility of the all-four interaction.
 
 
 # ---------------------------------------------------------------------------
@@ -1246,13 +1343,15 @@ def test_entity_scoped_multi_column_per(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.per_strict
-def test_entity_scoped_per_strict(packdb_cli):
-    """PER STRICT with entity-scoped variable.
+def test_entity_scoped_per_strict(packdb_cli, duckdb_conn, oracle_solver):
+    """PER STRICT with entity-scoped variable — oracle-compared.
 
-    Empty groups (nations where all customers have acctbal <= 0) still emit
-    constraints under PER STRICT. SUM(∅) = 0 <= 100 → feasible.
-    Tests that PER→WHEN evaluation order works with entity-scoped indexing.
-    """
+    PER STRICT n_nationkey emits one constraint per nation, evaluating
+    the WHEN-filtered SUM even when the group has no surviving rows.
+    For nation n, SUM(keepN) over positive-acctbal customers =
+    pos_count_n * keepN_n, so the constraint becomes
+    pos_count_n * keepN_n <= 100. Objective sums over ALL join rows,
+    so the per-nation objective coefficient is nation_full_sum_n."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
@@ -1267,8 +1366,34 @@ def test_entity_scoped_per_strict(packdb_cli):
     keepN_idx = cols.index("keepN")
     nkey_idx = cols.index("n_nationkey")
 
-    # Verify entity consistency
-    nation_values = {}
+    raw = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT),
+               SUM(CASE WHEN c.c_acctbal > 0 THEN 1 ELSE 0 END) as pos_cnt,
+               SUM(c.c_acctbal) as full_sum
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        GROUP BY n.n_nationkey
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in raw)
+    pos_cnt = {int(r[0]): int(r[1]) for r in raw}
+    full_sum = {int(r[0]): float(r[2]) for r in raw}
+
+    oracle_solver.create_model("entity_scoped_per_strict")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+    for nk in nation_ids:
+        oracle_solver.add_constraint(
+            {vnames[nk]: float(pos_cnt[nk])}, "<=", 100.0,
+            name=f"per_strict_{nk}",
+        )
+    oracle_solver.set_objective(
+        {vnames[nk]: full_sum[nk] for nk in nation_ids}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    nation_values: dict[int, int] = {}
     for row in result:
         nkey = int(row[nkey_idx])
         keep = int(row[keepN_idx])
@@ -1277,6 +1402,14 @@ def test_entity_scoped_per_strict(packdb_cli):
                 f"Nation {nkey} has inconsistent keepN"
         else:
             nation_values[nkey] = keep
+
+    packdb_obj = sum(
+        nation_values.get(nk, 0) * full_sum[nk] for nk in nation_ids
+    )
+    assert abs(packdb_obj - res.objective_value) <= 1e-3, (
+        f"Objective mismatch: PackDB={packdb_obj:.4f}, "
+        f"Oracle={res.objective_value:.4f}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1442,13 +1575,12 @@ def test_entity_scoped_avg_per(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.cons_comparison
-def test_entity_scoped_ne_per(packdb_cli):
-    """NE constraint + PER grouping with entity-scoped variable.
+def test_entity_scoped_ne_per(packdb_cli, duckdb_conn, oracle_solver):
+    """NE constraint + PER grouping with entity-scoped variable — oracle-compared.
 
-    SUM(keepN) <> 2 PER n.n_regionkey: per region, number of selected nations
-    must not equal 2. Uses nation table (no join) so SUM per group = entity count.
-    Tests Big-M NE indicator + PER grouping with entity-scoped variables.
-    """
+    Per region, number of selected nations must not equal 2. Uses nation
+    table directly (no join) so SUM per region = count of selected nations
+    in that region. Oracle emits one NE indicator per region."""
     sql = """
         SELECT n.n_nationkey, n.n_name, n.n_regionkey, keepN
         FROM nation n
@@ -1460,17 +1592,37 @@ def test_entity_scoped_ne_per(packdb_cli):
     result, cols = packdb_cli.execute(sql)
     assert len(result) > 0
 
-    keepN_idx = cols.index("keepN")
-    rkey_idx = cols.index("n_regionkey")
+    raw = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT), CAST(n.n_regionkey AS BIGINT)
+        FROM nation n
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in raw)
+    nation_region = {int(r[0]): int(r[1]) for r in raw}
+    regions = sorted(set(nation_region.values()))
 
-    # Verify NE+PER: per region, selected nation count != 2
-    region_sums = {}
-    for row in result:
-        rkey = int(row[rkey_idx])
-        region_sums[rkey] = region_sums.get(rkey, 0) + int(row[keepN_idx])
-    for rkey, total in region_sums.items():
-        assert total != 2, \
-            f"NE+PER violated for region {rkey}: SUM(keepN) = {total} == 2"
+    oracle_solver.create_model("entity_scoped_ne_per")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+    for rk in regions:
+        region_coeffs = {
+            vnames[nk]: 1.0 for nk in nation_ids if nation_region[nk] == rk
+        }
+        add_ne_indicator(oracle_solver, region_coeffs, 2.0, name=f"ne_r{rk}")
+    oracle_solver.add_constraint(
+        {vnames[nk]: 1.0 for nk in nation_ids}, "<=", 20.0, name="sum_le",
+    )
+    oracle_solver.set_objective(
+        {vnames[nk]: 1.0 for nk in nation_ids}, ObjSense.MAXIMIZE,
+    )
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
+    keepN_idx = cols.index("keepN")
+    packdb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1479,13 +1631,10 @@ def test_entity_scoped_ne_per(packdb_cli):
 
 @pytest.mark.correctness
 @pytest.mark.cons_between
-def test_entity_scoped_between_constraint(packdb_cli):
-    """BETWEEN constraint with entity-scoped variable.
+def test_entity_scoped_between_constraint(packdb_cli, duckdb_conn, oracle_solver):
+    """BETWEEN constraint with entity-scoped variable — oracle-compared.
 
-    SUM(keepN) BETWEEN 2 AND 4 selects 2-4 nations from region 0.
-    Tests that BETWEEN lower/upper bound expansion works with entity-scoped
-    coefficient assembly.
-    """
+    Oracle expands BETWEEN 2 AND 4 to two linear constraints."""
     sql = """
         SELECT n.n_nationkey, n.n_name, keepN
         FROM nation n
@@ -1497,10 +1646,28 @@ def test_entity_scoped_between_constraint(packdb_cli):
     result, cols = packdb_cli.execute(sql)
     assert len(result) > 0
 
+    raw = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT)
+        FROM nation n WHERE n.n_regionkey = 0
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in raw)
+
+    oracle_solver.create_model("entity_scoped_between")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+    sum_coeffs = {vnames[nk]: 1.0 for nk in nation_ids}
+    oracle_solver.add_constraint(sum_coeffs, ">=", 2.0, name="between_lo")
+    oracle_solver.add_constraint(sum_coeffs, "<=", 4.0, name="between_hi")
+    oracle_solver.set_objective(sum_coeffs, ObjSense.MAXIMIZE)
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
     keepN_idx = cols.index("keepN")
-    total = sum(int(row[keepN_idx]) for row in result)
-    assert 2 <= total <= 4, \
-        f"BETWEEN constraint violated: SUM(keepN) = {total}, expected 2..4"
+    packdb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1715,13 +1882,10 @@ def test_entity_scoped_when_entity_invisible(packdb_cli, duckdb_conn, oracle_sol
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_equality_constraint(packdb_cli):
-    """SUM(keepN) = K with entity-scoped variable.
-
-    Exact equality constraint forces precisely K nations to be selected.
-    Tests that equality constraint with entity-scoped coefficient assembly
-    produces the correct solution.
-    """
+def test_entity_scoped_equality_constraint(
+    packdb_cli, duckdb_conn, oracle_solver,
+):
+    """SUM(keepN) = K with entity-scoped variable — oracle-compared."""
     sql = """
         SELECT n.n_nationkey, n.n_name, keepN
         FROM nation n
@@ -1733,10 +1897,27 @@ def test_entity_scoped_equality_constraint(packdb_cli):
     result, cols = packdb_cli.execute(sql)
     assert len(result) > 0
 
+    raw = duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT)
+        FROM nation n WHERE n.n_regionkey = 0
+    """).fetchall()
+    nation_ids = sorted(int(r[0]) for r in raw)
+
+    oracle_solver.create_model("entity_scoped_equality")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
+    sum_coeffs = {vnames[nk]: 1.0 for nk in nation_ids}
+    oracle_solver.add_constraint(sum_coeffs, "=", 3.0, name="eq")
+    oracle_solver.set_objective(sum_coeffs, ObjSense.MAXIMIZE)
+    res = oracle_solver.solve()
+    assert res.status == SolverStatus.OPTIMAL
+
     keepN_idx = cols.index("keepN")
-    total = sum(int(row[keepN_idx]) for row in result)
-    assert total == 3, \
-        f"Equality constraint violated: SUM(keepN) = {total}, expected 3"
+    packdb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    )
 
 
 # ---------------------------------------------------------------------------

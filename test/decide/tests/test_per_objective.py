@@ -1,609 +1,1052 @@
 """Tests for PER on objective with nested aggregate syntax.
 
-Covers:
-  Semantically-same (SUM — PER is a no-op):
-  - test_sum_per_noop: SUM(x * cost) PER col = SUM(x * cost)
-  - test_sum_sum_per_noop: SUM(SUM(x * cost)) PER col = SUM(x * cost)
+The two-level ILP formulation (per PackDB docs):
+  INNER creates per-group auxiliary variables; OUTER creates a global
+  auxiliary. Easy / hard classification applies at each level independently.
 
-  Semantically-different — inner MIN/MAX with outer SUM:
-  - test_minimize_sum_max_per: MINIMIZE SUM(MAX(x * cost)) PER col (easy inner)
-  - test_maximize_sum_min_per: MAXIMIZE SUM(MIN(x * cost)) PER col (easy inner)
-  - test_maximize_sum_max_per: MAXIMIZE SUM(MAX(x * cost)) PER col (hard inner)
-  - test_minimize_sum_min_per: MINIMIZE SUM(MIN(x * cost)) PER col (hard inner)
+  - SUM/AVG as outer (over groups) is always easy — linear sum of auxiliaries.
+    AVG as outer divides by a constant ``G`` (number of groups) and is
+    equivalent to SUM for argmax/argmin.
+  - MIN/MAX as outer splits into easy (``MIN MAX SUM`` / ``MAX MIN SUM``) and
+    hard (``MAX MAX SUM`` / ``MIN MIN SUM``) cases.
+  - MIN/MAX as inner splits similarly: easy when the inner aggregate is
+    bounded in the direction optimization naturally tightens, hard
+    otherwise (needs Gurobi indicators).
+  - AVG as inner scales per-row coefficients by ``1 / n_g`` — NOT equivalent
+    to SUM when groups differ in size.
 
-  Semantically-different — inner SUM with outer MIN/MAX:
-  - test_minimize_max_sum_per: MINIMIZE MAX(SUM(x * cost)) PER col (easy outer)
-  - test_maximize_min_sum_per: MAXIMIZE MIN(SUM(x * cost)) PER col (easy outer)
-
-  WHEN + PER composition:
-  - test_sum_max_when_per: SUM(MAX(expr)) WHEN cond PER col
-
-  Edge cases:
-  - test_single_group: all rows same PER value → matches non-PER
-  - test_null_per_values: NULL PER values excluded
-
-  Error cases:
-  - test_flat_max_per_error: MAX(x * cost) PER col → error
-  - test_flat_min_per_error: MIN(x * cost) PER col → error
+Every correctness case below builds the same two-level model in gurobipy and
+compares PackDB's nested-aggregate objective (evaluated on its own output)
+against the oracle's ``objective_value``.
 """
+
+import time
+from collections import defaultdict
 
 import pytest
 
+from solver.types import VarType, ObjSense
+from comparison.compare import compare_solutions
+from ._oracle_helpers import (
+    group_indices,
+    emit_inner_max, emit_inner_min,
+    emit_hard_inner_max, emit_hard_inner_min,
+)
 
-# ============================================================================
-# Semantically-Same Tests (SUM — PER is a no-op)
-# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Utilities for evaluating nested-aggregate objectives on PackDB output
+# ---------------------------------------------------------------------------
+
+def _per_group_selected(rows, cols, per_col, expr_fn, x_col="x"):
+    """Group rows by ``per_col``. For each group, collect expr_fn(row)
+    values across rows where the decision variable ``x_col`` is selected
+    (> 0.5). Returns ``{group_key: [values]}``."""
+    xi = cols.index(x_col)
+    pi = cols.index(per_col)
+    out: dict = defaultdict(list)
+    for r in rows:
+        if float(r[xi]) > 0.5:
+            out[r[pi]].append(float(expr_fn(r)))
+    return out
+
+
+def _per_group_values_if_selected(rows, cols, per_col, expr_fn, x_col="x"):
+    """Like ``_per_group_selected`` but includes ``0.0`` for unselected rows,
+    so ``max(...)`` reflects ``MAX(x * expr)`` semantics (unselected ⇒ 0)."""
+    xi = cols.index(x_col)
+    pi = cols.index(per_col)
+    out: dict = defaultdict(list)
+    for r in rows:
+        v = float(expr_fn(r)) if float(r[xi]) > 0.5 else 0.0
+        out[r[pi]].append(v)
+    return out
+
+
+# ===========================================================================
+# SUM + PER = no-op
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
-def test_sum_per_noop(packdb_cli):
-    """SUM(x * cost) PER col should give same result as without PER."""
-    # Without PER
-    result_no_per, cols = packdb_cli.execute("""
-        SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) >= 3
-        MINIMIZE SUM(x * s_acctbal)
-    """)
-
-    # With PER (should be identical)
-    result_per, _ = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """SUM(x * cost) PER col ≡ SUM(x * cost)."""
+    sql_per = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 3
         MINIMIZE SUM(x * s_acctbal) PER s_nationkey
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql_per)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    obj_no_per = sum(int(r[ci["x"]]) * float(r[ci["s_acctbal"]]) for r in result_no_per)
-    obj_per = sum(int(r[ci["x"]]) * float(r[ci["s_acctbal"]]) for r in result_per)
+    data = duckdb_conn.execute("""
+        SELECT CAST(s_suppkey AS BIGINT),
+               CAST(s_nationkey AS BIGINT),
+               CAST(s_acctbal AS DOUBLE)
+        FROM supplier WHERE s_nationkey < 5
+    """).fetchall()
+    n = len(data)
 
-    assert abs(obj_no_per - obj_per) < 0.01, (
-        f"SUM PER should be no-op: without={obj_no_per:.2f}, with={obj_per:.2f}"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_per_noop")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 3.0, name="total")
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[cols.index("s_acctbal")])},
+    )
+    perf_tracker.record(
+        "sum_per_noop", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.obj_maximize
-def test_sum_sum_per_noop(packdb_cli):
-    """SUM(SUM(x * cost)) PER col = SUM(x * cost) — explicit nested, still no-op."""
-    result_flat, cols = packdb_cli.execute("""
-        SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) >= 3
-        MAXIMIZE SUM(x * s_acctbal)
-    """)
-
-    result_nested, _ = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_sum_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """SUM(SUM(x * cost)) PER col — nested SUMs cancel to flat SUM."""
+    sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 3
         MAXIMIZE SUM(SUM(x * s_acctbal)) PER s_nationkey
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    obj_flat = sum(int(r[ci["x"]]) * float(r[ci["s_acctbal"]]) for r in result_flat)
-    obj_nested = sum(int(r[ci["x"]]) * float(r[ci["s_acctbal"]]) for r in result_nested)
+    data = duckdb_conn.execute("""
+        SELECT CAST(s_suppkey AS BIGINT),
+               CAST(s_nationkey AS BIGINT),
+               CAST(s_acctbal AS DOUBLE)
+        FROM supplier WHERE s_nationkey < 5
+    """).fetchall()
+    n = len(data)
 
-    assert abs(obj_flat - obj_nested) < 0.01, (
-        f"SUM(SUM) PER should be no-op: flat={obj_flat:.2f}, nested={obj_nested:.2f}"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_sum_per_noop")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 3.0, name="total")
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[cols.index("s_acctbal")])},
+    )
+    perf_tracker.record(
+        "sum_sum_per_noop", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
-# ============================================================================
-# Semantically-Different Tests — Inner MIN/MAX with Outer SUM
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Common plumbing for nested-aggregate oracle construction on lineitem data
+# ---------------------------------------------------------------------------
+
+def _fetch_lineitem_nested(duckdb_conn, where):
+    return duckdb_conn.execute(f"""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE),
+               CAST(l_returnflag AS VARCHAR)
+        FROM lineitem WHERE {where}
+    """).fetchall()
+
+
+def _group_rows(data, key_idx):
+    g: dict = defaultdict(list)
+    for i, row in enumerate(data):
+        g[row[key_idx]].append(i)
+    return g
+
+
+# ===========================================================================
+# SUM(MAX(expr)) PER col — inner MAX
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
-def test_minimize_sum_max_per(packdb_cli):
-    """MINIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag — easy inner case.
-
-    Each group's MAX is independently minimized, then summed.
-    With decoupled constraints (all PER same col), equivalent to independent per-group optimization.
-    """
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_minimize_sum_max_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(MAX(x * qty)) PER flag — easy inner MAX."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MINIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    # Verify: each group has at least 1 selected
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = {"selected": [], "all_qty": []}
-        groups[flag]["all_qty"].append(qty)
-        if x_val == 1:
-            groups[flag]["selected"].append(qty)
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
+    n = len(data)
+    groups = _group_rows(data, 3)
 
-    for flag, g in groups.items():
-        assert len(g["selected"]) >= 1, f"Group {flag}: SUM(x) >= 1 violated"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("min_sum_max_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{flag}",
+        )
+    # Inner MAX auxiliaries per group (easy case: MINIMIZE over SUM(z_g)
+    # naturally pushes z_g *down* toward max of row terms)
+    z_names = []
+    for flag, idxs in groups.items():
+        z = emit_inner_max(
+            oracle_solver,
+            name_prefix=f"max_{flag}",
+            row_coeffs=[{vnames[i]: data[i][2]} for i in idxs],
+            row_ub=max(data[i][2] for i in idxs) + 1.0,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    # The objective is sum of per-group maxima of selected quantities
-    total_max = sum(max(g["selected"]) for g in groups.values() if g["selected"])
-    # Since we minimize, each group should pick the row with smallest quantity
-    # (since MAX of a single selection = that value, and we want to minimize it)
-    for flag, g in groups.items():
-        if len(g["selected"]) == 1:
-            # With only 1 required, the optimal picks the minimum-quantity row
-            assert g["selected"][0] == min(g["all_qty"]), (
-                f"Group {flag}: should pick min qty row, got {g['selected'][0]}, "
-                f"min available = {min(g['all_qty'])}"
-            )
+    def packdb_obj(rs, cs):
+        gs = _per_group_values_if_selected(
+            rs, cs, "l_returnflag",
+            lambda r: r[cs.index("l_quantity")],
+        )
+        return sum(max(v) if v else 0.0 for v in gs.values())
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "minimize_sum_max_per", packdb_time, build_time,
+        result.solve_time_seconds, n, n + len(groups), len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
-def test_maximize_sum_min_per(packdb_cli):
-    """MAXIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag — easy inner case.
-
-    Each group's MIN is independently maximized, then summed.
-    """
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_maximize_sum_min_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE SUM(MIN(x * qty)) PER flag — easy inner MIN."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MAXIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = {"selected": [], "all_qty": []}
-        groups[flag]["all_qty"].append(qty)
-        if x_val == 1:
-            groups[flag]["selected"].append(qty)
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
+    n = len(data)
+    groups = _group_rows(data, 3)
 
-    for flag, g in groups.items():
-        assert len(g["selected"]) >= 1, f"Group {flag}: SUM(x) >= 1 violated"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_sum_min_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        z = emit_inner_min(
+            oracle_solver,
+            name_prefix=f"min_{flag}",
+            row_coeffs=[{vnames[i]: data[i][2]} for i in idxs],
+            row_ub=max(data[i][2] for i in idxs) + 1.0,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    # MAXIMIZE MIN: each group should pick the row with max quantity
-    # (MIN of a single selection = that value, maximize it → pick largest)
-    for flag, g in groups.items():
-        if len(g["selected"]) == 1:
-            assert g["selected"][0] == max(g["all_qty"]), (
-                f"Group {flag}: should pick max qty row, got {g['selected'][0]}, "
-                f"max available = {max(g['all_qty'])}"
-            )
+    def packdb_obj(rs, cs):
+        gs = _per_group_values_if_selected(
+            rs, cs, "l_returnflag",
+            lambda r: r[cs.index("l_quantity")],
+        )
+        return sum(min(v) if v else 0.0 for v in gs.values())
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "maximize_sum_min_per", packdb_time, build_time,
+        result.solve_time_seconds, n, n + len(groups), len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
-def test_maximize_sum_max_per(packdb_cli):
-    """MAXIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag — hard inner case.
-
-    Requires Big-M indicators per group.
-    """
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_maximize_sum_max_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE SUM(MAX(x * qty)) PER flag — hard inner MAX (needs indicators)."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER l_returnflag
             AND SUM(x) <= 3 PER l_returnflag
         MAXIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = {"selected": []}
-        if x_val == 1:
-            groups[flag]["selected"].append(qty)
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
+    n = len(data)
+    groups = _group_rows(data, 3)
 
-    for flag, g in groups.items():
-        assert 1 <= len(g["selected"]) <= 3, (
-            f"Group {flag}: expected 1-3 selected, got {len(g['selected'])}"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_sum_max_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{flag}",
         )
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, "<=", 3.0, name=f"sum_le_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        z = emit_hard_inner_max(
+            oracle_solver,
+            name_prefix=f"hmax_{flag}",
+            row_coeffs=[{vnames[i]: data[i][2]} for i in idxs],
+            row_ub=max(data[i][2] for i in idxs) + 1.0,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    # MAXIMIZE MAX per group: each group should include the largest quantity row
-    # and the objective = sum of per-group maxima
-    total = sum(max(g["selected"]) for g in groups.values() if g["selected"])
-    assert total > 0, "Objective should be positive"
+    def packdb_obj(rs, cs):
+        gs = _per_group_values_if_selected(
+            rs, cs, "l_returnflag",
+            lambda r: r[cs.index("l_quantity")],
+        )
+        return sum(max(v) if v else 0.0 for v in gs.values())
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "maximize_sum_max_per", packdb_time, build_time,
+        result.solve_time_seconds, n, 2 * n + len(groups), 2 * len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
-def test_minimize_sum_min_per(packdb_cli):
-    """MINIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag — hard inner case."""
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_minimize_sum_min_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(MIN(x * qty)) PER flag — hard inner MIN."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER l_returnflag
             AND SUM(x) <= 3 PER l_returnflag
         MINIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = {"selected": []}
-        if x_val == 1:
-            groups[flag]["selected"].append(qty)
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
+    n = len(data)
+    groups = _group_rows(data, 3)
 
-    for flag, g in groups.items():
-        assert 1 <= len(g["selected"]) <= 3
+    t_build = time.perf_counter()
+    oracle_solver.create_model("min_sum_min_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{flag}",
+        )
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, "<=", 3.0, name=f"sum_le_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        z = emit_hard_inner_min(
+            oracle_solver,
+            name_prefix=f"hmin_{flag}",
+            row_coeffs=[{vnames[i]: data[i][2]} for i in idxs],
+            row_ub=max(data[i][2] for i in idxs) + 1.0,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    # MINIMIZE MIN per group: each group's min of selected should be as small as possible
-    total = sum(min(g["selected"]) for g in groups.values() if g["selected"])
-    assert total >= 0, "Total should be non-negative (quantities are positive)"
+    def packdb_obj(rs, cs):
+        gs = _per_group_values_if_selected(
+            rs, cs, "l_returnflag",
+            lambda r: r[cs.index("l_quantity")],
+        )
+        return sum(min(v) if v else 0.0 for v in gs.values())
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "minimize_sum_min_per", packdb_time, build_time,
+        result.solve_time_seconds, n, 2 * n + len(groups), 2 * len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
-# ============================================================================
-# Semantically-Different Tests — Inner SUM with Outer MIN/MAX
-# ============================================================================
+# ===========================================================================
+# MIN/MAX(SUM(expr)) PER col — easy outer
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
-def test_minimize_max_sum_per(packdb_cli):
-    """MINIMIZE MAX(SUM(x * l_quantity)) PER l_returnflag — easy outer.
-
-    Minimize the worst group's total quantity.
-    """
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_minimize_max_sum_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE MAX(SUM(x * qty)) PER flag — easy outer MAX over per-group SUMs."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MINIMIZE MAX(SUM(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = 0.0
-        if x_val == 1:
-            groups[flag] += qty
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
+    qty_sum_all = sum(r[2] for r in data) + 1.0
 
-    group_sums = list(groups.values())
-    worst = max(group_sums)
-    # The objective minimizes the max group sum
-    # Verify all group sums are <= worst (trivially true) and worst is reasonable
-    assert worst > 0
+    t_build = time.perf_counter()
+    oracle_solver.create_model("min_max_sum_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 2.0, name=f"sum_ge_{flag}",
+        )
+    # w >= SUM(qty_i * x_i) for each group
+    oracle_solver.add_variable("w", VarType.CONTINUOUS, lb=0.0, ub=qty_sum_all)
+    for flag, idxs in groups.items():
+        link = {vnames[i]: data[i][2] for i in idxs}
+        link["w"] = -1.0
+        oracle_solver.add_constraint(link, "<=", 0.0, name=f"w_ge_{flag}")
+    oracle_solver.set_objective({"w": 1.0}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj(rs, cs):
+        gs = _per_group_values_if_selected(
+            rs, cs, "l_returnflag",
+            lambda r: r[cs.index("l_quantity")],
+        )
+        return max((sum(v) for v in gs.values()), default=0.0)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "minimize_max_sum_per", packdb_time, build_time,
+        result.solve_time_seconds, n, n + 1, len(groups) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
-def test_maximize_min_sum_per(packdb_cli):
-    """MAXIMIZE MIN(SUM(x * l_quantity)) PER l_returnflag — easy outer.
-
-    Maximize the best (worst) group's total — make the weakest group as strong as possible.
-    """
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_maximize_min_sum_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE MIN(SUM(x * qty)) PER flag — easy outer MIN over per-group SUMs."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MAXIMIZE MIN(SUM(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = 0.0
-        if x_val == 1:
-            groups[flag] += qty
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
+    qty_sum_all = sum(r[2] for r in data) + 1.0
 
-    group_sums = list(groups.values())
-    best_worst = min(group_sums)
-    assert best_worst > 0
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_min_sum_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 2.0, name=f"sum_ge_{flag}",
+        )
+    oracle_solver.add_variable("w", VarType.CONTINUOUS, lb=0.0, ub=qty_sum_all)
+    for flag, idxs in groups.items():
+        link = {vnames[i]: data[i][2] for i in idxs}
+        link["w"] = -1.0
+        oracle_solver.add_constraint(link, ">=", 0.0, name=f"w_le_{flag}")
+    oracle_solver.set_objective({"w": 1.0}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj(rs, cs):
+        gs = _per_group_values_if_selected(
+            rs, cs, "l_returnflag",
+            lambda r: r[cs.index("l_quantity")],
+        )
+        return min((sum(v) for v in gs.values()), default=0.0)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "maximize_min_sum_per", packdb_time, build_time,
+        result.solve_time_seconds, n, n + 1, len(groups) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
-# ============================================================================
-# WHEN + PER Composition
-# ============================================================================
+# ===========================================================================
+# WHEN + nested aggregate
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 @pytest.mark.min_max
-def test_sum_max_when_per(packdb_cli):
-    """SUM(MAX(x * l_quantity)) WHEN cond PER col — WHEN filters, then PER groups."""
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_sum_max_when_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(MAX(x * qty)) WHEN qty>10 PER flag — WHEN filters each group."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MINIMIZE SUM(MAX(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    # Verify constraints satisfied
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        if flag not in groups:
-            groups[flag] = 0
-        if x_val == 1:
-            groups[flag] += 1
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
 
-    for flag, count in groups.items():
-        assert count >= 1, f"Group {flag}: SUM(x) >= 1 violated"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_max_when_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        qualifying = [i for i in idxs if data[i][2] > 10]
+        if not qualifying:
+            # Empty after WHEN — inner MAX of empty set is undefined but the
+            # default-PER semantics skips empty groups entirely (no contribution).
+            continue
+        z = emit_inner_max(
+            oracle_solver,
+            name_prefix=f"max_{flag}",
+            row_coeffs=[{vnames[i]: data[i][2]} for i in qualifying],
+            row_ub=max(data[i][2] for i in qualifying) + 1.0,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
+        gs: dict = defaultdict(list)
+        for r in rs:
+            if float(r[qi]) > 10:
+                gs[r[fi]].append(float(r[qi]) if float(r[xi]) > 0.5 else 0.0)
+        return sum(max(v) if v else 0.0 for v in gs.values())
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "sum_max_when_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n + len(z_names), len(groups) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
-# ============================================================================
-# Edge Cases
-# ============================================================================
+# ===========================================================================
+# Single PER group = flat aggregate
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
-def test_single_group(packdb_cli):
-    """All rows in same PER group → should match non-PER result."""
-    # Non-PER
-    result_no_per, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_single_group(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """All rows share one PER key ⇒ SUM(MAX(...)) PER col === MAX(x*qty)."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey = 1
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 2
         MINIMIZE SUM(MAX(x * l_quantity)) PER l_orderkey
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    # Equivalent non-PER (all rows have l_orderkey=1, so one group)
-    result_flat, _ = packdb_cli.execute("""
-        SELECT l_orderkey, l_linenumber, l_quantity, x
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT), CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE)
         FROM lineitem WHERE l_orderkey = 1
-        DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) >= 2
-        MINIMIZE MAX(x * l_quantity)
-    """)
+    """).fetchall()
+    n = len(data)
 
-    ci = {name: i for i, name in enumerate(cols)}
-    max_per = max(int(r[ci["x"]]) * float(r[ci["l_quantity"]]) for r in result_no_per)
-    max_flat = max(int(r[ci["x"]]) * float(r[ci["l_quantity"]]) for r in result_flat)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("single_group")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 2.0, name="total")
+    z = emit_inner_max(
+        oracle_solver,
+        name_prefix="max",
+        row_coeffs=[{vnames[i]: data[i][2]} for i in range(n)],
+        row_ub=max(r[2] for r in data) + 1.0,
+    )
+    oracle_solver.set_objective({z: 1.0}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    assert abs(max_per - max_flat) < 0.01, (
-        f"Single group should match flat: PER={max_per:.2f}, flat={max_flat:.2f}"
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); qi = cs.index("l_quantity")
+        vals = [float(r[qi]) if float(r[xi]) > 0.5 else 0.0 for r in rs]
+        return max(vals) if vals else 0.0
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "single_group", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 1, 2, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
-# ============================================================================
-# AVG as Inner Aggregate
-# ============================================================================
+# ===========================================================================
+# AVG as inner / outer
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
-def test_sum_avg_per_unequal_groups(packdb_cli):
-    """SUM(AVG(x * cost)) PER col with unequal group sizes.
-
-    This is the critical correctness test: AVG scales each group's contribution
-    by 1/n_g, so groups with fewer rows get proportionally more weight per row.
-    The optimal solution should differ from SUM(SUM(x * cost)) PER col (= global SUM).
-    """
-    # SUM(AVG(...)) PER — each nation's average acctbal contributes equally
-    result_avg, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_sum_avg_per_unequal_groups(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """SUM(AVG(x*cost)) PER col — inner AVG scales coeffs by 1/n_g per group."""
+    sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER s_nationkey
         MINIMIZE SUM(AVG(x * s_acctbal)) PER s_nationkey
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
+    data = duckdb_conn.execute("""
+        SELECT CAST(s_suppkey AS BIGINT),
+               CAST(s_nationkey AS BIGINT),
+               CAST(s_acctbal AS DOUBLE)
+        FROM supplier WHERE s_nationkey < 5
+    """).fetchall()
+    n = len(data)
+    groups = group_indices(data, lambda r: r[1])
 
-    # Compute per-group averages from the AVG-optimized result
-    avg_groups = {}
-    for r in result_avg:
-        nation = r[ci["s_nationkey"]]
-        x_val = int(r[ci["x"]])
-        acctbal = float(r[ci["s_acctbal"]])
-        if nation not in avg_groups:
-            avg_groups[nation] = {"sum_xc": 0.0, "n": 0}
-        avg_groups[nation]["n"] += 1
-        avg_groups[nation]["sum_xc"] += x_val * acctbal
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_avg_per_unequal")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for key, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{key}",
+        )
+    # Inner AVG scales coefficients by 1/n_g; outer SUM is linear.
+    obj = {}
+    for key, idxs in groups.items():
+        n_g = len(idxs)
+        for i in idxs:
+            obj[vnames[i]] = data[i][2] / n_g
+    oracle_solver.set_objective(obj, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    obj_avg = sum(g["sum_xc"] / g["n"] for g in avg_groups.values())
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); ni = cs.index("s_nationkey"); ai = cs.index("s_acctbal")
+        g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
+        for r in rs:
+            g[r[ni]]["n"] += 1
+            if float(r[xi]) > 0.5:
+                g[r[ni]]["sum"] += float(r[ai])
+        return sum(v["sum"] / v["n"] for v in g.values())
 
-    # Verify constraints: at least 1 selected per nation
-    for nation, g in avg_groups.items():
-        selected = sum(1 for r in result_avg
-                       if r[ci["s_nationkey"]] == nation and int(r[ci["x"]]) == 1)
-        assert selected >= 1, f"Nation {nation}: SUM(x) >= 1 violated"
-
-    # Now run global SUM to get a different optimal
-    result_sum, _ = packdb_cli.execute("""
-        SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) >= 1 PER s_nationkey
-        MINIMIZE SUM(x * s_acctbal)
-    """)
-
-    # Compute what SUM(AVG) would be for the SUM-optimal solution
-    sum_groups = {}
-    for r in result_sum:
-        nation = r[ci["s_nationkey"]]
-        x_val = int(r[ci["x"]])
-        acctbal = float(r[ci["s_acctbal"]])
-        if nation not in sum_groups:
-            sum_groups[nation] = {"sum_xc": 0.0, "n": 0}
-        sum_groups[nation]["n"] += 1
-        sum_groups[nation]["sum_xc"] += x_val * acctbal
-
-    obj_avg_from_sum = sum(g["sum_xc"] / g["n"] for g in sum_groups.values())
-
-    # The AVG-optimized solution should be <= the SUM-optimized solution
-    # evaluated under the AVG objective (since we're minimizing)
-    assert obj_avg <= obj_avg_from_sum + 0.01, (
-        f"AVG-optimized ({obj_avg:.4f}) should be <= SUM-optimized evaluated as AVG ({obj_avg_from_sum:.4f})"
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "sum_avg_per_unequal_groups", packdb_time, build_time,
+        result.solve_time_seconds, n, n, len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
-def test_avg_sum_per_noop(packdb_cli):
-    """AVG(SUM(x * cost)) PER col should give same result as SUM(SUM(...)) PER col.
-
-    Outer AVG is equivalent to outer SUM for optimization (divides by constant G).
-    """
-    result_avg_outer, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_avg_sum_per_noop(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(SUM(x*cost)) PER col — outer AVG divides by constant G ⇒ argmin matches SUM."""
+    sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 3
         MINIMIZE AVG(SUM(x * s_acctbal)) PER s_nationkey
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    result_sum_outer, _ = packdb_cli.execute("""
-        SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x) >= 3
-        MINIMIZE SUM(x * s_acctbal)
-    """)
+    data = duckdb_conn.execute("""
+        SELECT CAST(s_suppkey AS BIGINT),
+               CAST(s_nationkey AS BIGINT),
+               CAST(s_acctbal AS DOUBLE)
+        FROM supplier WHERE s_nationkey < 5
+    """).fetchall()
+    n = len(data)
+    groups = group_indices(data, lambda r: r[1])
+    G = len(groups)
 
-    ci = {name: i for i, name in enumerate(cols)}
-    obj_avg = sum(int(r[ci["x"]]) * float(r[ci["s_acctbal"]]) for r in result_avg_outer)
-    obj_sum = sum(int(r[ci["x"]]) * float(r[ci["s_acctbal"]]) for r in result_sum_outer)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_sum_per_noop")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 3.0, name="total")
+    # AVG outer over G groups ⇒ SUM(x*acctbal) / G. The 1/G factor is absorbed
+    # into each coefficient so the reported ``objective_value`` matches PackDB.
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][2] / G for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    assert abs(obj_avg - obj_sum) < 0.01, (
-        f"AVG(SUM) PER should match SUM: avg_outer={obj_avg:.2f}, sum={obj_sum:.2f}"
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); ni = cs.index("s_nationkey"); ai = cs.index("s_acctbal")
+        g: dict = defaultdict(float)
+        for r in rs:
+            if float(r[xi]) > 0.5:
+                g[r[ni]] += float(r[ai])
+        return sum(g.values()) / G
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "avg_sum_per_noop", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 1, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_minimize
-def test_minimize_max_avg_per(packdb_cli):
-    """MINIMIZE MAX(AVG(x * cost)) PER col — inner AVG with outer MIN/MAX (easy outer)."""
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_minimize_max_avg_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE MAX(AVG(x*qty)) PER flag — easy outer MAX, inner AVG."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MINIMIZE MAX(AVG(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = {"sum_xq": 0.0, "n": 0}
-        groups[flag]["n"] += 1
-        groups[flag]["sum_xq"] += x_val * qty
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
+    qty_sum_all = sum(r[2] for r in data) + 1.0
 
-    # Verify constraints: at least 2 per group
-    for flag, g in groups.items():
-        selected = sum(1 for r in result
-                       if r[ci["l_returnflag"]] == flag and int(r[ci["x"]]) == 1)
-        assert selected >= 2, f"Group {flag}: SUM(x) >= 2 violated"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("min_max_avg_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 2.0, name=f"sum_ge_{flag}",
+        )
+    oracle_solver.add_variable("w", VarType.CONTINUOUS, lb=0.0, ub=qty_sum_all)
+    for flag, idxs in groups.items():
+        n_g = len(idxs)
+        link = {vnames[i]: data[i][2] / n_g for i in idxs}
+        link["w"] = -1.0
+        oracle_solver.add_constraint(link, "<=", 0.0, name=f"w_ge_avg_{flag}")
+    oracle_solver.set_objective({"w": 1.0}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    # Objective is MAX of per-group averages
-    group_avgs = [g["sum_xq"] / g["n"] for g in groups.values()]
-    worst_avg = max(group_avgs)
-    assert worst_avg >= 0, "Objective should be non-negative"
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
+        g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
+        for r in rs:
+            g[r[fi]]["n"] += 1
+            if float(r[xi]) > 0.5:
+                g[r[fi]]["sum"] += float(r[qi])
+        return max((v["sum"] / v["n"] for v in g.values()), default=0.0)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "minimize_max_avg_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 1, len(groups) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
-def test_maximize_min_avg_per(packdb_cli):
-    """MAXIMIZE MIN(AVG(x * cost)) PER col — inner AVG with outer MIN/MAX (easy outer)."""
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_maximize_min_avg_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE MIN(AVG(x*qty)) PER flag — easy outer MIN, inner AVG."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MAXIMIZE MIN(AVG(x * l_quantity)) PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        qty = float(r[ci["l_quantity"]])
-        if flag not in groups:
-            groups[flag] = {"sum_xq": 0.0, "n": 0}
-        groups[flag]["n"] += 1
-        groups[flag]["sum_xq"] += x_val * qty
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
+    qty_sum_all = sum(r[2] for r in data) + 1.0
 
-    for flag, g in groups.items():
-        selected = sum(1 for r in result
-                       if r[ci["l_returnflag"]] == flag and int(r[ci["x"]]) == 1)
-        assert selected >= 2, f"Group {flag}: SUM(x) >= 2 violated"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_min_avg_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 2.0, name=f"sum_ge_{flag}",
+        )
+    oracle_solver.add_variable("w", VarType.CONTINUOUS, lb=0.0, ub=qty_sum_all)
+    for flag, idxs in groups.items():
+        n_g = len(idxs)
+        link = {vnames[i]: data[i][2] / n_g for i in idxs}
+        link["w"] = -1.0
+        oracle_solver.add_constraint(link, ">=", 0.0, name=f"w_le_avg_{flag}")
+    oracle_solver.set_objective({"w": 1.0}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
 
-    group_avgs = [g["sum_xq"] / g["n"] for g in groups.values()]
-    best_worst = min(group_avgs)
-    assert best_worst >= 0, "Objective should be non-negative"
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
+        g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
+        for r in rs:
+            g[r[fi]]["n"] += 1
+            if float(r[xi]) > 0.5:
+                g[r[fi]]["sum"] += float(r[qi])
+        return min((v["sum"] / v["n"] for v in g.values()), default=0.0)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "maximize_min_avg_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 1, len(groups) + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 @pytest.mark.obj_minimize
-def test_sum_avg_when_per(packdb_cli):
-    """SUM(AVG(x * cost)) WHEN cond PER col — WHEN filters rows before AVG grouping."""
-    result, cols = packdb_cli.execute("""
+@pytest.mark.correctness
+def test_sum_avg_when_per(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(AVG(x*qty)) WHEN qty>10 PER flag — WHEN filters each group's AVG."""
+    sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MINIMIZE SUM(AVG(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
-    """)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(cols)}
-    # Verify constraints satisfied
-    groups = {}
-    for r in result:
-        flag = r[ci["l_returnflag"]]
-        x_val = int(r[ci["x"]])
-        if flag not in groups:
-            groups[flag] = 0
-        if x_val == 1:
-            groups[flag] += 1
+    data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
+    n = len(data)
+    groups = _group_rows(data, 3)
 
-    for flag, count in groups.items():
-        assert count >= 1, f"Group {flag}: SUM(x) >= 1 violated"
+    t_build = time.perf_counter()
+    oracle_solver.create_model("sum_avg_when_per")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{flag}",
+        )
+    obj: dict = {}
+    for flag, idxs in groups.items():
+        qualifying = [i for i in idxs if data[i][2] > 10]
+        if not qualifying:
+            continue
+        n_qual = len(qualifying)
+        for i in qualifying:
+            obj[vnames[i]] = obj.get(vnames[i], 0.0) + data[i][2] / n_qual
+    oracle_solver.set_objective(obj, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
+        g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
+        for r in rs:
+            if float(r[qi]) > 10:
+                g[r[fi]]["n"] += 1
+                if float(r[xi]) > 0.5:
+                    g[r[fi]]["sum"] += float(r[qi])
+        return sum(v["sum"] / v["n"] for v in g.values() if v["n"] > 0)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "sum_avg_when_per", packdb_time, build_time, result.solve_time_seconds,
+        n, n, len(groups), result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
 
 
-# ============================================================================
-# Error Cases
-# ============================================================================
+# ===========================================================================
+# Error cases — no oracle (PackDB is expected to reject these)
+# ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 def test_flat_max_per_error(packdb_cli):
-    """MAX(x * cost) PER col without outer aggregate should error."""
+    """MAX(x * cost) PER col without outer aggregate is ambiguous ⇒ error."""
     with pytest.raises(Exception, match="ambiguous|nested aggregate"):
         packdb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
@@ -617,7 +1060,7 @@ def test_flat_max_per_error(packdb_cli):
 @pytest.mark.per_clause
 @pytest.mark.min_max
 def test_flat_min_per_error(packdb_cli):
-    """MIN(x * cost) PER col without outer aggregate should error."""
+    """MIN(x * cost) PER col without outer aggregate ⇒ error."""
     with pytest.raises(Exception, match="ambiguous|nested aggregate"):
         packdb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
