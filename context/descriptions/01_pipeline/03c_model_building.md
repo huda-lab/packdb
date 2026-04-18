@@ -25,7 +25,7 @@ Block 3: Global auxiliary variables    [block2_end, block2_end + num_aux_globals
 
 **Block 2 (Entity-scoped)**: Table-scoped variables that share a solver variable across rows belonging to the same entity. Each entity-scoped variable gets `num_entities` solver variables (one per unique entity). Indexed as `entity_var_base[var_idx] + entity_id`, where `entity_id` comes from the `EntityMapping::row_to_entity` vector.
 
-**Block 3 (Global auxiliaries)**: Auxiliary variables that exist once globally (COUNT indicators, ABS linearization auxiliaries, MIN/MAX auxiliary variables). These receive `INVALID_INDEX` as their scope marker during optimizer processing, signaling row-scoped treatment.
+**Block 3 (Global auxiliaries)**: Auxiliary variables that exist once globally (ABS linearization auxiliaries, MIN/MAX auxiliary variables). These receive `INVALID_INDEX` as their scope marker during optimizer processing, signaling row-scoped treatment.
 
 The `VarIndexer` provides two key methods:
 - **`VarIndexer::Get(var_idx, row)`**: Returns the solver variable index for a given DECIDE variable and row. For row-scoped variables, this computes `row * num_row_vars + offset`. For entity-scoped variables, this looks up `row_to_entity[row]` and returns `entity_var_base[var_idx] + entity_id`.

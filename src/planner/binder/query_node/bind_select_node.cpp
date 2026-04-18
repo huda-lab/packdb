@@ -412,11 +412,6 @@ void Binder::BindWhereStarExpression(unique_ptr<ParsedExpression> &expr) {
 	}
 }
 
-// COUNT(x) rewrite is now handled by DecideOptimizer::RewriteCountToSum (post-binding).
-// The binder recognizes COUNT as a valid aggregate (via GetExpressionType) and binds it
-// into a BoundAggregateExpression. The optimizer then rewrites COUNT → SUM with indicator
-// variable creation for INTEGER variables.
-
 // Check if a parsed expression references any DECIDE variable.
 static bool ReferencesDecideVariable(ParsedExpression &expr,
                                      const case_insensitive_map_t<idx_t> &variables) {
@@ -755,10 +750,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         // Capture user var count BEFORE any rewrites that add auxiliary variables
         idx_t num_user_vars = var_names.size();
 
-        // COUNT(x) rewrite is handled by DecideOptimizer::RewriteCountToSum (post-binding).
-        // COUNT indicator bounds (0 <= z <= 1) are handled automatically by BOOLEAN type
-        // in physical_decide.cpp — no explicit bounds generation needed.
-
         // MIN/MAX rewrite is handled by DecideOptimizer::RewriteMinMax (post-binding).
 
         // Rewrite IN domain constraints: x IN (v1, ..., vK) → indicator variables + constraints
@@ -909,7 +900,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         result->entity_scopes = std::move(entity_scopes);
         result->variable_entity_scope = variable_entity_scope;
 
-        // count_indicator_links is now populated by DecideOptimizer (post-binding)
         // ne_indicator_indices is now populated by DecideOptimizer (post-binding)
         // minmax_indicator_links, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
         // are now populated by DecideOptimizer::RewriteMinMax (post-binding)

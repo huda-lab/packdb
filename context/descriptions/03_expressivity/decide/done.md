@@ -174,7 +174,7 @@ DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
 - **ILP model builder** (variable type handling):
   `src/packdb/utility/ilp_model_builder.cpp`
   - DOUBLE/FLOAT → `is_integer = false`, bounds `[0, 1e30]`
-  - LogicalType::BOOLEAN → `is_binary = true`, bounds `[0, 1]` (only used by optimizer-created auxiliary variables: COUNT/NE indicators)
+  - LogicalType::BOOLEAN → `is_binary = true`, bounds `[0, 1]` (only used by optimizer-created auxiliary variables: NE / IN indicators)
   - INTEGER → `is_integer = true`, bounds `[0, 1e30]`
   - Note: User-declared `IS BOOLEAN` variables are mapped to `LogicalType::INTEGER` by the binder (not `LogicalType::BOOLEAN`), with explicit `[0,1]` bounds constraints generated in `bind_select_node.cpp`. The solver result is equivalent, but the mechanism differs from optimizer-created binary auxiliaries.
 

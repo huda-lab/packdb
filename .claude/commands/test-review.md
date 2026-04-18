@@ -26,7 +26,7 @@ Read these docs to build the complete picture of what's expressible:
 - `context/descriptions/03_expressivity/when/done.md` — conditional constraints/objectives
 - `context/descriptions/03_expressivity/per/done.md` — grouped constraints/objectives
 - `context/descriptions/03_expressivity/maximize_minimize/done.md` — objective types, nesting, QP
-- `context/descriptions/03_expressivity/sql_functions/done.md` — SUM, COUNT, AVG, MIN, MAX, ABS
+- `context/descriptions/03_expressivity/sql_functions/done.md` — SUM, AVG, MIN, MAX, ABS
 - `context/descriptions/03_expressivity/problem_types/done.md` — LP, ILP, MILP, QP, MIQP
 - `.claude/CLAUDE.md` — syntax reference (condensed spec)
 
@@ -91,9 +91,8 @@ Launch up to 3 agents in parallel.
 >    - `<>`: tested with the Big-M indicator rewrite?
 >    - `IN`: tested on decision variables (not just columns)?
 >
-> 3. **Aggregates** (SUM, COUNT, AVG, MIN, MAX):
+> 3. **Aggregates** (SUM, AVG, MIN, MAX):
 >    - Each aggregate tested in constraints AND objectives?
->    - COUNT: tested for BOOLEAN (→SUM rewrite) AND INTEGER (→Big-M indicator)?
 >    - AVG: tested with uneven group sizes (where AVG ≠ SUM behavior)?
 >    - MIN/MAX: all easy cases tested? All hard cases tested? Both constraint and objective usage?
 >
@@ -154,21 +153,18 @@ Launch up to 3 agents in parallel.
 > |-----------|-----------|------------------|
 > | WHEN | PER | Conditional grouped constraint — does WHEN filter interact correctly with PER grouping? |
 > | WHEN | MIN/MAX | Conditional MIN/MAX — does WHEN work on linearized MIN/MAX constraints? |
-> | WHEN | COUNT | Conditional count — does WHEN interact with COUNT→SUM or COUNT→Big-M rewrites? |
 > | WHEN | AVG | Conditional AVG — does WHEN interact with AVG→SUM scaling? |
 > | WHEN | ABS | Conditional ABS — does WHEN work on linearized ABS constraints? |
 > | WHEN | QP | Conditional quadratic objective |
 > | WHEN | `<>` | Conditional not-equal — WHEN + Big-M disjunction |
 > | WHEN | entity_scope | Conditional with table-scoped variables |
 > | PER | MIN/MAX | Grouped MIN/MAX — nested aggregate linearization |
-> | PER | COUNT | Grouped COUNT — does PER interact with rewritten SUM? |
 > | PER | AVG | Grouped AVG — coefficient scaling per group size |
 > | PER | ABS | Grouped ABS constraints |
 > | PER | `<>` | Grouped not-equal constraints |
 > | PER | entity_scope | Grouped constraints with table-scoped variables |
 > | PER | QP | Grouped quadratic objective |
 > | entity_scope | MIN/MAX | Table-scoped variables with MIN/MAX linearization |
-> | entity_scope | COUNT | Table-scoped variables with COUNT rewrite |
 > | entity_scope | AVG | Table-scoped variables with AVG |
 > | entity_scope | multiple vars | Mixed table-scoped + row-scoped variables |
 > | entity_scope | QP | Table-scoped variables with quadratic objectives |
@@ -360,7 +356,7 @@ After (optionally) updating the tracker, ask: "Want me to write these tests? I'l
 If the user says yes, write the tests following the existing pattern:
 - Oracle-verified only. Every correctness test must formulate the same problem in gurobipy via `oracle_solver` and compare via `comparison.compare.compare_solutions`. Analytical / hand-computed closed-form assertions are forbidden (see `context/descriptions/05_testing/README.md`).
 - The flow: `packdb_cli.execute(sql)` → `(rows, cols)` from PackDB; `duckdb_conn.execute(...)` → source data (vanilla duckdb against `_tpch_oracle.duckdb`); build the ILP via `oracle_solver` using helpers in `tests/_oracle_helpers.py`; call `compare_solutions(..., coeff_fn=...)` — or `packdb_objective_fn=...` for non-linear (QP/QCQP) objectives.
-- For discrete constructs (COUNT(INTEGER), `<>`, IN), use Gurobi native indicator constraints (`add_indicator_constraint` or the matching helpers). Do not mirror PackDB's Big-M rewrite — independent semantics is the point.
+- For discrete constructs (`<>`, IN), use Gurobi native indicator constraints (`add_indicator_constraint` or the matching helpers). Do not mirror PackDB's Big-M rewrite — independent semantics is the point.
 - Follow naming conventions: `test_<feature>_<scenario>`
 - Add appropriate pytest markers
 - Place in the correct test file (or create a new one if a new category)

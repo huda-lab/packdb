@@ -74,7 +74,7 @@ Launch up to 3 agents in parallel, each responsible for a different audit dimens
 > 1. **Behavioral claims** — The doc says "AVG is rewritten to SUM at optimizer time" — read the optimizer and verify. The doc says "BOOLEAN variables get bounds [0, 1]" — read the model builder and verify. Every factual statement about behavior must be checked.
 > 2. **Syntax claims** — The doc says certain SQL syntax is valid or invalid. Cross-reference with the grammar (`.y` files), the parser (`decide_symbolic.cpp`), and the binder (`decide_*_binder.cpp`). Flag any syntax the doc says works but the code rejects, or vice versa.
 > 3. **Restriction/limitation claims** — The doc says "X is not supported" or "X is rejected with an error". Verify in the code that the restriction still exists and the error message matches.
-> 4. **Rewrite descriptions** — For each algebraic rewrite described (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX, `<>` indicators), read the actual rewrite function and verify the doc's description matches the implementation.
+> 4. **Rewrite descriptions** — For each algebraic rewrite described (AVG→SUM, ABS linearization, MIN/MAX, `<>` indicators), read the actual rewrite function and verify the doc's description matches the implementation.
 > 5. **Error message accuracy** — If the doc quotes an error message, grep for it in the code and verify it's still the same text.
 > 6. **CLAUDE.md syntax reference** — The quick reference in `.claude/CLAUDE.md` is a condensed spec. Verify every bullet point against the actual parser/binder/optimizer behavior. This is critical because CLAUDE.md is what guides all future development.
 >

@@ -9,7 +9,7 @@ PackDB is implemented as an extension to DuckDB. It leverages DuckDB's extensibl
 *   **DuckDB Core**: Responsible for storage, transaction management, and executing the standard relational parts of the query (scans, joins, filters).
 *   **Symbolic Layer (Parser)**: Uses `SymbolicC++` to parse and normalize algebraic expressions within the `DECIDE` and `SUCH THAT` clauses. It converts user-friendly SQL expressions into a canonical form.
 *   **Binder**: Validates the mathematical properties of the optimization problem (e.g., linearity checks) and applies IN domain rewrites (`RewriteInDomain` in `bind_select_node.cpp`).
-*   **DecideOptimizer** (separate optimizer pass after binding): Applies algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicator creation) that prepare expressions for the solver.
+*   **DecideOptimizer** (separate optimizer pass after binding): Applies algebraic rewrites (AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicator creation) that prepare expressions for the solver.
 *   **Execution Runtime**: A dedicated physical operator (`PhysicalDecide`) that acts as a bridge between the relational engine and the linear solver.
 *   **Solvers**: PackDB uses **Gurobi** as its primary ILP solver — empirical benchmarking showed it to be significantly faster than HiGHS for PackDB workloads. **HiGHS** (open-source, bundled) is retained as a fallback for environments without a Gurobi license, but is substantially slower in practice.
 

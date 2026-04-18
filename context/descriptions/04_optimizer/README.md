@@ -21,7 +21,7 @@ This folder documents the optimization strategies for Constrained Optimization P
 
 | Folder | done.md | todo.md |
 |--------|---------|---------|
-| [existing_optimizations/](existing_optimizations/) | WHERE filtering, WHEN zeroing, solver selection, binder algebraic rewrites (COUNT/AVG/ABS/MIN/MAX/`<>`/IN), DecideOptimizer pass | *(none — reference only)* |
+| [existing_optimizations/](existing_optimizations/) | WHERE filtering, WHEN zeroing, solver selection, binder algebraic rewrites (AVG/ABS/MIN/MAX/`<>`/IN), DecideOptimizer pass | *(none — reference only)* |
 | [matrix_efficiency/](matrix_efficiency/) | No matrix-level optimizations yet | Constraint-to-bound conversion, solver time limit |
 | [partition_solve/](partition_solve/) | `row_group_ids` foundation from PER | PER decomposition into K independent ILPs |
 | [rewrite_passes/](rewrite_passes/) | Current binder + optimizer rewrite locations | Push-down, pull-out, binder-to-optimizer migration |
@@ -36,7 +36,6 @@ This folder documents the optimization strategies for Constrained Optimization P
 | WHERE-clause filtering | **Implemented** | Inherited from DuckDB (no DECIDE-specific code) |
 | WHEN-condition coefficient zeroing | **Implemented** | `../01_pipeline/03b_coefficient_evaluation.md` |
 | Solver selection (Gurobi/HiGHS fallback) | **Implemented** | `../01_pipeline/03d_solver_backends.md` |
-| COUNT → SUM rewrite | **Implemented** | `rewrite_passes/done.md` |
 | AVG → SUM rewrite | **Implemented** | `rewrite_passes/done.md` |
 | ABS linearization | **Implemented** | `rewrite_passes/done.md` |
 | MIN/MAX linearization (easy + hard) | **Implemented** | `rewrite_passes/done.md` |

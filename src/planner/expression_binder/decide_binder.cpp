@@ -100,7 +100,7 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 
 bool IsDecideAggregateName(const string &name) {
 	auto lname = StringUtil::Lower(name);
-	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max" || lname == "count";
+	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max";
 }
 
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
@@ -507,7 +507,7 @@ BindResult DecideBinder::BindLocalWhenAggregate(FunctionExpression &when_expr, i
 	auto *aggregate = GetBoundAggregate(*aggregate_expr);
 	if (!aggregate) {
 		return BindResult(BinderException::Unsupported(
-		    when_expr, "Aggregate-local WHEN can only be applied directly to SUM, COUNT, AVG, MIN, or MAX aggregates."));
+		    when_expr, "Aggregate-local WHEN can only be applied directly to SUM, AVG, MIN, or MAX aggregates."));
 	}
 	if (aggregate->filter) {
 		return BindResult(BinderException::Unsupported(

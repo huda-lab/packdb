@@ -93,7 +93,6 @@ classDiagram
         +decide_constraints
         +decide_objective
         +num_auxiliary_vars
-        +count_indicator_links
         +GetName() string
         +ParamsToString() Map
     }
@@ -149,7 +148,7 @@ classDiagram
 
 ### `src/execution/operator/decide/physical_decide.cpp`
 -   **`Sink(GlobalSinkState, LocalSinkState, DataChunk)`**: Materializes input rows into the `DecideGlobalSinkState`.
--   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds expression-level WHEN+PER group mappings and aggregate-local filter masks, generates Big-M linking constraints for COUNT indicators, constructs `SolverInput`, calls `SolveModel()`, and stores the solution vector.
+-   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds expression-level WHEN+PER group mappings and aggregate-local filter masks, constructs `SolverInput`, calls `SolveModel()`, and stores the solution vector.
 -   **`GetData(ExecutionContext, DataChunk)`**: Streaming output. Re-scans the materialized data, projects solution values with type-specific casting (BOOLEAN/INTEGER/DOUBLE rounding), and filters out auxiliary variables.
 
 ### EXPLAIN Support (Logical & Physical)

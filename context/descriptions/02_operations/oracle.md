@@ -77,8 +77,8 @@ test/decide/
 ├── results/                   # JSON perf files + oracle_cache.json (gitignored)
 └── tests/
     ├── _oracle_helpers.py     # Shared primitives (group_indices, add_ne_indicator,
-    │                          # add_count_integer_indicators, add_in_domain,
-    │                          # add_bool_and, emit_inner_max/min, emit_hard_inner_max/min)
+    │                          # add_in_domain, add_bool_and,
+    │                          # emit_inner_max/min, emit_hard_inner_max/min)
     ├── test_oracle_api_quadratic.py  # Smoke tests for the quadratic oracle API
     └── test_*.py              # Feature test files
 ```
@@ -217,7 +217,6 @@ mirrors — see §3.7 on independent semantics.
 |---|---|
 | `group_indices(data, key_fn)` | Group row indices by a PER key. Rows where `key_fn` returns `None` are dropped (matches DECIDE's exclusion of NULL-keyed rows from every group). |
 | `add_ne_indicator(oracle, coeffs, rhs, name)` | Encode `sum(coeffs) != rhs` over integer-valued terms via a native Gurobi indicator constraint (no Big-M). |
-| `add_count_integer_indicators(oracle, int_vars, big_M=0, prefix="z")` | For each integer `x_i`, add a binary `z_i` with `z_i=1 ⇔ x_i > 0` using two `addGenConstrIndicator` calls. `COUNT(x_i)` then lowers to `SUM(z_i)`. |
 | `add_in_domain(oracle, var_name, domain)` | Restrict `var_name` to a discrete set via SOS1-style indicator encoding (`SUM(z_k) = 1`, `var = SUM(v_k·z_k)`). |
 | `add_bool_and(oracle, x, y, z)` | Link binary `z = x ∧ y` with `z ≤ x`, `z ≤ y`, `z ≥ x + y − 1`. Used for Bool × Bool products before summation. |
 | `emit_inner_max` / `emit_inner_min` | Per-group auxiliary variable for the *easy* inner-MAX / inner-MIN case of `SUM(MAX(expr)) PER col` / `SUM(MIN(expr)) PER col` inside objectives. |
@@ -246,7 +245,7 @@ canonical pattern.
 ### 3.7 Independent semantics, not Big-M mirrors
 
 For discrete constructs that PackDB rewrites into Big-M linear programs
-(COUNT(INTEGER), `<>`, etc.), the oracle should encode the **semantics
+(`<>`, IN, etc.), the oracle should encode the **semantics
 natively using Gurobi features** — not mirror PackDB's Big-M reformulation.
 Mirroring only detects lockstep bugs (where both implementations agree on
 an incorrect rewrite); independent encoding catches PackDB encoding errors
@@ -254,20 +253,11 @@ too.
 
 Concretely:
 
-- **COUNT(INTEGER)** — use `add_count_integer_indicators` (two
-  `addGenConstrIndicator` calls per integer variable). Do **not** hand-pick a
-  Big-M and write `z ≤ x ≤ M·z`.
 - **`<>`** — use `add_ne_indicator` (disjunctive branch indicator with native
   implications). Do not mirror PackDB's `SUM + M·z <= rhs - 1 + M` / `SUM - M·z >= rhs + 1 - M`.
 - **IN (…)** — use `add_in_domain` (SOS1 with indicators). This one happens
   to coincide with PackDB's bind-time rewrite; it's still the right oracle
   shape because it's the canonical formulation, not a mirror.
-
-During the migration away from Big-M mirrors, the COUNT × aggregate-local WHEN
-oracle caught a real PackDB bug: for `COUNT(x) WHEN active <= K` on BOOLEAN
-`x`, PackDB under-selected relative to the semantically equivalent
-`SUM(x) WHEN active <= K`. That bug was only visible because the oracle's
-encoding was independent of PackDB's.
 
 ### 3.8 Performance Tracking (`performance/`)
 
@@ -567,7 +557,7 @@ def test_my_new_query(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     )
 ```
 
-For aggregate operators with non-trivial semantics (PER, `<>`, COUNT,
+For aggregate operators with non-trivial semantics (PER, `<>`,
 bilinear, MIN/MAX hard cases, nested aggregates), import helpers from
 `tests/_oracle_helpers.py` rather than re-rolling the logic. See §3.5.
 

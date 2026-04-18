@@ -78,7 +78,7 @@ Five queries, each run at all database sizes. Queries use the full lineitem tabl
 |-------|------|--------------------|------------------|
 | Q1 | Knapsack baseline | IS BOOLEAN, SUM constraint + objective | None |
 | Q2 | ABS + hard MIN/MAX | IS REAL, ABS linearization, hard MAX>=K | RewriteAbs, RewriteMinMax |
-| Q3 | COUNT + AVG + WHEN | IS INTEGER, COUNT indicator, AVG scaling, WHEN filter | RewriteCountToSum, RewriteAvgToSum |
+| Q3 | AVG + WHEN | IS INTEGER, AVG scaling, WHEN filter | RewriteAvgToSum |
 | Q4 | Nested PER | IS BOOLEAN, PER grouping, nested MINIMIZE MAX(SUM(...)) PER | RewriteMinMax (easy) |
 | Q5 | Stress test | IS BOOLEAN, 3 SUM constraints, large variable count | None |
 
@@ -92,7 +92,6 @@ Five queries, each run at all database sizes. Queries use the full lineitem tabl
 | ABS linearization | | x | | | |
 | MIN/MAX (hard Big-M) | | x | | | |
 | MIN/MAX (easy) | | | | x | |
-| COUNT->SUM rewrite | | | x | | |
 | AVG->SUM rewrite | | | x | | |
 | WHEN filtering | | | x | | |
 | PER grouping | | | | x | |
@@ -123,14 +122,13 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 200
 MINIMIZE SUM(ABS(new_qty - l_quantity));
 ```
 
-**Q3 — COUNT(integer) + AVG + WHEN:** COUNT on INTEGER creates indicator vars + linking constraints. AVG scales RHS by row count. WHEN filters rows in execution.
+**Q3 — AVG + WHEN:** AVG scales RHS by row count. WHEN filters rows in execution.
 ```sql
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice,
        l_discount, l_returnflag, x
 FROM lineitem
 DECIDE x
 SUCH THAT x <= 5
-    AND COUNT(x) >= 3
     AND AVG(x * l_discount) <= 0.25
     AND SUM(x * l_quantity) <= 200 WHEN l_returnflag = 'R'
 MAXIMIZE SUM(x * l_extendedprice);

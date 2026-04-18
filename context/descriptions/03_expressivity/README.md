@@ -17,7 +17,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition + aggregate-local filters) | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
-| [sql_functions/](sql_functions/) | SUM, COUNT (BOOLEAN/INTEGER), AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | COUNT (REAL), division |
+| [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | division |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
 
 ---
@@ -53,8 +53,6 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `MAXIMIZE SUM(...)` | Yes | — |
 | `MINIMIZE SUM(...)` | Yes | — |
 | `SUM()` over decision variables | Yes | — |
-| `COUNT()` over BOOLEAN variables | Yes (rewritten to SUM) | — |
-| `COUNT()` over INTEGER variables | Yes (Big-M indicator rewrite) | — |
 | `AVG()` over decision variables | Yes (coefficient scaling) | — |
 | `ABS()` | Yes (linearized) | — |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
@@ -72,8 +70,7 @@ All previously planned priorities are **done**:
 2. ~~**AVG() aggregate**~~ — done (coefficient scaling)
 3. ~~**ABS()**~~ — done (linearized via auxiliary variables)
 4. ~~**`<>` and `IN` on decision variables**~~ — done (Big-M / auxiliary binary indicators)
-5. ~~**COUNT() for INTEGER**~~ — done (Big-M indicator rewrite)
-6. ~~**MIN() / MAX()**~~ — done (per-row + Big-M linearization)
+5. ~~**MIN() / MAX()**~~ — done (per-row + Big-M linearization)
 
 7. ~~**Multi-column PER**~~ — done (`PER (col1, col2, ...)` with composite keys)
 

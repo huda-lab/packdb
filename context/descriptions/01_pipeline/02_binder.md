@@ -108,7 +108,7 @@ SUM(x * weight) WHEN active + SUM(x * bonus) WHEN priority <= 100
 
 `DecideBinder::BindLocalWhenAggregate()` handles this form:
 
-1. **Aggregate binding**: Child 0 is bound as a DECIDE aggregate (`SUM`, `COUNT`, `AVG`, `MIN`, or `MAX` after normal validation).
+1. **Aggregate binding**: Child 0 is bound as a DECIDE aggregate (`SUM`, `AVG`, `MIN`, or `MAX` after normal validation).
 2. **Validation**: Child 1 must not reference decision variables.
 3. **Condition binding**: Child 1 is bound with the base `ExpressionBinder` and cast to BOOLEAN.
 4. **Output**: The condition is stored on the resulting `BoundAggregateExpression::filter`. Downstream physical analysis copies that filter onto each extracted term from that aggregate.
@@ -118,31 +118,21 @@ The constraint and objective binders dispatch top-level `WHEN_CONSTRAINT_TAG` to
 ### 5.4 PER Constraint Validation
 
 - PER expressions must reference a table column (not a decision variable, not a constant).
-- PER is only valid on aggregate constraints (constraints using SUM/COUNT/AVG).
+- PER is only valid on aggregate constraints (constraints using SUM/AVG).
 - The PER column creates one constraint per distinct value of that column.
 - Combined expression-level WHEN+PER: WHEN filters rows first, then PER groups the remaining rows.
 
 ## 6. Rewrite Passes (Now in Optimizer)
 
-These algebraic rewrites have been migrated to `DecideOptimizer` in `src/optimizer/decide/decide_optimizer.cpp`. The binder validates and binds the relevant expressions (recognizing COUNT, AVG, ABS, MIN, MAX as valid DECIDE aggregates/functions); the optimizer performs the algebraic transformations.
+These algebraic rewrites have been migrated to `DecideOptimizer` in `src/optimizer/decide/decide_optimizer.cpp`. The binder validates and binds the relevant expressions (recognizing AVG, ABS, MIN, MAX as valid DECIDE aggregates/functions); the optimizer performs the algebraic transformations.
 
-### 6.1 COUNT → SUM Rewrite
-
-- The binder recognizes `COUNT(x)` as a valid DECIDE aggregate (via `GetExpressionType`) and binds it into a `BoundAggregateExpression`. The binder validates that the argument is a single DECIDE variable and rejects REAL variables.
-- The actual rewrite is performed by `DecideOptimizer::RewriteCountToSum` in the optimizer:
-  - **BOOLEAN variables**: Replaces COUNT with SUM over the same variable (counting non-zero = summing for 0/1).
-  - **INTEGER variables**: Creates an indicator variable `__count_ind_VAR__` (BOOLEAN), replaces COUNT with SUM(indicator). At execution time, Big-M linking constraints are generated via `count_indicator_links`.
-  - **REAL variables**: Rejected by the binder with an explicit error.
-- **Binder code**: `GetExpressionType()` in `decide_constraints_binder.cpp` and `decide_objective_binder.cpp`
-- **Optimizer code**: `DecideOptimizer::RewriteCountToSum` in `decide_optimizer.cpp`
-
-### 6.2 AVG → SUM Rewrite
+### 6.1 AVG → SUM Rewrite
 
 - `AVG(expr)` is rewritten to `SUM(expr)` with a special tag (`AVG_REWRITE_TAG` alias).
 - At execution time, the model builder detects this tag and scales the RHS by the number of rows in each group, effectively converting `AVG(expr) <= K` into `SUM(expr) <= K * N`.
 - **Code**: `DecideOptimizer::RewriteAvgToSum` in `decide_optimizer.cpp`
 
-### 6.3 ABS Linearization
+### 6.2 ABS Linearization
 
 - `ABS(expr)` where `expr` contains decision variables is linearized using a standard LP technique:
   - Creates an auxiliary REAL variable `__abs_aux_N__`
@@ -156,8 +146,7 @@ These algebraic rewrites have been migrated to `DecideOptimizer` in `src/optimiz
 
 ## 7. Auxiliary Variable Management
 
-When rewrite passes create auxiliary variables (COUNT indicators, ABS auxiliary vars), they are tracked on the `BoundSelectNode` and carried forward to `LogicalDecide` / `PhysicalDecide`:
+When rewrite passes create auxiliary variables (ABS auxiliary vars, `<>` / IN indicators, MIN/MAX auxiliaries), they are tracked on the `BoundSelectNode` and carried forward to `LogicalDecide` / `PhysicalDecide`:
 
 - **`num_auxiliary_vars`**: Count of auxiliary variables appended after user-declared variables.
-- **`count_indicator_links`**: Vector of `(indicator_var_index, original_var_index)` pairs used at execution time to generate Big-M linking constraints.
 - **Hiding from SELECT ***: Auxiliary variables are pruned from the bind context (lines ~887-897 of `bind_select_node.cpp`) so they don't appear in query results. They exist only in the solver's variable space.

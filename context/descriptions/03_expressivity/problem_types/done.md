@@ -301,7 +301,7 @@ PackDB cannot currently express problems requiring negative variable values (see
 
 ### Big-M Linearization Is Transparent
 
-Several constructs (`<>`, `IN` on decision variables, `COUNT` on INTEGER, hard `MIN`/`MAX` cases) use Big-M linearization internally. From the problem classification perspective, these remain linear — they add auxiliary binary variables and constraints but do not change the user-visible problem class (though an LP with Big-M becomes a MILP internally due to the auxiliary binaries).
+Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) use Big-M linearization internally. From the problem classification perspective, these remain linear — they add auxiliary binary variables and constraints but do not change the user-visible problem class (though an LP with Big-M becomes a MILP internally due to the auxiliary binaries).
 
 ---
 

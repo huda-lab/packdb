@@ -166,7 +166,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
             }
             case DecideExpression::SUM: {
                 if (!ContainsDecideAggregate(*comp.left)) {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must contain SUM(...), AVG(...), MIN(...), MAX(...), or COUNT(...)"));
+                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must contain SUM(...), AVG(...), MIN(...), or MAX(...)"));
                 }
                 if (!IsAllowedConstraintRHS(right, variables) || ExpressionContainsDecideVariable(right, variables)) {
                     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
@@ -460,28 +460,12 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max" || fname == "count") {
-            if (fname == "count") {
-                // COUNT requires a single bare DECIDE variable reference, not an expression.
-                // Also reject COUNT on REAL variables.
-                if (func.children.size() != 1 || !IsVariableExpression(*func.children.front(), variables)) {
-                    error_msg = "COUNT requires a single DECIDE variable as argument";
-                    return DecideExpression::INVALID;
-                }
-                auto &colref = func.children.front()->Cast<ColumnRefExpression>();
-                string var_key = colref.IsQualified()
-                    ? (colref.GetTableName() + "." + colref.GetColumnName())
-                    : colref.GetColumnName();
-                auto it = variables.find(var_key);
-                if (it != variables.end() && it->second < var_types.size() &&
-                    var_types[it->second] == LogicalType::DOUBLE) {
-                    error_msg = StringUtil::Format(
-                        "COUNT(%s) requires a BOOLEAN or INTEGER decision variable. "
-                        "For REAL variables, COUNT is not yet supported.",
-                        colref.GetColumnName());
-                    return DecideExpression::INVALID;
-                }
-            } else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
+		if (fname == "count") {
+            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
+            return DecideExpression::INVALID;
+		}
+		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
+            if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
             }
@@ -494,7 +478,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
             // (e.g., z_1 + z_2 + z_3 from IN rewrite, or d - x from ABS linearization)
             return DecideExpression::VARIABLE;
         } else {
-            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.", func.function_name);
+            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
     }

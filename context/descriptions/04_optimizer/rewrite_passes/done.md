@@ -10,14 +10,12 @@ All DECIDE algebraic rewrites are now in the **DecideOptimizer** pass (logical-l
 | Bilinear McCormick linearization | Optimizer | `DecideOptimizer::RewriteBilinear` | `decide_optimizer.cpp` |
 | MIN/MAX linearization | Optimizer | `DecideOptimizer::RewriteMinMax` | `decide_optimizer.cpp` |
 | `<>` disjunction | Optimizer | `DecideOptimizer::RewriteNotEqual` | `decide_optimizer.cpp` |
-| COUNT → SUM (BOOLEAN/INTEGER) | Optimizer | `DecideOptimizer::RewriteCountToSum` | `decide_optimizer.cpp` |
 | AVG → SUM (term scaling metadata) | Optimizer | `DecideOptimizer::RewriteAvgToSum` | `decide_optimizer.cpp` |
 
-The binder recognizes COUNT, AVG, ABS, MIN, and MAX as valid DECIDE aggregates/functions and binds them into their respective `BoundExpression` nodes. The optimizer then rewrites them:
+The binder recognizes AVG, ABS, MIN, and MAX as valid DECIDE aggregates/functions and binds them into their respective `BoundExpression` nodes. The optimizer then rewrites them:
 - **ABS linearization**: Detects `BoundFunctionExpression` for ABS over decide variables. Creates auxiliary REAL variables, replaces ABS nodes with aux var references, and generates linearization constraints (`aux >= inner`, `aux >= -inner`).
 - **Bilinear McCormick linearization**: When one factor of a bilinear product `x * y` is BOOLEAN, introduces an auxiliary variable `w = x * y` and emits McCormick envelope constraints (Bool×any) or AND-linearization (Bool×Bool). Non-convex bilinear terms (Real×Real, Int×Real, Int×Int) are left for the Gurobi QCQP path. See `../../03_expressivity/bilinear/done.md`.
 - **MIN/MAX linearization**: Classifies MIN/MAX constraints as easy (strip aggregate → per-row) or hard (create BOOLEAN indicator, rewrite to SUM). Handles equality splitting, WHEN/PER wrappers, and objectives (flat and nested PER). Populates `minmax_indicator_links` on `LogicalDecide`. For objectives, sets typed metadata: `flat_objective_agg`/`flat_objective_is_easy` (flat) and `per_inner_agg`/`per_outer_agg`/`per_inner_is_easy`/`per_outer_is_easy` (PER). The easy/hard classification is pre-computed at optimization time so the physical layer reads the decision directly.
-- **COUNT → SUM**: Creates indicator variables for INTEGER variables, populates `count_indicator_links`, and generates the `z <= x` linking constraint (forces z=0 when x=0). The companion constraint `x <= M*z` (forces z=1 when x>0) remains in physical execution because M depends on runtime variable bounds.
 - **AVG → SUM**: Replaces AVG with SUM and tags with `AVG_REWRITE_TAG` for execution-time scaling. The physical layer scales coefficients by the relevant row count, including WHEN/PER and aggregate-local WHEN masks. Objective AVG terms keep the tag so mixed expressions like `AVG(a) + SUM(b)` preserve true AVG semantics.
 - **`<>` disjunction**: Creates BOOLEAN indicator variables for not-equal comparisons.
 

@@ -24,7 +24,6 @@ Each subdirectory corresponds to a feature area and contains:
 | `per/` | PER clause (grouped constraints and nested-aggregate objectives) | `test_per_*.py` |
 | `min_max/` | MIN/MAX linearization (easy/hard cases, nested with PER) | `test_min_max.py`, `test_per_objective.py` |
 | `avg/` | AVG aggregate (execution-time coefficient scaling) | `test_avg.py` |
-| `count/` | COUNT aggregate (BOOLEAN → SUM, INTEGER → Big-M) | `test_count_*.py` |
 | `abs/` | ABS linearization | `test_abs_linearization.py` |
 | `bilinear/` | Bilinear terms `x * y` (McCormick for Bool × anything, Q-matrix otherwise) | `test_bilinear.py` |
 | `quadratic/` | QP objectives, QCQP constraints | `test_quadratic.py`, `test_quadratic_constraints.py` |

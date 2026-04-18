@@ -67,7 +67,7 @@ Each output vector is set to `VectorType::FLAT_VECTOR` (one value per row, no di
 
 ## Auxiliary Variable Filtering
 
-The DECIDE variable list (`decide_variables`) includes both user-declared variables and auxiliary variables (e.g., COUNT indicator variables, ABS linearization auxiliaries). The `num_auxiliary_vars` field on `PhysicalDecide` tracks how many auxiliary variables exist.
+The DECIDE variable list (`decide_variables`) includes both user-declared variables and auxiliary variables (e.g., ABS linearization auxiliaries, MIN/MAX auxiliaries). The `num_auxiliary_vars` field on `PhysicalDecide` tracks how many auxiliary variables exist.
 
 All variables (user + auxiliary) are projected into the output chunk by `GetData()`. However, the logical plan places a projection operator above `PhysicalDecide` that filters out auxiliary variable columns, ensuring only user-declared variables appear in the final query result. The auxiliary variables occupy the last `num_auxiliary_vars` slots in the DECIDE variable list.
 

@@ -27,7 +27,6 @@ class Optimizer;
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
 //!     or SUM+indicator, handles objectives (flat and nested PER)
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
-//!   - RewriteCountToSum: rewrites COUNT(x) → SUM(x) or SUM(indicator)
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
 //!
 //! Future passes (to be migrated from binder):
@@ -53,18 +52,6 @@ private:
 
 	//! Helper: recursively find COMPARE_NOTEQUAL in bound expression tree
 	void FindNotEqualConstraints(Expression &expr, LogicalDecide &decide);
-
-	//! Rewrite COUNT(var) aggregates to SUM equivalents.
-	//! BOOLEAN vars: COUNT(x) → SUM(x) (direct substitution)
-	//! INTEGER vars: COUNT(x) → SUM(indicator) with new BOOLEAN indicator variable
-	//! REAL vars: throws error (not supported)
-	void RewriteCountToSum(LogicalDecide &decide);
-
-	//! Helper: recursively walk a bound expression tree, replacing COUNT aggregates
-	//! over decision variables with SUM equivalents. Uses count_indicator_map to
-	//! share indicators across multiple COUNT(x) references to the same variable.
-	void RewriteCountInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                              case_insensitive_map_t<idx_t> &count_indicator_map);
 
 	//! Rewrite AVG(expr) aggregates to SUM(expr) with alias tagging.
 	//! Execution scales extracted AVG terms by the active row count.

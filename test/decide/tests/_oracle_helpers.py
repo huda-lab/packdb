@@ -13,7 +13,7 @@ Conventions:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Callable, Iterable, Hashable
+from typing import Callable, Hashable
 
 from solver.types import VarType
 
@@ -307,28 +307,3 @@ def add_bool_and(
     )
 
 
-def add_count_integer_indicators(
-    oracle,
-    int_vars: Iterable[str],
-    big_M: float = 0.0,  # kept for signature compatibility; unused
-    prefix: str = "z",
-) -> list[str]:
-    """For each integer variable ``x_i``, add a binary ``z_i`` with
-    ``z_i = 1 ⇔ x_i > 0`` using Gurobi native indicator constraints
-    (no hand-picked Big-M). Then ``COUNT(x_i)`` lowers to ``SUM(z_i)``.
-
-    Implemented as two native implications per variable:
-      z == 0  ⇒  x == 0       (when indicator off, variable is zero)
-      z == 1  ⇒  x >= 1       (when indicator on, variable is at least one)
-
-    Integer semantics: x in {0, 1, 2, ...}. The oracle relies on Gurobi's
-    big-M-free indicator encoding rather than mirroring PackDB's rewrite.
-    """
-    indicators: list[str] = []
-    for v in int_vars:
-        z = f"{prefix}_{v}"
-        oracle.add_variable(z, VarType.BINARY)
-        oracle.add_indicator_constraint(z, 0, {v: 1.0}, "=", 0.0, name=f"{z}_off")
-        oracle.add_indicator_constraint(z, 1, {v: 1.0}, ">=", 1.0, name=f"{z}_on")
-        indicators.append(z)
-    return indicators

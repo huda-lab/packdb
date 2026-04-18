@@ -85,17 +85,6 @@ After evaluation, every coefficient and RHS value is checked:
 
 These checks apply to both constraint coefficients and objective coefficients.
 
-## COUNT Indicator Big-M Constraints
-
-After all user-written constraints are evaluated, post-hoc linking constraints are generated for COUNT indicator variables. These arise from `COUNT(x)` on INTEGER variables, which is rewritten to `SUM(indicator)` where `indicator` is a binary auxiliary variable.
-
-For each `(indicator_var_index, original_var_index)` pair from `PhysicalDecide::count_indicator_links`:
-
-1. **`indicator <= original`** (i.e., `z - x <= 0`): Forces the indicator to 0 when the original variable is 0.
-2. **`original <= M * indicator`** (i.e., `x - M*z <= 0`): Forces the indicator to 1 when the original variable is positive. `M` is taken from the upper bound of the original variable (defaulting to 1e6 if no explicit bound).
-
-These are per-row constraints (not aggregate), generated as pre-evaluated `EvaluatedConstraint` structs with constant coefficient vectors.
-
 ## Objective Coefficient Evaluation
 
 The objective follows the same pattern as constraints:

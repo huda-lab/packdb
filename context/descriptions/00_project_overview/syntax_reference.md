@@ -105,7 +105,7 @@ SUCH THAT (x - t) * (x - t) <= K
 ## 4. Objective
 
 - **Optional**: Omitting `MAXIMIZE`/`MINIMIZE` creates a feasibility problem — the solver finds any assignment satisfying all constraints. Both Gurobi and HiGHS support this.
-- When present, must be a supported aggregate expression (`SUM(...)`, `AVG(...)`, `MIN(...)`, `MAX(...)`, `COUNT(...)`) or an additive expression composed of supported aggregate terms.
+- When present, must be a supported aggregate expression (`SUM(...)`, `AVG(...)`, `MIN(...)`, `MAX(...)`) or an additive expression composed of supported aggregate terms.
 - Must involve at least one decision variable.
 - Linear objectives: must be linear in decision variables.
 - **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` is supported for convex quadratic programming. The inner expression must be linear in decision variables. Three equivalent syntax forms:
@@ -125,7 +125,6 @@ SUCH THAT (x - t) * (x - t) <= K
 ## 5. Aggregations
 
 - `SUM()` is the primary aggregate over decision variables.
-- `COUNT(x)` is supported for **BOOLEAN and INTEGER variables**. BOOLEAN is rewritten to `SUM(x)`; INTEGER uses a Big-M indicator variable rewrite.
 - `AVG(expr)` is supported. Rewritten to `SUM(expr)` with RHS scaled by row count N at execution time. For objectives, `AVG` and `SUM` share the same argmax/argmin. For constraints, `AVG(expr) op K` becomes `SUM(expr) op K*N` where N is the row count (adjusted for WHEN/PER context).
 - `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`, `MIN(expr) >= K`) become per-row constraints with no auxiliary variables. Hard cases (opposite direction, equality) use a global auxiliary variable and Big-M binary indicators. In objectives, `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use a global auxiliary; `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` additionally require Big-M indicators. Composes with WHEN.
 - Aggregate-local filters are supported on individual aggregate terms: `SUM(expr) WHEN condition + SUM(expr2) WHEN condition2`. This is different from an expression-level `WHEN` on the whole constraint or objective.

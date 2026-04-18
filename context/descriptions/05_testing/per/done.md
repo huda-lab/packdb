@@ -28,7 +28,6 @@ Tests live in:
 | PER + ABS in aggregate constraint (ABS aux per group) | `test_per_interactions.py::test_per_abs_aggregate` | ✓ |
 | Multi-variable (BOOLEAN + INTEGER) + PER | `test_per_interactions.py::test_per_multi_variable` | ✓ |
 | WHEN + PER + multi-variable — WHEN mask per group | `test_per_interactions.py::test_when_per_multi_variable` | ✓ |
-| COUNT(x INTEGER) + PER — Big-M indicators per group | `test_per_interactions.py::test_count_integer_per` | ✓ |
 | QP objective + PER constraint | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ |
 | PER equality constraint (`SUM(x) = K PER col`, two-sided bounds per group) | `test_abs_linearization.py` | ✓ |
 | Feasibility (no objective) + PER | `test_edge_cases.py::test_feasibility_per` | ✓ |
@@ -76,8 +75,6 @@ All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per
 | PER | MIN/MAX (easy, stripped) | ✓ |
 | PER | MIN/MAX (objective, nested) | ✓ |
 | PER | AVG | ✓ |
-| PER | COUNT (BOOLEAN) | ✓ |
-| PER | COUNT (INTEGER) | ✓ |
 | PER | entity-scoped | ✓ |
 | PER | quadratic constraint | ✓ |
 | PER | quadratic constraint + WHEN | ✓ |

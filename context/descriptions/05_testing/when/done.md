@@ -63,7 +63,6 @@ Tests live in:
 | Aggregate-local WHEN + AVG | `test_aggregate_local_when.py::test_aggregate_local_when_with_avg_constraint` | ✓ |
 | Aggregate-local WHEN + PER | `test_aggregate_local_when.py::test_aggregate_local_when_with_per_constraint` | ✓ |
 | Aggregate-local WHEN + PER + AVG | `test_aggregate_local_when.py::test_aggregate_local_when_with_avg_and_per` | ✓ |
-| Aggregate-local WHEN + COUNT | `test_aggregate_local_when.py::test_aggregate_local_when_with_count` | ✓ |
 | Aggregate-local WHEN + MAX (easy) | `test_aggregate_local_when.py::test_aggregate_local_when_with_max` | ✓ |
 | Aggregate-local WHEN + MAX (hard direction `>=`, Big-M indicators restricted to WHEN-matching rows) | `test_aggregate_local_when.py::test_aggregate_local_when_with_hard_max` | ✓ |
 | Aggregate-local WHEN + bilinear (constraint) | `test_aggregate_local_when.py::test_bilinear_aggregate_local_when_constraint` | ✓ |
@@ -100,7 +99,6 @@ Tests live in:
 | WHEN | PER | ✓ |
 | WHEN | MIN/MAX (easy) | ✓ |
 | WHEN | MIN/MAX (hard, aggregate-local) | ✓ |
-| WHEN | COUNT (BOOLEAN and INTEGER) | ✓ |
 | WHEN | AVG | ✓ |
 | WHEN | ABS (objective) | ✓ |
 | WHEN | QP | ✓ |

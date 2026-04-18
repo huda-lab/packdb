@@ -2,14 +2,6 @@
 
 ---
 
-## COUNT() Over REAL Decision Variables
-
-**Priority: Low**
-
-`COUNT(x)` for REAL variables is not yet supported. The Big-M indicator approach used for INTEGER variables could theoretically work for REAL, but the semantics of "non-zero" for continuous variables are problematic (floating-point tolerance issues). Currently rejected with a clear error message.
-
----
-
 ## Division (`/`) Over Decision Variables
 
 **Not planned**. Division by a decision variable is inherently non-linear. Division by a constant is valid but can be handled by multiplying the other side (already possible with current syntax).

@@ -73,13 +73,13 @@ class TestBinderErrors:
             """, match=r"must be one of the DECIDE variables")
 
     def test_non_sum_avg_min_max_function_in_objective(self, packdb_cli):
-        """STDDEV(x) is not supported in objective — only SUM, AVG, MIN, MAX, or COUNT is allowed."""
+        """STDDEV(x) is not supported in objective — only SUM, AVG, MIN, or MAX is allowed."""
         packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT SUM(x) <= 5
                 MAXIMIZE STDDEV(x*l_quantity) LIMIT 1
-            """, match=r"only SUM, AVG, MIN, MAX, or COUNT is allowed")
+            """, match=r"only SUM, AVG, MIN, or MAX is allowed")
 
     def test_no_decide_variable_in_sum(self, packdb_cli):
         """SUM over a regular column without DECIDE variable."""
@@ -273,28 +273,16 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
 
-    # --- COUNT error cases ---
+    # --- COUNT rejected as unsupported DECIDE aggregate ---
 
-    @pytest.mark.count_rewrite
-    def test_count_integer_succeeds(self, packdb_cli):
-        """COUNT(x) where x IS INTEGER should now succeed (indicator variable rewrite)."""
-        rows, cols = packdb_cli.execute("""
+    def test_count_rejected(self, packdb_cli):
+        """COUNT(x) is not a supported DECIDE aggregate (removed from PackDB)."""
+        packdb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT COUNT(x) >= 5
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """)
-        assert len(rows) > 0
-
-    @pytest.mark.count_rewrite
-    def test_count_real_rejected(self, packdb_cli):
-        """COUNT(x) where x IS REAL should be rejected."""
-        packdb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
-                SUCH THAT COUNT(x) >= 5
-                MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"COUNT.*requires a BOOLEAN or INTEGER")
+            """, match=r"only SUM, AVG, MIN, or MAX is allowed")
 
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, packdb_cli):

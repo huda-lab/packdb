@@ -67,9 +67,6 @@ public:
     // should also push_back their boolean status.
     vector<bool> is_boolean_var;
 
-    // Links from COUNT indicator variables to their original variables (indicator_idx -> original_idx)
-    vector<pair<idx_t, idx_t>> count_indicator_links;
-
     // Indices of auxiliary indicator variables for not-equal (<>) constraints
     vector<idx_t> ne_indicator_indices;
 

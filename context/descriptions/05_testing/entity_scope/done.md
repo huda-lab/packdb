@@ -17,11 +17,9 @@ oracle-verified.
 | `test_entity_scoped_with_when` | WHEN condition on constraint, entity-scoped | ✓ |
 | `test_entity_scoped_nonexistent_table` | Error: scoping to nonexistent table | — (error test) |
 | `test_entity_scoped_with_per` | PER grouping + entity-scoped, per-region oracle | ✓ |
-| `test_entity_scoped_with_count` | COUNT(BOOLEAN) → SUM rewrite with entity-scoped | ✓ |
 | `test_entity_scoped_with_max` | MAX(expr) <= K easy case, MIN/MAX linearization | ✓ |
 | `test_entity_scoped_with_avg` | AVG → SUM scaling with entity-scoped | ✓ |
 | `test_entity_scoped_when_per_triple` | WHEN + PER + entity-scoped triple interaction | ✓ |
-| `test_entity_scoped_integer_count` | COUNT(INTEGER) → `add_count_integer_indicators` per-nation + entity-scoped indexing | ✓ |
 | `test_entity_scoped_ne_constraint` | NE (`<>`) Big-M rewrite + entity-scoped | constraint only |
 | `test_entity_scoped_max_hard_case` | MAX >= K hard case (Big-M) + entity-scoped | ✓ |
 | `test_entity_scoped_mixed_when_per` | All-four: entity + row-scoped + WHEN + PER | ✓ (Gurobi-only; fixture skips on HiGHS-only hosts) |
@@ -63,8 +61,6 @@ oracle-verified.
 | entity_scope | PER (multi-column) | ✓ |
 | entity_scope | WHEN + PER | ✓ |
 | entity_scope | PER STRICT | ✓ |
-| entity_scope | COUNT (BOOLEAN → SUM) | ✓ |
-| entity_scope | COUNT (INTEGER → Big-M) | ✓ |
 | entity_scope | MAX easy (≤ K) | ✓ |
 | entity_scope | MAX hard (≥ K) | ✓ |
 | entity_scope | MIN easy (≥ K) | ✓ |

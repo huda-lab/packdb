@@ -448,55 +448,6 @@ def test_aggregate_local_when_with_avg_and_per(
 
 @pytest.mark.when
 @pytest.mark.when_constraint
-@pytest.mark.count_rewrite
-@pytest.mark.correctness
-def test_aggregate_local_when_with_count(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """COUNT(x) WHEN active — BOOLEAN so COUNT→SUM, masked by active."""
-    data_sql = """
-        SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(active AS BOOLEAN) FROM (
-            VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
-        ) t(name, value, active)
-    """
-    decide_sql = """
-        SELECT name, value, active, x FROM (
-            VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
-        ) t(name, value, active)
-        DECIDE x IS BOOLEAN
-        SUCH THAT COUNT(x) WHEN active <= 2
-        MAXIMIZE SUM(x * value)
-    """
-
-    def build(oracle, data, cols, rows):
-        n = len(data)
-        vnames = [f"x_{i}" for i in range(n)]
-        for v in vnames:
-            oracle.add_variable(v, VarType.BINARY)
-        active_idx = [i for i, r in enumerate(data) if r[2]]
-        oracle.add_constraint(
-            {vnames[i]: 1.0 for i in active_idx},
-            "<=", 2.0, name="count_active",
-        )
-        oracle.set_objective(
-            {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
-        )
-        return n, 1
-
-    def packdb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("value")
-        return sum(float(r[xi]) * float(r[vi]) for r in rs)
-
-    _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
-        test_id="alw_count",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_aggregate_local_when_with_max(

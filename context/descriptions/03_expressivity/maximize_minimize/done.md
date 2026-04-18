@@ -26,7 +26,7 @@ When present, the objective expression must be a supported aggregate expression,
 
 ## Requirements
 
-1. Must use a supported aggregate: `SUM()`, `COUNT()`, `AVG()`, `MIN()`, or `MAX()`. See [sql_functions/done.md](../sql_functions/done.md) for details on each.
+1. Must use a supported aggregate: `SUM()`, `AVG()`, `MIN()`, or `MAX()`. See [sql_functions/done.md](../sql_functions/done.md) for details on each.
 2. Must be **linear**, **quadratic** (`POWER(expr, 2)`), or **bilinear** (`x * y`) in the decision variables — see [problem_types/done.md](../problem_types/done.md) and [bilinear/done.md](../bilinear/done.md).
 3. Must involve at least one decision variable.
 
@@ -61,7 +61,6 @@ MAXIMIZE SUM(x * (price - cost))   -- x * per-row constant expression
 
 All supported aggregates work in objectives. Each is detailed in [sql_functions/done.md](../sql_functions/done.md):
 
-- **COUNT(x)**: Counts non-zero assignments. BOOLEAN (rewritten to SUM) and INTEGER (Big-M indicator rewrite).
 - **AVG(expr)**: Flat AVG becomes SUM (same argmax/argmin). Nested with PER: inner AVG scales coefficients by `1/n_g`.
 - **MIN(expr) / MAX(expr)**: Linearized via global auxiliary variable. Easy cases (`MINIMIZE MAX`, `MAXIMIZE MIN`) need only linking constraints; hard cases (`MAXIMIZE MAX`, `MINIMIZE MIN`) require Big-M indicators.
 - **ABS(expr)**: Linearized via auxiliary REAL variable with two constraints (`d >= expr`, `d >= -expr`).
@@ -153,7 +152,7 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
 ## Code Pointers
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
-  - Validates that only `SUM`, `COUNT`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
+  - Validates that only `SUM`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
   - Handles WHEN condition extraction on objective
   - Dispatches nested `WHEN` on aggregate terms to aggregate-local binding
   - Binds nested aggregate PER objectives (inner/outer aggregate detection)

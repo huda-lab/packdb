@@ -60,7 +60,7 @@ are about to modify source code and need to know where things live on disk.
 | EXPLAIN                | EXPLAIN / EXPLAIN ANALYZE / FORMAT JSON output for DECIDE operator        | `01_pipeline/04_explain.md`            | `logical_decide.cpp`, `physical_decide.cpp`, `serialize_logical_operator.cpp` |
 | Code Structure         | File organization, class hierarchy, key methods map                       | `01_pipeline/code_structure.md`        | All PackDB source files                                                            |
 
-> **Note**: Algebraic rewrites (COUNT→SUM, AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
+> **Note**: Algebraic rewrites (AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
 
 ---
 

@@ -63,7 +63,6 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 | Duplicate DECIDE variable | `test_error_binder.py::test_duplicate_decide_variables` |
 | Unknown variable in constraint | `test_error_binder.py::test_unknown_variable_in_constraint` |
 | Unknown type annotation | `test_error_parser.py::test_missing_such_that` (related) |
-| `COUNT(x REAL)` rejected | `test_error_binder.py::test_count_real_rejected` |
 
 ## Feature interactions covered
 

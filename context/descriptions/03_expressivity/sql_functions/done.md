@@ -17,30 +17,6 @@ SUCH THAT SUM(x * weight) <= 50
 
 **Code**: Validated in `decide_objective_binder.cpp` and `decide_constraints_binder.cpp` — aggregates other than SUM, AVG, MIN, and MAX are rejected with an error.
 
-### COUNT() — BOOLEAN and INTEGER variables
-
-`COUNT(x)` counts the number of rows where the decision variable `x` is non-zero. It is supported for both BOOLEAN and INTEGER variables (REAL is not yet supported).
-
-**BOOLEAN variables**: `COUNT(x)` is rewritten to `SUM(x)` directly, since for a {0,1} variable, "how many rows have x=1" equals `SUM(x)`.
-
-**INTEGER variables**: `COUNT(x)` uses the Big-M indicator variable technique:
-1. A hidden binary indicator variable `z` is introduced for `x`
-2. Two linking constraints enforce the relationship: `z <= x` (z=0 when x=0) and `x <= M*z` (z=1 when x>0)
-3. `COUNT(x)` is rewritten to `SUM(z)`, which counts non-zero assignments
-4. M is derived from the upper bound of `x` (defaults to 1e6 if no bound specified)
-
-```sql
-SUCH THAT COUNT(x) >= 5     -- where x IS BOOLEAN or INTEGER
-MAXIMIZE COUNT(x)           -- maximize number of non-zero rows
-SUCH THAT COUNT(x) <= 2     -- at most 2 non-zero assignments
-```
-
-The binder recognizes COUNT as a valid DECIDE aggregate and binds it into a `BoundAggregateExpression`. The rewrite to SUM (with indicator variable creation for INTEGER variables) is performed by `DecideOptimizer::RewriteCountToSum` in `decide_optimizer.cpp`. This means COUNT inherits all SUM capabilities (WHEN, PER, all comparison operators) for free. Multiple `COUNT(x)` references to the same variable reuse a single indicator.
-
-`COUNT(x)` is **rejected** for REAL variables with a clear error message.
-
----
-
 ### AVG() — Coefficient Scaling at Execution Time
 
 `AVG(expr)` over decision variables is treated as an aggregate constraint like SUM, but terms are scaled by the row count N at execution time so the model represents the average, not the raw sum.
@@ -263,7 +239,6 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 |---|---|---|---|
 | `SUM()` over dec. vars | Yes | Yes | N/A |
 | `AVG()` over dec. vars | Yes (RHS scaled) | Yes (→SUM) | N/A |
-| `COUNT()` (BOOLEAN, INTEGER) | Yes | Yes | N/A |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | Yes (global aux / Big-M) | N/A |
 | `ABS()` over dec. vars | Yes (linearized) | Yes (linearized) | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |

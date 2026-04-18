@@ -75,7 +75,7 @@ Then `ExitPlanMode`.
 
 ## Phase 4 — Design each test (still asking)
 
-1. Read 1–2 existing tests in the area to learn fixture conventions, oracle pattern, perf_tracker call shape. Also skim `tests/_oracle_helpers.py` for primitives that already cover the construct (group_indices, add_ne_indicator, add_count_integer_indicators, add_in_domain, add_bool_and, emit_inner_max/min, emit_hard_inner_max/min).
+1. Read 1–2 existing tests in the area to learn fixture conventions, oracle pattern, perf_tracker call shape. Also skim `tests/_oracle_helpers.py` for primitives that already cover the construct (group_indices, add_ne_indicator, add_in_domain, add_bool_and, emit_inner_max/min, emit_hard_inner_max/min).
 2. For each test, draft SQL + outline oracle formulation. Show inline before writing code.
 3. `AskUserQuestion`: use todo.md SQL verbatim / adjust / fresh? Scope (one direction / both / all variants)? Do not ask "oracle or constraint-only?" — oracle is the only valid answer for correctness tests.
 4. If user says "sharper" or "show me", iterate the draft inline (don't write file yet).
@@ -103,7 +103,7 @@ If infeasible: adjust constants, expand data scope (e.g., `l_orderkey <= 100`), 
     your own Big-M. For quadratic objectives/constraints use
     `oracle_solver.set_quadratic_objective(linear, quadratic, sense)` and
     `oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs)`.
-    For `COUNT(INTEGER)`, `<>`, discrete domain restrictions, use native
+    For `<>`, discrete domain restrictions, use native
     indicator constraints via `oracle_solver.add_indicator_constraint` or
     the matching helpers — **do not mirror PackDB's Big-M rewrite**.
   - `oracle_solver.solve()` → assert OPTIMAL (or INFEASIBLE/UNBOUNDED for

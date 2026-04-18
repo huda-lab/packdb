@@ -984,11 +984,6 @@
         "type": "idx_t"
       },
       {
-        "id": 206,
-        "name": "count_indicator_links",
-        "type": "vector<pair<idx_t, idx_t>>"
-      },
-      {
         "id": 207,
         "name": "ne_indicator_indices",
         "type": "vector<idx_t>"

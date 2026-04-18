@@ -8,7 +8,6 @@ Covers:
   - Entity-scoped with WHEN conditions
   - Error: scoping to nonexistent table
   - Entity-scoped with PER grouping constraints
-  - Entity-scoped with COUNT rewrite
   - Entity-scoped with MAX constraint (MIN/MAX linearization)
   - Entity-scoped with AVG constraint (scaling)
   - Triple interaction: entity-scoped + WHEN + PER
@@ -18,7 +17,7 @@ import pytest
 from packdb_cli import PackDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
-from ._oracle_helpers import add_ne_indicator, add_count_integer_indicators
+from ._oracle_helpers import add_ne_indicator
 
 
 # ---------------------------------------------------------------------------
@@ -521,80 +520,7 @@ def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
 
 # ---------------------------------------------------------------------------
-# Test 8: Entity-scoped with COUNT rewrite
-# ---------------------------------------------------------------------------
-
-@pytest.mark.correctness
-@pytest.mark.count_rewrite
-def test_entity_scoped_with_count(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Entity-scoped BOOLEAN variable with COUNT constraint.
-
-    COUNT(keepN) for BOOLEAN is rewritten to SUM(keepN). Tests the
-    COUNT→SUM rewrite path with entity-scoped variable indexing.
-    """
-    sql = """
-        SELECT c.c_custkey, n.n_nationkey, keepN
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        DECIDE n.keepN IS BOOLEAN
-        SUCH THAT COUNT(keepN) >= 10
-        MAXIMIZE SUM(keepN * c.c_acctbal)
-    """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    assert len(packdb_result) > 0
-
-    # Verify entity consistency
-    nation_values = {}
-    for row in packdb_result:
-        nkey = int(row[1])
-        keep = int(row[2])
-        if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN: {nation_values[nkey]} vs {keep}"
-        else:
-            nation_values[nkey] = keep
-
-    # Verify COUNT constraint: total selected rows >= 10
-    total_selected = sum(int(row[2]) for row in packdb_result)
-    assert total_selected >= 10, \
-        f"COUNT constraint violated: COUNT(keepN) = {total_selected} < 10"
-
-    # Oracle: COUNT(keepN) for BOOLEAN = SUM(keepN) = SUM_n keepN_n * cnt_n
-    raw = duckdb_conn.execute("""
-        SELECT CAST(n.n_nationkey AS BIGINT), CAST(c.c_acctbal AS DOUBLE)
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-    """).fetchall()
-    nation_ids = sorted(set(int(r[0]) for r in raw))
-    nation_count = {}; nation_acctbal = {}
-    for r in raw:
-        nkey = int(r[0])
-        nation_count[nkey] = nation_count.get(nkey, 0) + 1
-        nation_acctbal[nkey] = nation_acctbal.get(nkey, 0.0) + float(r[1])
-
-    oracle_solver.create_model("entity_scoped_with_count")
-    vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
-    for nkey in nation_ids:
-        oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
-    oracle_solver.add_constraint(
-        {vnames[nkey]: float(nation_count[nkey]) for nkey in nation_ids},
-        ">=", 10.0, name="count_limit",
-    )
-    oracle_solver.set_objective(
-        {vnames[nkey]: nation_acctbal[nkey] for nkey in nation_ids},
-        ObjSense.MAXIMIZE,
-    )
-    oracle_result = oracle_solver.solve()
-    packdb_obj = sum(
-        nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
-        for nkey in nation_ids
-    )
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
-
-
-# ---------------------------------------------------------------------------
-# Test 9: Entity-scoped with MAX constraint (easy case)
+# Test 8: Entity-scoped with MAX constraint (easy case)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
@@ -851,83 +777,7 @@ def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, p
 
 
 # ---------------------------------------------------------------------------
-# Test 12: COUNT(INTEGER) with entity-scoped variable
-# ---------------------------------------------------------------------------
-
-@pytest.mark.correctness
-@pytest.mark.count_rewrite
-def test_entity_scoped_integer_count(packdb_cli, duckdb_conn, oracle_solver):
-    """COUNT(qty) where qty IS INTEGER with entity-scoped variable — oracle-compared.
-
-    Each join row in a nation shares qty_n, so COUNT counts rows where
-    qty_n > 0. Oracle introduces a binary indicator z_n per nation
-    (z_n=1 ⇔ qty_n >= 1) and maps the join-row COUNT to
-    SUM_n cnt_n * z_n.
-    """
-    sql = """
-        SELECT c.c_custkey, n.n_nationkey, qty
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0 AND n.n_nationkey <= 4
-        DECIDE n.qty IS INTEGER
-        SUCH THAT COUNT(qty) >= 5
-          AND qty <= 5
-        MAXIMIZE SUM(qty)
-    """
-    result, cols = packdb_cli.execute(sql)
-    assert len(result) > 0
-
-    qty_idx = cols.index("qty")
-    nkey_idx = cols.index("n_nationkey")
-
-    nation_values = {}
-    for row in result:
-        nkey = int(row[nkey_idx])
-        q = int(row[qty_idx])
-        if nkey in nation_values:
-            assert nation_values[nkey] == q, \
-                f"Nation {nkey} has inconsistent qty: {nation_values[nkey]} vs {q}"
-        else:
-            nation_values[nkey] = q
-
-    # Build oracle: one integer var per nation; binary indicator per nation
-    # mapping qty_n > 0. Join-row COUNT(qty) = SUM_n cnt_n * z_n.
-    raw = duckdb_conn.execute("""
-        SELECT CAST(n.n_nationkey AS BIGINT), COUNT(*) as cnt
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0 AND n.n_nationkey <= 4
-        GROUP BY n.n_nationkey
-    """).fetchall()
-    nation_ids = sorted(int(r[0]) for r in raw)
-    nation_cnt = {int(r[0]): int(r[1]) for r in raw}
-
-    oracle_solver.create_model("entity_scoped_integer_count")
-    qnames = {nk: f"qty_{nk}" for nk in nation_ids}
-    for nk in nation_ids:
-        oracle_solver.add_variable(qnames[nk], VarType.INTEGER, lb=0.0, ub=5.0)
-    zs = add_count_integer_indicators(
-        oracle_solver, [qnames[nk] for nk in nation_ids], prefix="z",
-    )
-    z_by_nation = dict(zip(nation_ids, zs))
-    oracle_solver.add_constraint(
-        {z_by_nation[nk]: float(nation_cnt[nk]) for nk in nation_ids},
-        ">=", 5.0, name="count_ge_5",
-    )
-    # MAXIMIZE SUM(qty) in join rows = SUM_n cnt_n * qty_n
-    oracle_solver.set_objective(
-        {qnames[nk]: float(nation_cnt[nk]) for nk in nation_ids},
-        ObjSense.MAXIMIZE,
-    )
-    res = oracle_solver.solve()
-    assert res.status == SolverStatus.OPTIMAL
-
-    packdb_obj = sum(int(row[qty_idx]) for row in result)
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 13: NE (<>) constraint with entity-scoped variable
+# Test 12: NE (<>) constraint with entity-scoped variable
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness

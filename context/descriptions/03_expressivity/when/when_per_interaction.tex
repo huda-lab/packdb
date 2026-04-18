@@ -22,7 +22,7 @@
 \definecolor{str}{RGB}{160,0,0}
 \lstdefinelanguage{DECIQL}{
     keywords={SELECT,FROM,WHERE,DECIDE,IS,BOOLEAN,INTEGER,REAL,SUCH,THAT,
-              AND,OR,NOT,WHEN,PER,SUM,MIN,MAX,COUNT,AVG,
+              AND,OR,NOT,WHEN,PER,SUM,MIN,MAX,AVG,
               MINIMIZE,MAXIMIZE,CASE,THEN,ELSE,END},
     sensitive=true,
     morecomment=[l]{--},
@@ -125,9 +125,9 @@ Under WHEN-PER, it emits nothing. The orderings diverge when
 $\text{AGG}(\emptyset) \, \diamond \, C$ can be false. We consider each
 aggregate type.
 
-\subsection*{SUM and COUNT}
+\subsection*{SUM}
 
-SUM and COUNT over an empty set evaluate to $0$. Whether this causes a problem
+SUM over an empty set evaluates to $0$. Whether this causes a problem
 depends on the constraint direction:
 
 \begin{itemize}[leftmargin=2em]
@@ -179,11 +179,11 @@ impossible over an empty set.
 The orderings diverge in two situations, both requiring an empty group:
 
 \begin{enumerate}[leftmargin=2em]
-    \item \textbf{SUM/COUNT} with a lower bound or equality ($\geq$, $=$)
+    \item \textbf{SUM} with a lower bound or equality ($\geq$, $=$)
     \item \textbf{MIN/MAX} with an existential meaning (``some row must satisfy \ldots'')
 \end{enumerate}
 
-Upper-bound SUM/COUNT and universal MIN/MAX (``every row must satisfy
+Upper-bound SUM and universal MIN/MAX (``every row must satisfy
 \ldots'') are immune.
 
 \section{Examples}
@@ -555,7 +555,7 @@ over the same row sets. The pattern is always the same:
 \texttt{SUM(CASE WHEN condition THEN 1 ELSE 0 END) >= 1 PER group\_col}
 \end{center}
 
-This works for SUM/COUNT with lower bounds (Section~5.1), existential MAX,
+This works for SUM with lower bounds (Section~5.1), existential MAX,
 existential MIN --- any aggregate, any operator direction.
 
 The \textbf{coefficient trick} from Section~5.1 is a useful optimization
@@ -658,8 +658,8 @@ What value does it contribute to the outer?
 \toprule
 \textbf{Inner agg.} & \textbf{Why} & \textbf{Enters outer as} \\
 \midrule
-SUM, COUNT, AVG &
-    Sum of no rows is 0. COUNT reduces to SUM; AVG scales
+SUM, AVG &
+    Sum of no rows is 0. AVG scales
     coefficients by $1/n_g$, but with no rows there is nothing
     to scale. &
     Phantom 0 \\[6pt]
@@ -727,7 +727,7 @@ the inner aggregate absorbs phantom 0 --- the same identity element test
 from Section~5.1, applied at the inner level:
 
 \begin{itemize}[leftmargin=2em]
-    \item \textbf{Inner SUM, COUNT}: phantom 0 absorbed. Works.
+    \item \textbf{Inner SUM}: phantom 0 absorbed. Works.
     \item \textbf{Inner MAX}: phantom 0 ignored ($0 \leq$ real values). Works.
     \item \textbf{Inner MIN}: phantom 0 picked up as false minimum. Fails.
     \item \textbf{Inner AVG}: extra zeroed rows shift the denominator. Fails.

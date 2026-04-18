@@ -1308,7 +1308,7 @@ static bool IsDecideObjectiveAggregate(const ParsedExpression &expr) {
         if (!func.is_operator) {
             auto name_lower = StringUtil::Lower(func.function_name);
             return name_lower == "sum" || name_lower == "avg" || name_lower == "min" ||
-                   name_lower == "max" || name_lower == "count";
+                   name_lower == "max";
         }
     }
     if (expr.GetExpressionClass() == ExpressionClass::CAST) {

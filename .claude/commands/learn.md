@@ -5,7 +5,7 @@ Explains how a PackDB feature or concept works — the mental model, not just th
 ## Arguments
 
 `$ARGUMENTS` — **required**: the topic to explain. Can be:
-- A keyword: `PER`, `WHEN`, `Big-M`, `QP`, `MIN/MAX`, `COUNT`, `AVG`, `ABS`, `indicators`
+- A keyword: `PER`, `WHEN`, `Big-M`, `QP`, `MIN/MAX`, `AVG`, `ABS`, `indicators`
 - A pipeline stage: `parser`, `binder`, `optimizer`, `execution`, `solver`
 - A concept: `linearization`, `easy vs hard`, `auxiliary variables`, `solver-agnostic`
 - A broad area: `pipeline`, `how DECIDE works`, `constraint types`, `objective types`
