@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Resource Scheduling - PackDB Examples</title>
+  <title>Conditional Constraints - PackDB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -60,67 +60,67 @@
     <div class="breadcrumb mb-8">
       <a href="../examples.html">Examples</a>
       <span class="separator">/</span>
-      <span>Resource Scheduling</span>
+      <span>Conditional Constraints</span>
     </div>
 
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-fg">Resource Scheduling</h1>
-        <span class="badge badge-advanced">Advanced</span>
+        <h1 class="text-4xl text-fg">Conditional Constraints</h1>
+        <span class="badge badge-intermediate">Intermediate</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge badge-tag">JOIN</span>
-        <span class="badge badge-tag">BETWEEN Filter</span>
-        <span class="badge badge-tag">PER Clause</span>
-        <span class="badge badge-tag">Complex Objective</span>
+        <span class="badge badge-tag">WHEN Clause</span>
+        <span class="badge badge-tag">Conditional Constraints</span>
+        <span class="badge badge-tag">Category-Specific Limits</span>
       </div>
     </div>
 
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A facility manager assigns staff to time slots across multiple days. Resources (staff) have efficiency ratings and available days; slots have start times, days, and priority levels. A resource can only be assigned to a slot on a day they're available, and only if their skill level meets the slot's requirement. Each resource handles at most 3 slots, and each slot needs exactly 1 resource. The objective maximizes the combined efficiency &times; priority score across all assignments.
+        A procurement manager selects items from multiple categories, but each category has different budget limits. Electronics items have a $500 budget, clothing has $300, and food has $200. Additionally, at least 2 items must be selected from each category. The goal is to maximize total value while respecting these category-specific constraints. This demonstrates the <code>WHEN</code> clause — a postfix conditional that applies constraints only to rows matching a condition.
       </p>
     </section>
 
     <section class="example-section">
       <div class="example-section-label">SAMPLE DATA</div>
       <div class="code-block">
-        <pre class="language-sql"><code>CREATE TABLE Resources (
-    resource_id INTEGER, name VARCHAR, efficiency DOUBLE,
-    skill_level INTEGER, available_day VARCHAR
+        <pre class="language-sql"><code>CREATE TABLE Items (
+    item_id INTEGER, name VARCHAR, category VARCHAR,
+    value INTEGER, price INTEGER
 );
-INSERT INTO Resources VALUES
-    (101, 'Alice', 0.95, 5, 'Monday'),
-    (102, 'Bob', 0.88, 4, 'Monday'),
-    (103, 'Carol', 0.92, 5, 'Tuesday');
-
-CREATE TABLE Slots (
-    slot_id INTEGER, start_time VARCHAR, day VARCHAR,
-    priority INTEGER, required_level INTEGER
-);
-INSERT INTO Slots VALUES
-    (1, '09:00', 'Monday', 10, 3),
-    (2, '10:00', 'Monday', 8, 3),
-    (3, '11:00', 'Monday', 9, 4),
-    (4, '13:00', 'Tuesday', 10, 4);</code></pre>
+INSERT INTO Items VALUES
+    (1, 'Laptop', 'electronics', 100, 800),
+    (2, 'Smartphone', 'electronics', 90, 600),
+    (3, 'Headphones', 'electronics', 40, 150),
+    (4, 'Tablet', 'electronics', 70, 450),
+    (5, 'Jacket', 'clothing', 50, 120),
+    (6, 'Shoes', 'clothing', 45, 100),
+    (7, 'Hat', 'clothing', 20, 40),
+    (8, 'Pants', 'clothing', 35, 80),
+    (9, 'Apples', 'food', 30, 20),
+    (10, 'Bread', 'food', 15, 5),
+    (11, 'Cheese', 'food', 25, 15),
+    (12, 'Milk', 'food', 20, 8);</code></pre>
       </div>
     </section>
 
     <section class="example-section">
       <div class="example-section-label">THE QUERY</div>
       <div class="code-block">
-        <pre class="language-sql"><code>SELECT r.resource_id, r.name as resource_name, s.slot_id,
-       s.start_time, s.day, r.efficiency, s.priority, x as assigned
-FROM Resources r
-JOIN Slots s ON r.available_day = s.day
-WHERE s.start_time BETWEEN '09:00' AND '17:00'
-  AND r.skill_level >= s.required_level
+        <pre class="language-sql"><code>SELECT item_id, name, category, value, price, x as selected
+FROM Items
 DECIDE x IS BOOLEAN
 SUCH THAT
-    SUM(x) PER r.resource_id <= 3 AND
-    SUM(x) PER s.slot_id = 1
-MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
+    -- Category-specific budget constraints using WHEN
+    SUM(x * price) <= 500 WHEN category = 'electronics' AND
+    SUM(x * price) <= 300 WHEN category = 'clothing' AND
+    SUM(x * price) <= 200 WHEN category = 'food' AND
+    -- At least 2 items per category
+    SUM(x) >= 2 WHEN category = 'electronics' AND
+    SUM(x) >= 2 WHEN category = 'clothing' AND
+    SUM(x) >= 2 WHEN category = 'food'
+MAXIMIZE SUM(x * value);</code></pre>
       </div>
     </section>
 
@@ -129,23 +129,27 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>JOIN ... ON r.available_day = s.day</code> — Only consider resource-slot pairs where the resource is available on that day.</div>
+          <div><code>DECIDE x IS BOOLEAN</code> — Binary decision: select (x=1) or skip (x=0) each item.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
-          <div><code>WHERE r.skill_level &gt;= s.required_level</code> — Further filter: resource must meet the slot's skill requirement.</div>
+          <div><code>SUM(x * price) &lt;= 500 WHEN category = 'electronics'</code> — Electronics budget: total price of selected electronics items cannot exceed $500.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) PER r.resource_id &lt;= 3</code> — Each resource is assigned to at most 3 slots.</div>
+          <div><code>SUM(x * price) &lt;= 300 WHEN category = 'clothing'</code> — Clothing budget: $300 limit.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>SUM(x) PER s.slot_id = 1</code> — Each slot is filled by exactly one resource.</div>
+          <div><code>SUM(x * price) &lt;= 200 WHEN category = 'food'</code> — Food budget: $200 limit.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">5</span>
-          <div><code>MAXIMIZE SUM(x * r.efficiency * s.priority)</code> — Maximize combined efficiency &times; priority.</div>
+          <div><code>SUM(x) &gt;= 2 WHEN category = '...'</code> — At least 2 items must be selected from each category.</div>
+        </div>
+        <div class="query-annotation">
+          <span class="annotation-marker">6</span>
+          <div><code>MAXIMIZE SUM(x * value)</code> — Maximize total value of selected items.</div>
         </div>
       </div>
     </section>
@@ -156,20 +160,27 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
         <table>
           <thead>
             <tr>
-              <th>resource</th>
-              <th>slot</th>
-              <th>time</th>
-              <th>day</th>
-              <th>efficiency</th>
-              <th>priority</th>
-              <th>assigned</th>
+              <th>item_id</th>
+              <th>name</th>
+              <th>category</th>
+              <th>value</th>
+              <th>price</th>
+              <th>selected</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>Alice</td><td>1</td><td>09:00</td><td>Monday</td><td>0.95</td><td>10</td><td class="selected-row">1</td></tr>
-            <tr><td>Alice</td><td>3</td><td>11:00</td><td>Monday</td><td>0.95</td><td>9</td><td class="selected-row">1</td></tr>
-            <tr><td>Bob</td><td>2</td><td>10:00</td><td>Monday</td><td>0.88</td><td>8</td><td class="selected-row">1</td></tr>
-            <tr><td>Carol</td><td>4</td><td>13:00</td><td>Tuesday</td><td>0.92</td><td>10</td><td class="selected-row">1</td></tr>
+            <tr><td>1</td><td>Laptop</td><td>electronics</td><td>100</td><td>800</td><td>0</td></tr>
+            <tr><td>2</td><td>Smartphone</td><td>electronics</td><td>90</td><td>600</td><td>0</td></tr>
+            <tr><td>3</td><td>Headphones</td><td>electronics</td><td>40</td><td>150</td><td class="selected-row">1</td></tr>
+            <tr><td>4</td><td>Tablet</td><td>electronics</td><td>70</td><td>450</td><td class="selected-row">1</td></tr>
+            <tr><td>5</td><td>Jacket</td><td>clothing</td><td>50</td><td>120</td><td class="selected-row">1</td></tr>
+            <tr><td>6</td><td>Shoes</td><td>clothing</td><td>45</td><td>100</td><td class="selected-row">1</td></tr>
+            <tr><td>7</td><td>Hat</td><td>clothing</td><td>20</td><td>40</td><td class="selected-row">1</td></tr>
+            <tr><td>8</td><td>Pants</td><td>clothing</td><td>35</td><td>80</td><td>0</td></tr>
+            <tr><td>9</td><td>Apples</td><td>food</td><td>30</td><td>20</td><td class="selected-row">1</td></tr>
+            <tr><td>10</td><td>Bread</td><td>food</td><td>15</td><td>5</td><td class="selected-row">1</td></tr>
+            <tr><td>11</td><td>Cheese</td><td>food</td><td>25</td><td>15</td><td class="selected-row">1</td></tr>
+            <tr><td>12</td><td>Milk</td><td>food</td><td>20</td><td>8</td><td class="selected-row">1</td></tr>
           </tbody>
         </table>
       </div>
@@ -178,13 +189,13 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        Alice (efficiency 0.95) gets the two highest-priority Monday slots (10 and 9), Bob (0.88) fills the remaining Monday slot (priority 8), and Carol (0.92) covers the Tuesday slot (priority 10). The total score is (0.95&times;10) + (0.95&times;9) + (0.88&times;8) + (0.92&times;10) = 9.5 + 8.55 + 7.04 + 9.2 = 34.29. The JOIN and WHERE clauses ensure feasibility before optimization begins — Carol can't be assigned to Monday slots, and no one with insufficient skill level is considered.
+        The solver selected 9 items total (3 electronics, 3 clothing, 4 food). Electronics: Headphones ($150) + Tablet ($450) = $600, but the budget is $500, so it picked lower-value items to stay under budget. Clothing: Jacket ($120) + Shoes ($100) + Hat ($40) = $260 (under $300). Food: All 4 items = $48 (well under $200). Each category meets the minimum 2 items requirement. Total value: 40+70+50+45+20+30+15+25+20 = 315.
       </div>
     </section>
 
     <div class="flex justify-between pt-8 border-t border-bdcolor">
-      <a href="advanced-portfolio.html" class="text-accent hover:text-accent">&larr; Portfolio Optimization</a>
-      <a href="advanced-facility.html" class="text-accent hover:text-accent">Facility Location &rarr;</a>
+      <a href="intermediate-dynamic.html" class="text-accent hover:text-accent">&larr; Dynamic Constraints</a>
+      <a href="advanced-portfolio.html" class="text-accent hover:text-accent">Portfolio Optimization &rarr;</a>
     </div>
   </main>
 

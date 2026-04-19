@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Resource Scheduling - PackDB Examples</title>
+  <title>Nurse Scheduling - PackDB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -60,67 +60,72 @@
     <div class="breadcrumb mb-8">
       <a href="../examples.html">Examples</a>
       <span class="separator">/</span>
-      <span>Resource Scheduling</span>
+      <span>Nurse Scheduling</span>
     </div>
 
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-fg">Resource Scheduling</h1>
+        <h1 class="text-4xl text-fg">Nurse Scheduling</h1>
         <span class="badge badge-advanced">Advanced</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge badge-tag">JOIN</span>
-        <span class="badge badge-tag">BETWEEN Filter</span>
+        <span class="badge badge-tag">Table-Scoped Variables</span>
+        <span class="badge badge-tag">JOIN Optimization</span>
         <span class="badge badge-tag">PER Clause</span>
-        <span class="badge badge-tag">Complex Objective</span>
       </div>
     </div>
 
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A facility manager assigns staff to time slots across multiple days. Resources (staff) have efficiency ratings and available days; slots have start times, days, and priority levels. A resource can only be assigned to a slot on a day they're available, and only if their skill level meets the slot's requirement. Each resource handles at most 3 slots, and each slot needs exactly 1 resource. The objective maximizes the combined efficiency &times; priority score across all assignments.
+        A hospital needs to select nurses to cover shifts over a week. Each nurse has a skill score and can work multiple shifts (one row per nurse-shift combination). The hospital wants to select which nurses to keep (one decision per nurse, not per shift), limit total hours across all shifts to 100, and maximize total skill score. This demonstrates <strong>table-scoped variables</strong> — using <code>Table.variable</code> syntax to create one variable per unique entity (nurse) rather than per row (nurse-shift pair). This dramatically reduces solver variables when tables are joined.
       </p>
     </section>
 
     <section class="example-section">
       <div class="example-section-label">SAMPLE DATA</div>
       <div class="code-block">
-        <pre class="language-sql"><code>CREATE TABLE Resources (
-    resource_id INTEGER, name VARCHAR, efficiency DOUBLE,
-    skill_level INTEGER, available_day VARCHAR
+        <pre class="language-sql"><code>-- Nurses with skill scores
+CREATE TABLE Nurses (
+    nurse_id INTEGER, name VARCHAR, skill_score INTEGER
 );
-INSERT INTO Resources VALUES
-    (101, 'Alice', 0.95, 5, 'Monday'),
-    (102, 'Bob', 0.88, 4, 'Monday'),
-    (103, 'Carol', 0.92, 5, 'Tuesday');
+INSERT INTO Nurses VALUES
+    (1, 'Alice', 95),
+    (2, 'Bob', 80),
+    (3, 'Carol', 90),
+    (4, 'David', 70),
+    (5, 'Eve', 85);
 
-CREATE TABLE Slots (
-    slot_id INTEGER, start_time VARCHAR, day VARCHAR,
-    priority INTEGER, required_level INTEGER
+-- Shifts requiring coverage
+CREATE TABLE Shifts (
+    shift_id INTEGER, nurse_id INTEGER, shift_date DATE,
+    hours INTEGER
 );
-INSERT INTO Slots VALUES
-    (1, '09:00', 'Monday', 10, 3),
-    (2, '10:00', 'Monday', 8, 3),
-    (3, '11:00', 'Monday', 9, 4),
-    (4, '13:00', 'Tuesday', 10, 4);</code></pre>
+INSERT INTO Shifts VALUES
+    (1, 1, '2025-01-01', 8),
+    (2, 1, '2025-01-02', 8),
+    (3, 2, '2025-01-01', 6),
+    (4, 2, '2025-01-03', 6),
+    (5, 3, '2025-01-01', 8),
+    (6, 3, '2025-01-02', 8),
+    (7, 3, '2025-01-03', 8),
+    (8, 4, '2025-01-02', 4),
+    (9, 5, '2025-01-01', 8),
+    (10, 5, '2025-01-03', 8);</code></pre>
       </div>
     </section>
 
     <section class="example-section">
       <div class="example-section-label">THE QUERY</div>
       <div class="code-block">
-        <pre class="language-sql"><code>SELECT r.resource_id, r.name as resource_name, s.slot_id,
-       s.start_time, s.day, r.efficiency, s.priority, x as assigned
-FROM Resources r
-JOIN Slots s ON r.available_day = s.day
-WHERE s.start_time BETWEEN '09:00' AND '17:00'
-  AND r.skill_level >= s.required_level
-DECIDE x IS BOOLEAN
+        <pre class="language-sql"><code>SELECT n.nurse_id, n.name, n.skill_score, s.shift_date, s.hours,
+       n.keep as selected
+FROM Nurses n
+JOIN Shifts s ON n.nurse_id = s.nurse_id
+DECIDE n.keep IS BOOLEAN
 SUCH THAT
-    SUM(x) PER r.resource_id <= 3 AND
-    SUM(x) PER s.slot_id = 1
-MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
+    SUM(n.keep * s.hours) <= 100
+MAXIMIZE SUM(n.keep * n.skill_score);</code></pre>
       </div>
     </section>
 
@@ -129,47 +134,65 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>JOIN ... ON r.available_day = s.day</code> — Only consider resource-slot pairs where the resource is available on that day.</div>
+          <div><code>DECIDE n.keep IS BOOLEAN</code> — <strong>Table-scoped variable</strong>: the <code>n.</code> prefix means one variable per nurse, not per nurse-shift row. Without <code>n.</code>, we'd have 10 variables (one per row); with <code>n.</code>, we have only 5 (one per nurse).</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
-          <div><code>WHERE r.skill_level &gt;= s.required_level</code> — Further filter: resource must meet the slot's skill requirement.</div>
+          <div><code>SUM(n.keep * s.hours) &lt;= 100</code> — Total hours from selected nurses cannot exceed 100. Since <code>n.keep</code> is table-scoped, it multiplies with each shift's hours — if Alice is kept (keep=1), all her shifts contribute to the total.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) PER r.resource_id &lt;= 3</code> — Each resource is assigned to at most 3 slots.</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">4</span>
-          <div><code>SUM(x) PER s.slot_id = 1</code> — Each slot is filled by exactly one resource.</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">5</span>
-          <div><code>MAXIMIZE SUM(x * r.efficiency * s.priority)</code> — Maximize combined efficiency &times; priority.</div>
+          <div><code>MAXIMIZE SUM(n.keep * n.skill_score)</code> — Maximize total skill score of selected nurses. Again, the table-scoped variable means each nurse's skill score is counted once per row they appear in — but the solver ensures all rows for the same nurse have the same value.</div>
         </div>
       </div>
     </section>
 
     <section class="example-section">
       <div class="example-section-label">RESULT</div>
+      <p class="text-fg-muted mb-4">Nurses selected (one decision per nurse):</p>
+      <div class="table-wrapper mb-6">
+        <table>
+          <thead>
+            <tr>
+              <th>nurse_id</th>
+              <th>name</th>
+              <th>skill_score</th>
+              <th>total_hours</th>
+              <th>selected</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Alice</td><td>95</td><td>16</td><td class="selected-row">1</td></tr>
+            <tr><td>2</td><td>Bob</td><td>80</td><td>12</td><td class="selected-row">1</td></tr>
+            <tr><td>3</td><td>Carol</td><td>90</td><td>24</td><td class="selected-row">1</td></tr>
+            <tr><td>4</td><td>David</td><td>70</td><td>4</td><td>0</td></tr>
+            <tr><td>5</td><td>Eve</td><td>85</td><td>16</td><td class="selected-row">1</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-fg-muted mb-4">Shift coverage (all rows show the same nurse decision):</p>
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>resource</th>
-              <th>slot</th>
-              <th>time</th>
-              <th>day</th>
-              <th>efficiency</th>
-              <th>priority</th>
-              <th>assigned</th>
+              <th>nurse_id</th>
+              <th>name</th>
+              <th>shift_date</th>
+              <th>hours</th>
+              <th>selected</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>Alice</td><td>1</td><td>09:00</td><td>Monday</td><td>0.95</td><td>10</td><td class="selected-row">1</td></tr>
-            <tr><td>Alice</td><td>3</td><td>11:00</td><td>Monday</td><td>0.95</td><td>9</td><td class="selected-row">1</td></tr>
-            <tr><td>Bob</td><td>2</td><td>10:00</td><td>Monday</td><td>0.88</td><td>8</td><td class="selected-row">1</td></tr>
-            <tr><td>Carol</td><td>4</td><td>13:00</td><td>Tuesday</td><td>0.92</td><td>10</td><td class="selected-row">1</td></tr>
+            <tr><td>1</td><td>Alice</td><td>2025-01-01</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>1</td><td>Alice</td><td>2025-01-02</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>2</td><td>Bob</td><td>2025-01-01</td><td>6</td><td class="selected-row">1</td></tr>
+            <tr><td>2</td><td>Bob</td><td>2025-01-03</td><td>6</td><td class="selected-row">1</td></tr>
+            <tr><td>3</td><td>Carol</td><td>2025-01-01</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>3</td><td>Carol</td><td>2025-01-02</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>3</td><td>Carol</td><td>2025-01-03</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>4</td><td>David</td><td>2025-01-02</td><td>4</td><td>0</td></tr>
+            <tr><td>5</td><td>Eve</td><td>2025-01-01</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>5</td><td>Eve</td><td>2025-01-03</td><td>8</td><td class="selected-row">1</td></tr>
           </tbody>
         </table>
       </div>
@@ -178,13 +201,13 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        Alice (efficiency 0.95) gets the two highest-priority Monday slots (10 and 9), Bob (0.88) fills the remaining Monday slot (priority 8), and Carol (0.92) covers the Tuesday slot (priority 10). The total score is (0.95&times;10) + (0.95&times;9) + (0.88&times;8) + (0.92&times;10) = 9.5 + 8.55 + 7.04 + 9.2 = 34.29. The JOIN and WHERE clauses ensure feasibility before optimization begins — Carol can't be assigned to Monday slots, and no one with insufficient skill level is considered.
+        The solver selected 4 nurses (Alice, Bob, Carol, Eve) with total hours 16+12+24+16 = 68 (under the 100-hour limit). Total skill score: 95+80+90+85 = 350. David was not selected because his skill (70) is low relative to his hours (4), and the solver preferred higher-skill nurses. Notice how each nurse's <code>selected</code> value is consistent across all their shift rows — that's the table-scoped variable in action. Without table-scoped variables, we'd have 10 separate decisions, making the problem harder to solve.
       </div>
     </section>
 
     <div class="flex justify-between pt-8 border-t border-bdcolor">
-      <a href="advanced-portfolio.html" class="text-accent hover:text-accent">&larr; Portfolio Optimization</a>
-      <a href="advanced-facility.html" class="text-accent hover:text-accent">Facility Location &rarr;</a>
+      <a href="advanced-facility.html" class="text-accent hover:text-accent">&larr; Facility Location</a>
+      <a href="advanced-regional.html" class="text-accent hover:text-accent">Regional Balancing &rarr;</a>
     </div>
   </main>
 

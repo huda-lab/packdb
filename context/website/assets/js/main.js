@@ -394,7 +394,7 @@
       if (Prism.languages.sql) {
         var orig = Prism.languages.sql['keyword'];
         var packdbKeywords = {
-          pattern: /\bDECIDE\b|\bSUCH\s+THAT\b|\bMAXIMIZE\b|\bMINIMIZE\b/i
+          pattern: /\bDECIDE\b|\bSUCH\s+THAT\b|\bMAXIMIZE\b|\bMINIMIZE\b|\bPER\b|\bWHEN\b/i
         };
         Prism.languages.sql['keyword'] = Array.isArray(orig)
           ? [packdbKeywords].concat(orig)
