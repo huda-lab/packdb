@@ -81,7 +81,6 @@
       <p class="text-fg leading-relaxed">
         A facility manager assigns staff to time slots across multiple days. Resources (staff) have efficiency ratings and available days; slots have start times, days, and priority levels. A resource can only be assigned to a slot on a day they're available, and only if their skill level meets the slot's requirement. Each resource handles at most 3 slots, and each slot needs exactly 1 resource. The objective maximizes the combined efficiency &times; priority score across all assignments.
       </p>
-      <p class="text-sm text-fg-subtle italic mt-3">Note: PER (grouped constraints) is a planned feature — coming soon.</p>
     </section>
 
     <section class="example-section">
@@ -185,7 +184,7 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
 
     <div class="flex justify-between pt-8 border-t border-bdcolor">
       <a href="advanced-portfolio.html" class="text-accent hover:text-accent">&larr; Portfolio Optimization</a>
-      <a href="advanced-multiperiod.html" class="text-accent hover:text-accent">Next: Multi-Period Planning &rarr;</a>
+      <a href="advanced-facility.html" class="text-accent hover:text-accent">Facility Location &rarr;</a>
     </div>
   </main>
 
