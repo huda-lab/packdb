@@ -170,12 +170,16 @@
                   Copy
                 </button>
               </div>
-              <pre class="language-sql"><code>SELECT item, value, weight, x AS selected
-FROM Items
-DECIDE x IS BOOLEAN
+              <pre class="language-sql"><code>SELECT p.name, choose
+FROM products p
+DECIDE p.choose IS BOOLEAN
 SUCH THAT
-    SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
+    -- Total cost must stay within budget
+    SUM(choose * p.price) <= 1000 AND
+    -- At most 3 products per category
+    SUM(choose) <= 3 PER p.category AND
+MAXIMIZE SUM(choose * p.profit)
+</code></pre>
             </div>
             <p class="text-sm text-fg-subtle mt-3 text-center">
               One query. No data export. No solver code. Just SQL.
@@ -220,30 +224,54 @@ MAXIMIZE SUM(x * value);</code></pre>
                   Copy
                 </button>
               </div>
-              <pre class="language-python text-sm"><code># Step 1: Export data from database
+              <pre class="language-python text-sm"><code># Step 1: Load data from DuckDB
 import duckdb, pulp
+from collections import defaultdict
 
 conn = duckdb.connect('db.duckdb')
-items = conn.execute("""
-    SELECT id, value, weight FROM Items
-    WHERE category = 'electronics'
+
+products = conn.execute("""
+    SELECT id, name, category, price, profit, in_stock
+    FROM products
 """).fetchall()
 
 # Step 2: Build optimization model
-prob = pulp.LpProblem("knapsack", pulp.LpMaximize)
-x = [pulp.LpVariable(f"x_{i}", cat='Binary')
-     for i in range(len(items))]
+prob = pulp.LpProblem("product_selection", pulp.LpMaximize)
 
-# Step 3: Add constraints + solve
+# Decision variables (one per product)
+x = [
+    pulp.LpVariable(f"x_{i}", cat='Binary')
+    for i in range(len(products))
+]
+
+# Step 3: Constraints
+
+# (1) Total budget <= 1000
 prob += pulp.lpSum(
-    x[i] * items[i][2] for i in range(len(items))
-) <= 50
+    x[i] * products[i][3]  # price
+    for i in range(len(products))
+) <= 1000
+
+# (2) At most 3 products per category
+category_groups = defaultdict(list)
+for i, p in enumerate(products):
+    category_groups[p[2]].append(i)  # category
+
+for cat, indices in category_groups.items():
+    prob += pulp.lpSum(x[i] for i in indices) <= 3
+
+# Step 4: Objective (maximize profit)
 prob += pulp.lpSum(
-    x[i] * items[i][1] for i in range(len(items))
+    x[i] * products[i][4]  # profit
+    for i in range(len(products))
 )
+
+# Solve
 prob.solve()
 
-# Step 4: Map results back to database...</code></pre>
+# Step 5: Map results back to database
+...
+</code></pre>
             </div>
 
             <!-- PackDB Approach -->
@@ -259,13 +287,13 @@ prob.solve()
                 </button>
               </div>
               <pre class="language-sql text-sm"><code>-- One query does it all
-SELECT id, value, weight, x
-FROM Items
-WHERE category = 'electronics'
-DECIDE x IS BOOLEAN
+SELECT p.name, choose
+FROM products p
+DECIDE p.choose IS BOOLEAN
 SUCH THAT
-    SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
+    SUM(choose * p.price) <= 1000 AND
+    SUM(choose) <= 3 PER p.category AND
+MAXIMIZE SUM(choose * p.profit)</code></pre>
             </div>
           </div>
 

@@ -168,6 +168,10 @@
                 <li><a href="#decide" class="sidebar-link">The DECIDE Clause</a></li>
                 <li><a href="#such-that" class="sidebar-link">The SUCH THAT Clause</a></li>
                 <li><a href="#objective" class="sidebar-link">The Objective Clause</a></li>
+                <li><a href="#when" class="sidebar-link">Conditional: WHEN</a></li>
+                <li><a href="#per" class="sidebar-link">Grouped: PER</a></li>
+                <li><a href="#quadratic" class="sidebar-link">Quadratic (QP)</a></li>
+                <li><a href="#bilinear" class="sidebar-link">Bilinear Terms</a></li>
                 <li><a href="#solver-outcomes" class="sidebar-link">Solver Outcomes</a></li>
                 <li><a href="#best-practices" class="sidebar-link">Best Practices</a></li>
               </ul>
@@ -202,7 +206,8 @@ FROM table_expression
 DECIDE variable [IS type] [, variable2 [IS type] ...]
 SUCH THAT
     constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] SUM(linear_expression)</code></pre>
+[MAXIMIZE | MINIMIZE] SUM(linear_expression)
+</code></pre>
               </div>
 
               <h3 class="text-xl font-semibold text-fg mb-4">Execution Order</h3>
@@ -269,7 +274,7 @@ SUCH THAT
               <h3 class="text-xl font-semibold text-fg mb-4">Variable Types</h3>
 
               <p class="text-fg-muted mb-4">
-                Specify the variable type with <code>IS BOOLEAN</code> or <code>IS INTEGER</code>. If you omit the type, the default is <code>INTEGER</code>.
+                Specify the variable type with <code>IS BOOLEAN</code>, <code>IS REAL</code>, or <code>IS INTEGER</code>. If you omit the type, the default is <code>INTEGER</code>.
               </p>
 
               <div class="space-y-6 mb-8">
@@ -306,6 +311,25 @@ SUCH THAT
                     <pre class="language-sql"><code>DECIDE quantity IS INTEGER</code></pre>
                   </div>
                 </div>
+
+                <div class="space-y-6 mb-8">
+                <div>
+                  <h4 class="font-semibold text-fg mb-2">REAL &mdash; choose a continuous non-negative value</h4>
+                  <p class="text-fg-muted text-sm mb-3">
+                    The variable takes a non-negative real value. Use this when each row is either included or excluded.
+                  </p>
+                  <div class="code-block">
+                    <div class="code-header">
+                      <span class="language-label">SQL</span>
+                      <button class="copy-button">
+                        <i data-lucide="copy" class="w-4 h-4"></i>
+                        Copy
+                      </button>
+                    </div>
+                    <pre class="language-sql"><code>DECIDE x IS REAL</code></pre>
+                  </div>
+                </div>
+
               </div>
 
               <h3 class="text-xl font-semibold text-fg mb-4">Multiple Variables</h3>
@@ -323,6 +347,48 @@ SUCH THAT
                 <pre class="language-sql"><code>-- Two variables per row: include or not, and how many
 DECIDE x IS BOOLEAN, quantity IS INTEGER</code></pre>
               </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Table-Scoped Variables</h3>
+              <p class="text-fg-muted mb-4">
+                By default, decision variables are <strong>row-scoped</strong>: one variable per row in the input relation. When tables are joined, this can create many variables.
+              </p>
+              <p class="text-fg-muted mb-4">
+                <strong>Table-scoped</strong> variables use a table qualifier: <code>DECIDE Table.variable IS TYPE</code>. This creates ONE variable per unique entity in the source table. All result rows from the same entity share the same variable value.
+              </p>
+              <div class="code-block mb-6">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                  <button class="copy-button">
+                    <i data-lucide="copy" class="w-4 h-4"></i>
+                    Copy
+                  </button>
+                </div>
+                <pre class="language-sql"><code>-- Table-scoped: one decision per nurse, not per shift
+SELECT n.name, s.shift_date, n.keep
+FROM nurses n
+JOIN shifts s ON n.id = s.nurse_id
+DECIDE n.keep IS BOOLEAN
+SUCH THAT SUM(n.keep * s.hours) <= 100
+MAXIMIZE SUM(n.keep * n.skill_score)</code></pre>
+              </div>
+              <ul class="space-y-2 text-fg-muted mb-8">
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>The table qualifier must match a table alias or name in the <code>FROM</code> clause.</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>Entity identification uses all columns from the source table as a composite key.</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>Mixed queries can declare both row-scoped and table-scoped variables.</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>Reduces solver variables from <code>num_rows</code> to <code>num_entities</code>.</span>
+                </li>
+              </ul>
 
               <h3 class="text-xl font-semibold text-fg mb-4">Using Variables in SELECT</h3>
               <p class="text-fg-muted mb-4">
@@ -585,7 +651,7 @@ MAXIMIZE SUM(x * profit_a + y * profit_b)</code></pre>
               <ul class="space-y-2 text-fg-muted mb-8">
                 <li class="flex items-start gap-2">
                   <span class="text-fg mt-0.5">&bull;</span>
-                  <span>The objective must use <code>SUM()</code>. Other aggregates (<code>COUNT</code>, <code>AVG</code>, <code>MAX</code>, <code>MIN</code>) are not supported.</span>
+                  <span>The objective must use an aggregate: <code>SUM()</code>, <code>COUNT()</code>, <code>AVG()</code>, <code>MAX()</code>, or <code>MIN()</code>.</span>
                 </li>
                 <li class="flex items-start gap-2">
                   <span class="text-fg mt-0.5">&bull;</span>
@@ -593,13 +659,48 @@ MAXIMIZE SUM(x * profit_a + y * profit_b)</code></pre>
                 </li>
                 <li class="flex items-start gap-2">
                   <span class="text-fg mt-0.5">&bull;</span>
-                  <span>Must be linear (same rules as constraints).</span>
+                  <span>Must be linear for SUM/COUNT/AVG; MIN/MAX have special handling (see below).</span>
                 </li>
                 <li class="flex items-start gap-2">
                   <span class="text-fg mt-0.5">&bull;</span>
                   <span>Constant terms are ignored (they don't affect which solution is optimal).</span>
                 </li>
               </ul>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Supported Aggregates</h3>
+              <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-8">
+                <table class="w-full">
+                  <thead>
+                    <tr class="bg-canvas-inset">
+                      <th class="text-left px-4 py-3 text-fg">Aggregate</th>
+                      <th class="text-left px-4 py-3 text-fg">Usage</th>
+                      <th class="text-left px-4 py-3 text-fg">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody class="text-fg-muted text-sm">
+                    <tr>
+                      <td class="px-4 py-3"><code>SUM(expr)</code></td>
+                      <td class="px-4 py-3">Primary aggregate</td>
+                      <td class="px-4 py-3">Works with all variable types</td>
+                    </tr>
+                    <tr>
+                      <td class="px-4 py-3"><code>COUNT(x)</code></td>
+                      <td class="px-4 py-3">Count selected items</td>
+                      <td class="px-4 py-3">BOOLEAN → SUM; INTEGER uses Big-M</td>
+                    </tr>
+                    <tr>
+                      <td class="px-4 py-3"><code>AVG(expr)</code></td>
+                      <td class="px-4 py-3">Average value</td>
+                      <td class="px-4 py-3">Rewritten to SUM with RHS scaling</td>
+                    </tr>
+                    <tr>
+                      <td class="px-4 py-3"><code>MIN(expr)</code> / <code>MAX(expr)</code></td>
+                      <td class="px-4 py-3">Minimize/maximize extreme values</td>
+                      <td class="px-4 py-3">Easy cases no Big-M; hard cases need indicators</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
 
               <h3 class="text-xl font-semibold text-fg mb-4">COUNT Workaround</h3>
               <p class="text-fg-muted mb-4">
@@ -644,6 +745,255 @@ SUCH THAT
               <p class="text-fg-muted text-sm mt-3">
                 Returns any combination of exactly 3 items whose total weight is at most 50.
               </p>
+            </section>
+
+            <!-- ============================================
+                 WHEN CLAUSE
+                 ============================================ -->
+            <section id="when" class="mb-20">
+              <h2 class="text-3xl text-fg mb-6">Conditional Expressions — WHEN</h2>
+
+              <p class="text-fg-muted mb-6">
+                The <code>WHEN</code> keyword enables conditional constraints and objectives. A <code>WHEN</code> clause causes the expression to apply only to rows where the condition evaluates to true. Rows where the condition is false or NULL are excluded.
+              </p>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Syntax</h3>
+              <p class="text-fg-muted mb-4">
+                <code>WHEN</code> is <strong>postfix</strong>: the expression comes first, then <code>WHEN condition</code>.
+              </p>
+
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                  <button class="copy-button">
+                    <i data-lucide="copy" class="w-4 h-4"></i>
+                    Copy
+                  </button>
+                </div>
+                <pre class="language-sql"><code>-- Category-specific budget constraints
+SUCH THAT
+    SUM(x * price) <= 500 WHEN category = 'electronics' AND
+    SUM(x * price) <= 300 WHEN category = 'clothing' AND
+    SUM(x * price) <= 200 WHEN category = 'food'
+
+-- Conditional objective
+MAXIMIZE SUM(x * profit) WHEN category = 'electronics'</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Rules</h3>
+              <ul class="space-y-2 text-fg-muted mb-8">
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>The <code>WHEN</code> condition must reference only table columns, <strong>not</strong> decision variables.</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>NULL conditions are treated as false (expression does not apply for that row).</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span>When a <code>WHEN</code> condition contains <code>AND</code>/<code>OR</code>, parentheses are required:</span>
+                </li>
+              </ul>
+
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Aggregate-local WHEN</h3>
+              <p class="text-fg-muted mb-4">
+                <code>WHEN</code> can also be attached directly to a single aggregate term inside an additive expression:
+              </p>
+              <div class="code-block">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>SUCH THAT
+    SUM(x * hours) WHEN morning + SUM(x * hours) WHEN evening <= 40
+
+MAXIMIZE
+    SUM(x * profit) WHEN high_margin + SUM(x * bonus) WHEN strategic</code></pre>
+              </div>
+            </section>
+
+            <!-- ============================================
+                 PER CLAUSE
+                 ============================================ -->
+            <section id="per" class="mb-20">
+              <h2 class="text-3xl text-fg mb-6">Group-Scoped Constraints — PER</h2>
+
+              <p class="text-fg-muted mb-6">
+                The <code>PER</code> keyword generates one constraint per distinct value (or combination of values) of column(s).
+              </p>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Syntax</h3>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>SUM(expr) comparison rhs PER column
+SUM(expr) comparison rhs PER (col1, col2, ...)</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Examples</h3>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>-- At most 3 products per category
+SUCH THAT SUM(x) <= 3 PER category
+
+-- Budget per department
+SUCH THAT SUM(x * cost) <= 1000 PER department
+
+-- Exactly 1 assignment per task
+SUCH THAT SUM(x) = 1 PER task_id</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">PER + WHEN Composition</h3>
+              <p class="text-fg-muted mb-4">
+                WHEN filters rows first, then PER groups the remaining rows:
+              </p>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>SUCH THAT
+    SUM(x * hours) <= 30 WHEN title = 'Director' PER empID</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">PER on Objective — Nested Aggregates</h3>
+              <p class="text-fg-muted mb-4">
+                PER on objectives uses nested aggregate syntax: <code>OUTER(INNER(expr)) PER col</code>
+              </p>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>-- Minimize the maximum cost per department
+MINIMIZE MAX(SUM(x * cost)) PER department
+
+-- Maximize the minimum profit per region
+MAXIMIZE MIN(SUM(x * profit)) PER region
+
+-- Balance: minimize max regional cost
+MINIMIZE MAX(SUM(x * shipping_cost)) PER region</code></pre>
+              </div>
+
+              <div class="bg-canvas-inset border border-bdcolor rounded-lg p-4 mb-4">
+                <h4 class="font-semibold text-fg mb-2">Supported Combinations</h4>
+                <p class="text-fg-muted text-sm">
+                  All 9 combinations of SUM/MIN/MAX for outer and inner aggregates are supported. Flat aggregate + PER (e.g., <code>MIN(expr) PER col</code>) is an error — use the nested form instead.
+                </p>
+              </div>
+            </section>
+
+            <!-- ============================================
+                 QUADRATIC OBJECTIVES
+                 ============================================ -->
+            <section id="quadratic" class="mb-20">
+              <h2 class="text-3xl text-fg mb-6">Quadratic Objectives (QP)</h2>
+
+              <p class="text-fg-muted mb-6">
+                PackDB supports quadratic objectives for convex quadratic programming. Use <code>POWER(expr, 2)</code>, <code>expr ** 2</code>, or <code>(expr) * (expr)</code>.
+              </p>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Convex QP (MINIMIZE)</h3>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>-- Minimize sum of squared deviations from target
+MINIMIZE SUM(POWER(x - target, 2))
+
+-- Equivalent forms
+MINIMIZE SUM((x - target) ** 2)
+MINIMIZE SUM((x - target) * (x - target))</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Concave QP (MAXIMIZE)</h3>
+              <p class="text-fg-muted mb-4">
+                Use negated forms for concave objectives (both solvers):
+              </p>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>-- Maximize sum of negative squared (concave)
+MAXIMIZE SUM(-POWER(x - target, 2))
+MAXIMIZE SUM((-1) * POWER(x - target, 2))</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Non-Convex QP (Gurobi Only)</h3>
+              <p class="text-fg-muted mb-4">
+                <code>MAXIMIZE SUM(POWER(expr, 2))</code> is non-convex and requires Gurobi with <code>NonConvex=2</code>. HiGHS does not support this.
+              </p>
+
+              <div class="bg-canvas-inset border border-bdcolor rounded-lg p-4">
+                <h4 class="font-semibold text-fg mb-2">Solver Support</h4>
+                <ul class="text-fg-muted text-sm space-y-1">
+                  <li>&bull; <strong>Gurobi</strong>: Continuous QP, MIQP, and non-convex QP</li>
+                  <li>&bull; <strong>HiGHS</strong>: Continuous QP only (no integer variables with quadratic objectives)</li>
+                </ul>
+              </div>
+            </section>
+
+            <!-- ============================================
+                 BILINEAR TERMS
+                 ============================================ -->
+            <section id="bilinear" class="mb-20">
+              <h2 class="text-3xl text-fg mb-6">Bilinear Terms (x * y)</h2>
+
+              <p class="text-fg-muted mb-6">
+                Products of two different DECIDE variables are supported in both objectives and constraints.
+              </p>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">Boolean × Anything (McCormick)</h3>
+              <p class="text-fg-muted mb-4">
+                When one factor is <code>IS BOOLEAN</code>, the product is exactly linearized using McCormick envelopes. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable.
+              </p>
+              <div class="code-block mb-8">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>-- Boolean times continuous
+DECIDE b IS BOOLEAN, x IS REAL
+SUCH THAT x <= 10  -- upper bound required
+MAXIMIZE SUM(b * x)</code></pre>
+              </div>
+
+              <h3 class="text-xl font-semibold text-fg mb-4">General Non-Convex (Gurobi Only)</h3>
+              <p class="text-fg-muted mb-4">
+                Products of two non-Boolean variables (Real×Real, Int×Int, Int×Real) produce an indefinite Q matrix:
+              </p>
+              <ul class="space-y-2 text-fg-muted mb-8">
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span><strong>Objectives</strong>: Gurobi only (via NonConvex=2)</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span><strong>Constraints</strong>: Gurobi only (via quadratic constraints)</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-fg mt-0.5">&bull;</span>
+                  <span><strong>HiGHS</strong>: Rejects with clear error</span>
+                </li>
+              </ul>
+
+              <div class="code-block">
+                <div class="code-header">
+                  <span class="language-label">SQL</span>
+                </div>
+                <pre class="language-sql"><code>-- Bilinear in objective (Gurobi only)
+MAXIMIZE SUM(x * y)
+
+-- Bilinear in constraint (Gurobi only)
+SUCH THAT POWER(x - y, 2) <= 100</code></pre>
+              </div>
             </section>
 
             <!-- ============================================
