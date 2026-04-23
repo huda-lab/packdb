@@ -4,7 +4,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/expression/operator_expression.hpp">
+#include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
@@ -447,7 +447,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			if (func_name_lower == "*") {
 				idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
 				if (decide_count > 2) {
-					error_msg = "Triple or higher-order products of DECIDE variables are not supported";
+					error_msg = "Triple or higher-order products of DECIDE variables are not supported "
+					            "(total degree > 2)";
 					return false;
 				}
 				if (decide_count > 1) {

@@ -86,31 +86,113 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 	}
 }
 
-static bool IsConstantOne(const Expression &expr) {
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-	       expr.Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0;
+struct NormalizedProductTerm {
+	const BoundFunctionExpression *mul_func = nullptr;
+	vector<const Expression *> coefficient_factors;
+	vector<idx_t> decide_factors;
+};
+
+static const Expression *UnwrapBoundCasts(const Expression &expr) {
+	const Expression *cur = &expr;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<BoundCastExpression>().child.get();
+	}
+	return cur;
 }
 
-static unique_ptr<Expression> CombineBilinearCoefficients(unique_ptr<Expression> coef_a,
-                                                          unique_ptr<Expression> coef_b,
+static bool IsBoundMultiply(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	return func.function.name == "*";
+}
+
+static void CollectMultiplicativeFactors(const Expression &expr, vector<const Expression *> &factors) {
+	const Expression *cur = UnwrapBoundCasts(expr);
+	if (IsBoundMultiply(*cur)) {
+		auto &func = cur->Cast<BoundFunctionExpression>();
+		for (auto &child : func.children) {
+			CollectMultiplicativeFactors(*child, factors);
+		}
+		return;
+	}
+	factors.push_back(cur);
+}
+
+static unique_ptr<Expression> BuildCoefficientFromFactors(const vector<const Expression *> &factors,
                                                           const BoundFunctionExpression &mul_func) {
-	bool a_is_one = IsConstantOne(*coef_a);
-	bool b_is_one = IsConstantOne(*coef_b);
-	if (a_is_one && b_is_one) {
+	if (factors.empty()) {
 		return nullptr;
 	}
-	if (a_is_one) {
-		return std::move(coef_b);
-	}
-	if (b_is_one) {
-		return std::move(coef_a);
+	if (factors.size() == 1) {
+		return factors[0]->Copy();
 	}
 
-	vector<unique_ptr<Expression>> mul_children;
-	mul_children.push_back(std::move(coef_a));
-	mul_children.push_back(std::move(coef_b));
-	return make_uniq_base<Expression, BoundFunctionExpression>(
-	    mul_func.return_type, mul_func.function, std::move(mul_children), nullptr);
+	auto result = factors[0]->Copy();
+	for (idx_t i = 1; i < factors.size(); i++) {
+		vector<unique_ptr<Expression>> mul_children;
+		mul_children.push_back(std::move(result));
+		mul_children.push_back(factors[i]->Copy());
+		unique_ptr<FunctionData> bind_info;
+		if (mul_func.bind_info) {
+			bind_info = mul_func.bind_info->Copy();
+		}
+		result = make_uniq_base<Expression, BoundFunctionExpression>(
+		    mul_func.return_type, mul_func.function, std::move(mul_children), std::move(bind_info));
+	}
+	return result;
+}
+
+static bool TryGetBareDecideFactor(const Expression &expr, const PhysicalDecide &op, idx_t &var_idx) {
+	const Expression *cur = UnwrapBoundCasts(expr);
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return false;
+	}
+	var_idx = op.FindDecideVariable(*cur);
+	return var_idx != DConstants::INVALID_INDEX;
+}
+
+static bool ClassifyNormalizedProduct(const Expression &expr, const PhysicalDecide &op,
+                                      NormalizedProductTerm &result) {
+	const Expression *root = UnwrapBoundCasts(expr);
+	if (!IsBoundMultiply(*root)) {
+		return false;
+	}
+
+	result = NormalizedProductTerm();
+	result.mul_func = &root->Cast<BoundFunctionExpression>();
+
+	vector<const Expression *> factors;
+	CollectMultiplicativeFactors(*root, factors);
+	for (auto *factor : factors) {
+		idx_t var_idx = DConstants::INVALID_INDEX;
+		if (TryGetBareDecideFactor(*factor, op, var_idx)) {
+			result.decide_factors.push_back(var_idx);
+			continue;
+		}
+		if (op.FindDecideVariable(*factor) != DConstants::INVALID_INDEX) {
+			throw InvalidInputException(
+			    "DECIDE expression contains an unsupported product factor that still "
+			    "references decision variables after normalization (total degree > 2 "
+			    "or unexpanded nonlinear product). Products must be data factors times "
+			    "one DECIDE variable, or data factors times two different DECIDE variables.");
+		}
+		result.coefficient_factors.push_back(factor);
+	}
+
+	if (result.decide_factors.size() > 2) {
+		throw InvalidInputException(
+		    "DECIDE expression contains a product of decision variables with total degree > 2. "
+		    "Only linear products and bilinear products of two different DECIDE variables are supported.");
+	}
+	if (result.decide_factors.size() == 2 && result.decide_factors[0] == result.decide_factors[1]) {
+		throw InvalidInputException(
+		    "DECIDE expression contains a same-variable product that is not in a supported "
+		    "quadratic form. Use POWER(linear_expr, 2) or (linear_expr) * (linear_expr) "
+		    "for quadratic terms.");
+	}
+	return true;
 }
 
 //===--------------------------------------------------------------------===//
@@ -1012,55 +1094,17 @@ public:
                 return;
             }
 
-            // Multiplication: check for bilinear
-            if (fname == "*" && func.children.size() == 2) {
-                // Check if both sides contain decide variables
-                idx_t left_var = op.FindDecideVariable(*func.children[0]);
-                idx_t right_var = op.FindDecideVariable(*func.children[1]);
-
-                if (left_var != DConstants::INVALID_INDEX && right_var != DConstants::INVALID_INDEX) {
-                    // Both sides have decide variables
-                    // Check for identical expression (QP, not bilinear)
-                    if (func.children[0]->ToString() == func.children[1]->ToString()) {
-                        // Fall through to linear extraction (shouldn't happen — QP detected earlier)
-                    } else {
-                        // Guard against degree > 2 shapes: each side must be linear
-                        // in decide vars. Rejects e.g. x * POWER(y, 2) (degree 3),
-                        // POWER(x, 2) * POWER(y, 2) (degree 4), (x*y) * z (degree 3).
-                        // Without this gate the bilinear emitter silently treats the
-                        // inner POWER / nested-* as an opaque "data coefficient",
-                        // corrupting Q and in practice crashing the coefficient
-                        // evaluator when the coefficient re-references a decide var.
-                        if (!op.IsLinearInDecideVars(*func.children[0]) ||
-                            !op.IsLinearInDecideVars(*func.children[1])) {
-                            throw InvalidInputException(
-                                "DECIDE objective contains a product of decision variables "
-                                "with total degree > 2 (e.g. x * POWER(y, 2), POWER(x, 2) * "
-                                "POWER(y, 2), x * x * y). Only bilinear (x * y, different "
-                                "variables, each linear) or quadratic (POWER(linear_expr, 2)) "
-                                "forms are supported.");
-                        }
-                        // Bilinear term: extract var_a, var_b, and optional data coefficient
-                        // The expression is of the form: coef_a * var_a * coef_b * var_b
-                        // We need to extract both variable indices and any remaining data coefficient.
-                        // Simple case: left = var_a, right = var_b (coefficient = 1.0)
-                        // Complex case: left = coef * var_a, right = var_b
-                        // For now, handle the simple cases where each side is either:
-                        //   - a bare variable reference, or
-                        //   - data_coef * variable
-                        idx_t var_a = left_var;
-                        idx_t var_b = right_var;
-                        unique_ptr<Expression> coef_a = op.ExtractCoefficientWithoutVariable(*func.children[0], var_a);
-                        unique_ptr<Expression> coef_b = op.ExtractCoefficientWithoutVariable(*func.children[1], var_b);
-
-                        // Multiply the two data coefficients together.
-                        unique_ptr<Expression> combined_coef =
-                            CombineBilinearCoefficients(std::move(coef_a), std::move(coef_b), func);
-
+            // Multiplication: the parsed normalizer is responsible for algebraic
+            // expansion; at physical planning we only flatten already-normalized
+            // product factors for classification.
+            if (fname == "*") {
+                NormalizedProductTerm product;
+                if (ClassifyNormalizedProduct(func, op, product)) {
+                    if (product.decide_factors.size() == 2) {
                         Objective::BilinearTerm bt;
-                        bt.var_a = var_a;
-                        bt.var_b = var_b;
-                        bt.coefficient = combined_coef ? std::move(combined_coef) : nullptr;
+                        bt.var_a = product.decide_factors[0];
+                        bt.var_b = product.decide_factors[1];
+                        bt.coefficient = BuildCoefficientFromFactors(product.coefficient_factors, *product.mul_func);
                         bt.sign = sign;
                         if (filter) {
                             bt.filter = filter->Copy();
@@ -1189,64 +1233,49 @@ public:
                     return;
                 }
             }
-            if (fname == "*" && func.children.size() == 2) {
+            if (fname == "*") {
                 // Scaled quadratic: const * POWER(expr, 2) or POWER(expr, 2) * const
-                for (idx_t side = 0; side < 2; side++) {
-                    const Expression *maybe_const = func.children[side].get();
-                    while (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                        maybe_const = maybe_const->Cast<BoundCastExpression>().child.get();
-                    }
-                    if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                        double cval = maybe_const->Cast<BoundConstantExpression>()
-                                          .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                        if (cval != 0.0) {
-                            const Expression *inner = TryDetectConstraintQuadratic(func.children[1 - side].get());
-                            if (inner) {
-                                DecideConstraint::QuadraticGroup qg;
-                                qg.sign = static_cast<double>(sign) * cval;
-                                if (filter) {
-                                    qg.filter = filter->Copy();
+                if (func.children.size() == 2) {
+                    for (idx_t side = 0; side < 2; side++) {
+                        const Expression *maybe_const = func.children[side].get();
+                        while (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                            maybe_const = maybe_const->Cast<BoundCastExpression>().child.get();
+                        }
+                        if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                            double cval = maybe_const->Cast<BoundConstantExpression>()
+                                              .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                            if (cval != 0.0) {
+                                const Expression *inner = TryDetectConstraintQuadratic(func.children[1 - side].get());
+                                if (inner) {
+                                    DecideConstraint::QuadraticGroup qg;
+                                    qg.sign = static_cast<double>(sign) * cval;
+                                    if (filter) {
+                                        qg.filter = filter->Copy();
+                                    }
+                                    op.ExtractTerms(*inner, qg.inner_terms);
+                                    constr.quadratic_groups.push_back(std::move(qg));
+                                    constr.has_quadratic = true;
+                                    return;
                                 }
-                                op.ExtractTerms(*inner, qg.inner_terms);
-                                constr.quadratic_groups.push_back(std::move(qg));
-                                constr.has_quadratic = true;
-                                return;
                             }
                         }
                     }
                 }
-                // Self-product (expr)*(expr): handled by TryDetectConstraintQuadratic above
-                // Bilinear constraint term: var_a * var_b with different variables
-                idx_t left_var = op.FindDecideVariable(*func.children[0]);
-                idx_t right_var = op.FindDecideVariable(*func.children[1]);
-                if (left_var != DConstants::INVALID_INDEX && right_var != DConstants::INVALID_INDEX &&
-                    func.children[0]->ToString() != func.children[1]->ToString()) {
-                    // Guard against degree > 2 shapes in constraints (mirrors the
-                    // objective-side check). Without this, x * POWER(y,2) silently
-                    // becomes a bilinear x*y with POWER(y,2) carried as an opaque
-                    // "coefficient" that still references y.
-                    if (!op.IsLinearInDecideVars(*func.children[0]) ||
-                        !op.IsLinearInDecideVars(*func.children[1])) {
-                        throw InvalidInputException(
-                            "DECIDE constraint contains a product of decision variables "
-                            "with total degree > 2 (e.g. x * POWER(y, 2), POWER(x, 2) * "
-                            "POWER(y, 2), x * x * y). Only bilinear (x * y, different "
-                            "variables, each linear) or quadratic (POWER(linear_expr, 2)) "
-                            "forms are supported.");
+                NormalizedProductTerm product;
+                if (ClassifyNormalizedProduct(func, op, product)) {
+                    if (product.decide_factors.size() == 2) {
+                        BilinearConstraintTerm bt;
+                        bt.var_a = product.decide_factors[0];
+                        bt.var_b = product.decide_factors[1];
+                        bt.coefficient = BuildCoefficientFromFactors(product.coefficient_factors, *product.mul_func);
+                        bt.sign = sign;
+                        if (filter) {
+                            bt.filter = filter->Copy();
+                        }
+                        constr.bilinear_terms.push_back(std::move(bt));
+                        constr.has_bilinear = true;
+                        return;
                     }
-                    BilinearConstraintTerm bt;
-                    bt.var_a = left_var;
-                    bt.var_b = right_var;
-                    auto coef_a = op.ExtractCoefficientWithoutVariable(*func.children[0], left_var);
-                    auto coef_b = op.ExtractCoefficientWithoutVariable(*func.children[1], right_var);
-                    bt.coefficient = CombineBilinearCoefficients(std::move(coef_a), std::move(coef_b), func);
-                    bt.sign = sign;
-                    if (filter) {
-                        bt.filter = filter->Copy();
-                    }
-                    constr.bilinear_terms.push_back(std::move(bt));
-                    constr.has_bilinear = true;
-                    return;
                 }
             }
         }

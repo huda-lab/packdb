@@ -675,6 +675,42 @@ class TestBilinearConstraints:
 
         self._assert_single_xy_one(result, cols)
 
+    @staticmethod
+    def _run_grouped_product_minimize_y(packdb_cli_gurobi, constraint_expr):
+        sql = f"""
+            WITH data AS (SELECT 1 AS id, 2 AS a, 5 AS b)
+            SELECT id, a, b, x, y
+            FROM data
+            DECIDE x IS INTEGER, y IS INTEGER
+            SUCH THAT x >= 0 AND x <= 1
+                  AND y >= 0 AND y <= 1
+                  AND {constraint_expr}
+            MINIMIZE SUM(y)
+        """
+        return packdb_cli_gurobi.execute(sql)
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_aggregate
+    @pytest.mark.obj_minimize
+    def test_bilinear_aggregate_constraint_grouped_product_forces_y(self, packdb_cli_gurobi):
+        result, cols = self._run_grouped_product_minimize_y(
+            packdb_cli_gurobi, "SUM((a * b) * (x * y)) >= 10",
+        )
+
+        self._assert_single_xy_one(result, cols)
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_perrow
+    @pytest.mark.obj_minimize
+    def test_bilinear_per_row_constraint_grouped_product_forces_y(self, packdb_cli_gurobi):
+        result, cols = self._run_grouped_product_minimize_y(
+            packdb_cli_gurobi, "(a * b) * (x * y) >= 10",
+        )
+
+        self._assert_single_xy_one(result, cols)
+
     def test_bool_bilinear_constraint(self, packdb_cli, oracle_solver, perf_tracker):
         """SUCH THAT SUM(b1 * b2) <= 1 — bilinear constraint, linear objective.
 
@@ -1437,6 +1473,80 @@ def test_bilinear_objective_split_shape_matches_flat_product(packdb_cli_gurobi, 
     )
     assert _selected_ids_xy(split_rows, split_cols) == {1}
     assert _selected_ids_xy(flat_rows, flat_cols) == {1}
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_objective_grouped_data_product_matches_flat_product(packdb_cli_gurobi):
+    grouped_rows, grouped_cols = _run_split_coefficient_bilinear_query(
+        packdb_cli_gurobi, "(a * b) * (x * y)",
+    )
+    flat_rows, flat_cols = _run_split_coefficient_bilinear_query(
+        packdb_cli_gurobi, "a * b * x * y",
+    )
+
+    grouped_obj = _packdb_split_coefficient_objective(grouped_rows, grouped_cols)
+    flat_obj = _packdb_split_coefficient_objective(flat_rows, flat_cols)
+    assert abs(grouped_obj - flat_obj) <= 1e-6
+    assert _selected_ids_xy(grouped_rows, grouped_cols) == {1}
+    assert _selected_ids_xy(flat_rows, flat_cols) == {1}
+
+
+def _run_single_row_bilinear_objective(packdb_cli, objective_expr):
+    sql = f"""
+        WITH data AS (SELECT 1 AS id)
+        SELECT id, x, y, z
+        FROM data
+        DECIDE x IS INTEGER, y IS INTEGER, z IS INTEGER
+        SUCH THAT x >= 0 AND x <= 1
+              AND y >= 0 AND y <= 1
+              AND z >= 0 AND z <= 1
+              AND SUM(z) = 1
+        MAXIMIZE SUM({objective_expr})
+    """
+    return packdb_cli.execute(sql)
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_objective_expands_linear_plus_constant_factor(packdb_cli_gurobi):
+    factored_rows, factored_cols = _run_single_row_bilinear_objective(
+        packdb_cli_gurobi, "(x + 1) * y",
+    )
+    expanded_rows, expanded_cols = _run_single_row_bilinear_objective(
+        packdb_cli_gurobi, "x * y + y",
+    )
+
+    assert factored_rows == expanded_rows
+    assert factored_cols == expanded_cols
+    assert int(factored_rows[0][factored_cols.index("x")]) == 1
+    assert int(factored_rows[0][factored_cols.index("y")]) == 1
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_objective_expands_sum_factor(packdb_cli_gurobi):
+    factored_rows, factored_cols = _run_single_row_bilinear_objective(
+        packdb_cli_gurobi, "(x + y) * z",
+    )
+    expanded_rows, expanded_cols = _run_single_row_bilinear_objective(
+        packdb_cli_gurobi, "x * z + y * z",
+    )
+
+    assert factored_rows == expanded_rows
+    assert factored_cols == expanded_cols
+    assert int(factored_rows[0][factored_cols.index("x")]) == 1
+    assert int(factored_rows[0][factored_cols.index("y")]) == 1
+    assert int(factored_rows[0][factored_cols.index("z")]) == 1
 
 
 @pytest.mark.var_boolean

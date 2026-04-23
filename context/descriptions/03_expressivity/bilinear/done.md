@@ -63,7 +63,7 @@ Bilinear terms compose with existing features:
 
 ### Degree Guard (Total Degree ≤ 2)
 
-Only bilinear (`x * y`, different variables, each linear in decide vars) and quadratic (`POWER(linear_expr, 2)`) are supported. Products whose total decision-variable degree exceeds 2 are rejected at execution time by `PhysicalDecide::IsLinearInDecideVars`, applied to each side of every bilinear `*` and to the inner of every POWER / self-product. Rejected shapes include:
+Only bilinear (`x * y`, different variables, each linear in decide vars) and quadratic (`POWER(linear_expr, 2)`) are supported. Products with total decision-variable degree > 2 are rejected at execution time by `ClassifyNormalizedProduct` (which flattens all `*` nodes and counts decide-variable leaves). Self-products of the same variable are also rejected. Rejected shapes include:
 
 - `x * POWER(y, 2)` (cubic) — variable × squared
 - `POWER(x, 2) * POWER(y, 2)` (quartic) — squared × squared
@@ -80,7 +80,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 1. **Binder** (`decide_binder.cpp`): Relaxed validation to allow `decide_count == 2` products when `allow_quadratic` or `allow_bilinear` is true. Triple products (`a * b * c`) rejected. `allow_bilinear` parameter added for constraints (separate from `allow_quadratic` to prevent POWER in constraints).
 
-2. **Symbolic** (`decide_symbolic.cpp`): `SumInnerContainsBilinear()` detects bilinear content and skips symbolic expansion (which would destroy the `x * y` structure). Handles scaled/negated forms.
+2. **Symbolic** (`decide_symbolic.cpp`): Bilinear expressions now go through SymEngine's normal `expand().simplify()` path. The previous bypass (`SumInnerContainsBilinear`) was removed because the physical extractor's flat-factor classifier handles any post-expansion shape. Only quadratic expressions (`POWER` / self-product) still bypass SymEngine (to preserve the recognizable QP structure).
 
 3. **Optimizer** (`decide_optimizer.cpp`): `RewriteBilinear()` pass runs after `RewriteAbs`, before `RewriteMinMax`. Walks both objective and constraint expressions:
    - Detects `*` nodes where both children reference different decide variables
@@ -93,7 +93,9 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 4. **Physical Operator** (`physical_decide.cpp`):
    - `ExtractLinearAndBilinearTerms()`: separates linear and bilinear terms in objectives
    - `ExtractConstraintTerms()`: same for constraints
-   - `CombineBilinearCoefficients()`: combines coefficient expressions extracted from both factor subtrees, so `(coef_a * x) * (coef_b * y)` becomes `(coef_a * coef_b) * x * y` in both objectives and constraints
+   - `ClassifyNormalizedProduct()`: flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
+   - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms.
+   - Linear terms (`decide_factors.size() == 1`) fall through to `ExtractTerms` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction).
    - McCormick Big-M generation: uses `BilinearLink` metadata + `ExtractVariableBounds` to generate `w <= U*b` and `w >= x - U*(1-b)` constraints
    - Evaluates bilinear coefficients per-row, applies WHEN mask
 
@@ -120,11 +122,11 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 - **Binder validation**: `src/planner/expression_binder/decide_binder.cpp` — `ValidateSumArgumentInternal()`, `allow_bilinear` parameter
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp` — passes `allow_bilinear=true`
-- **Symbolic bilinear detection**: `src/packdb/symbolic/decide_symbolic.cpp` — `SumInnerContainsBilinear()`, `SumInnerContainsBilinearCore()`
+- **Symbolic normalization (bilinear)**: `src/packdb/symbolic/decide_symbolic.cpp` — bilinear expressions now use the default SymEngine expansion path; `ComparisonLhsHasQuadratic` bypasses SymEngine only for quadratic (POWER) shapes
 - **Optimizer rewrite**: `src/optimizer/decide/decide_optimizer.cpp` — `RewriteBilinear()`, `FindAndReplaceBilinear()`
 - **Boolean type tracking**: `src/include/duckdb/planner/operator/logical_decide.hpp` — `is_boolean_var`
 - **Bilinear link struct**: `src/include/duckdb/planner/operator/logical_decide.hpp` — `BilinearLink`
-- **Physical execution**: `src/execution/operator/decide/physical_decide.cpp` — `ExtractLinearAndBilinearTerms()`, `ExtractConstraintTerms()`, McCormick Big-M generation
+- **Physical execution**: `src/execution/operator/decide/physical_decide.cpp` — `ExtractLinearAndBilinearTerms()`, `ExtractConstraintTerms()`, `ClassifyNormalizedProduct()`, `BuildCoefficientFromFactors()`, McCormick Big-M generation
 - **Model builder**: `src/packdb/utility/ilp_model_builder.cpp` — Q matrix off-diagonal entries, `QuadraticConstraint` building
 - **Gurobi quadratic constraints**: `src/packdb/gurobi/gurobi_solver.cpp` — `GRBaddqconstr` loop
 - **HiGHS rejection**: `src/packdb/naive/deterministic_naive.cpp` — quadratic constraint check
@@ -138,12 +140,12 @@ Inside `FindAndReplaceBilinear` (`src/optimizer/decide/decide_optimizer.cpp:964`
 
 ## Error Messages
 
-- `"Triple or higher-order products of DECIDE variables are not supported"` — three or more vars in a single product
+- `"Triple or higher-order products of DECIDE variables are not supported (total degree > 2)"` — three or more vars in a single product (binder-level)
 - `"Bilinear term requires a finite upper bound on variable 'x'"` — McCormick needs `x <= K`
 - `"Non-convex quadratic objectives require Gurobi"` — Real*Real or Int*Int bilinear on HiGHS
 - `"Quadratic/bilinear constraints require Gurobi"` — non-Boolean bilinear in constraints on HiGHS
-- `"DECIDE objective contains a product of decision variables with total degree > 2 ..."` — execution-time degree guard (also emitted on the constraint path as `"DECIDE constraint contains a product of decision variables with total degree > 2 ..."`)
-- `"DECIDE objective/constraint contains a self-product of a non-linear expression ..."` — `(expr)*(expr)` self-product where `expr` already carries a decision variable (e.g. `POWER(x,2)*POWER(x,2)`)
+- `"DECIDE expression contains a product of decision variables with total degree > 2 ..."` — execution-time degree guard in `ClassifyNormalizedProduct` (degree > 2 decide factors in any `*` tree)
+- `"DECIDE expression contains a same-variable product that is not in a supported quadratic form ..."` — `ClassifyNormalizedProduct` detects `x * x` (same variable appearing twice in a flat `*` tree); use `POWER(x, 2)` or `(x)*(x)` for quadratic
 
 ---
 
@@ -155,10 +157,13 @@ Inside `FindAndReplaceBilinear` (`src/optimizer/decide/decide_optimizer.cpp:964`
 - Data coefficient scaling (`profit * b * x`)
 - Objective coefficients from both factor sides (`(a*x)*(b*y)`)
 - Shape-equivalent objective coefficients (`(a*x)*(b*y)` vs `a*b*x*y`)
+- **Grouped data-factor coefficient** (`(a*b)*(x*y)` vs `a*b*x*y` — same optimal objective)
+- **SymEngine-expanded bilinear** (`(x+1)*y` = `x*y + y`, `(x+y)*z` = `x*z + y*z`)
 - Non-convex objectives (Real*Real, Int*Int, Int*Real — Gurobi only)
 - Mixed linear + bilinear objectives
 - Bilinear with WHEN filter
 - Bool bilinear constraints
 - Bilinear constraint coefficients from both factor sides (`(2*x)*(3*y)`, `(a*x)*(b*y)`)
+- **Grouped data-factor bilinear constraint** (`(a*b)*(x*y) >= K` aggregate and per-row)
 - Error cases (triple product, missing bounds, HiGHS rejection)
 - Backward compatibility (POWER, linear, identical multiplication)

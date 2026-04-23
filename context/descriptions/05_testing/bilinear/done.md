@@ -43,9 +43,14 @@ categories:
 | Mixed linear + bilinear objective | `test_bilinear.py` | ✓ |
 | Objective coefficients from both factor sides | `test_bilinear.py::test_bilinear_objective_multiplies_both_side_coeffs` | ✓ (gurobi-gated) |
 | Shape-equivalent objective coefficients | `test_bilinear.py::test_bilinear_objective_split_shape_matches_flat_product` | ✓ (gurobi-gated) |
+| Grouped data-factor objective `(a*b)*(x*y)` = `a*b*x*y` | `test_bilinear.py::test_bilinear_objective_grouped_data_product_matches_flat_product` | ✓ (gurobi-gated) |
+| Expanded bilinear `(x+1)*y` = `x*y+y` | `test_bilinear.py::test_bilinear_objective_expands_linear_plus_constant_factor` | ✓ (gurobi-gated) |
+| Expanded bilinear `(x+y)*z` = `x*z+y*z` | `test_bilinear.py::test_bilinear_objective_expands_sum_factor` | ✓ (gurobi-gated) |
 | Bilinear constraint coefficients from both factor sides | `test_bilinear.py::TestBilinearConstraints::test_bilinear_constraint_coeff_multiplies_both_sides` | ✓ |
 | Shape-equivalent bilinear constraint coefficients | `test_bilinear.py::TestBilinearConstraints::test_bilinear_constraint_coeff_split_shape_matches_flat_product` | ✓ |
 | Data-column coefficients in bilinear constraints | `test_bilinear.py::TestBilinearConstraints::test_bilinear_constraint_coeff_multiplies_data_columns` | ✓ |
+| Grouped data-factor aggregate constraint `SUM((a*b)*(x*y)) >= K` | `test_bilinear.py::TestBilinearConstraints::test_bilinear_aggregate_constraint_grouped_product_forces_y` | ✓ (gurobi-gated) |
+| Grouped data-factor per-row constraint `(a*b)*(x*y) >= K` | `test_bilinear.py::TestBilinearConstraints::test_bilinear_per_row_constraint_grouped_product_forces_y` | ✓ (gurobi-gated) |
 
 ### Error cases
 

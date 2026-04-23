@@ -24,7 +24,7 @@
 // reorders / flattens around them, scrambling structure the downstream
 // pipeline needs.
 //
-// Result: the constraint normalizer has FOUR mutually-exclusive paths,
+// Result: the constraint normalizer has three mutually-exclusive structural paths,
 // guarded by `if (...) return cmp.Copy()` early returns at the top of
 // `NormalizeComparisonExpr`. They run in this order — first match wins:
 //
@@ -32,16 +32,10 @@
 //      Why: SymEngine `.expand()` would distribute the square and lose
 //      the recognizable `POWER(linear, 2)` pattern that the QP extractor
 //      pattern-matches on to populate the Q matrix.
-//      Detector: `ComparisonLhsHasQuadraticOrBilinear`.
+//      Detector: `ComparisonLhsHasQuadratic`.
 //      Downstream: QP path in `physical_decide.cpp::DetectQuadraticPattern`.
 //
-//   2. Bilinear LHS bypass (`x * y`, decide vars in both factors)
-//      Why: SymEngine would distribute and reorder factors; the McCormick
-//      linearization extractor matches on specific tree shapes.
-//      Detector: `ComparisonLhsHasQuadraticOrBilinear` (shared with #1).
-//      Downstream: bilinear path in `physical_decide.cpp`.
-//
-//   3. Composed MIN/MAX LHS bypass (`SUM(...) + MIN(...)` etc.)
+//   2. Composed MIN/MAX LHS bypass (`SUM(...) + MIN(...)` etc.)
 //      Why: SymEngine doesn't know MIN/MAX semantics and would treat
 //      MAX(x*v) as just another opaque function symbol, combining it
 //      incorrectly with surrounding additive terms. The composed walker
@@ -50,7 +44,7 @@
 //      Detector: `ContainsTopLevelMinOrMax`.
 //      Downstream: `RewriteComposedMinMaxInConstraint` in the optimizer.
 //
-//   4. Aggregate-local WHEN LHS path (`SUM(x) WHEN c`)
+//   3. Aggregate-local WHEN LHS path (`SUM(x) WHEN c`)
 //      NOT a true bypass — does its own parsed-level rewrite.
 //      Why: SymEngine doesn't know WHEN semantics and would absorb the
 //      WHEN tag as opaque, then expand around it, scrambling which terms
@@ -64,7 +58,7 @@
 //      Helpers: `CopyAndFoldConstantsIntoWhenAggregates`,
 //      `DecomposeAdditiveAtParsed`, `BuildAdditiveExpressionFromTerms`.
 //
-//   5. Default path: SymEngine `expand().simplify()` + term collection +
+//   4. Default path: SymEngine `expand().simplify()` + term collection +
 //      LHS/RHS partition by decide-var presence + rebuild.
 //
 // SAFETY INVARIANT (informal): each bypass is conservative — it preserves
@@ -1005,11 +999,9 @@ static bool ContainsTopLevelMinOrMax(const ParsedExpression &expr) {
 }
 
 // Normalize comparator between LHS and numeric RHS by isolating SUM terms containing DECIDE variables
-// Forward declarations for quadratic/bilinear detection (defined later in file).
+// Forward declarations for quadratic detection (defined later in file).
 static bool SumInnerIsQuadratic(const ParsedExpression &inner,
                                 const case_insensitive_map_t<idx_t> &decide_variables);
-static bool SumInnerContainsBilinear(const ParsedExpression &inner,
-                                      const case_insensitive_map_t<idx_t> &decide_variables);
 
 // Check if a SUM inner expression contains ANY quadratic term (POWER/self-product),
 // possibly as one additive term among several (e.g., SUM(POWER(x,2) + POWER(y,2) + linear_terms)).
@@ -1030,20 +1022,19 @@ static bool SumInnerContainsQuadratic(const ParsedExpression &inner,
     return false;
 }
 
-// Check if a comparison LHS contains a SUM whose inner has quadratic or bilinear terms.
-// If so, symbolic expansion would destroy the POWER/product structure.
-static bool ComparisonLhsHasQuadraticOrBilinear(const ParsedExpression &lhs,
-                                                  const case_insensitive_map_t<idx_t> &decide_variables) {
+// Check if a comparison LHS contains a SUM whose inner has quadratic terms.
+// If so, symbolic expansion would destroy the POWER/self-product structure.
+static bool ComparisonLhsHasQuadratic(const ParsedExpression &lhs,
+                                      const case_insensitive_map_t<idx_t> &decide_variables) {
     if (lhs.GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &func = lhs.Cast<FunctionExpression>();
         auto fname = StringUtil::Lower(func.function_name);
         if (!func.is_operator && fname == "sum" && !func.children.empty()) {
             if (SumInnerContainsQuadratic(*func.children[0], decide_variables)) return true;
-            if (SumInnerContainsBilinear(*func.children[0], decide_variables)) return true;
         }
         // Recurse into operator children (for + / - combinations)
         for (auto &child : func.children) {
-            if (ComparisonLhsHasQuadraticOrBilinear(*child, decide_variables)) return true;
+            if (ComparisonLhsHasQuadratic(*child, decide_variables)) return true;
         }
     }
     return false;
@@ -1316,9 +1307,9 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
             cmp.type, std::move(new_lhs), std::move(new_rhs));
     }
 
-    // Skip normalization for quadratic/bilinear constraints — symbolic expansion
-    // would destroy the POWER(expr, 2) or x*y structure that the solver pipeline needs.
-    if (ComparisonLhsHasQuadraticOrBilinear(*cmp.left, decide_variables)) {
+    // Skip normalization for quadratic constraints — symbolic expansion would
+    // destroy the POWER(expr, 2) or self-product structure that the QP pipeline needs.
+    if (ComparisonLhsHasQuadratic(*cmp.left, decide_variables)) {
         return cmp.Copy();
     }
 
@@ -1613,70 +1604,6 @@ static bool SumInnerIsQuadratic(const ParsedExpression &inner,
     return false;
 }
 
-// Detect if a SUM inner expression contains a bilinear product of two different
-// DECIDE variables (e.g., x * y), possibly scaled by a constant.
-// This complements SumInnerIsQuadratic for normalization-skip logic.
-static bool SumInnerContainsBilinearCore(const ParsedExpression &inner,
-                                          const case_insensitive_map_t<idx_t> &decide_variables) {
-    if (inner.GetExpressionClass() != ExpressionClass::FUNCTION) return false;
-    auto &func = inner.Cast<FunctionExpression>();
-
-    // Direct x * y where both sides contain different decide variables
-    if (func.is_operator && func.function_name == "*" && func.children.size() == 2) {
-        // Exclude the identical-expression case (that's QP, not bilinear)
-        if (func.children[0]->ToString() != func.children[1]->ToString()) {
-            bool left_has = ExprContainsDecideVar(*func.children[0], decide_variables);
-            bool right_has = ExprContainsDecideVar(*func.children[1], decide_variables);
-            if (left_has && right_has) {
-                return true;
-            }
-        }
-    }
-
-    // Recurse into + and - operators (SUM argument may be a sum of terms)
-    if (func.is_operator && (func.function_name == "+" || func.function_name == "-")) {
-        for (auto &child : func.children) {
-            if (SumInnerContainsBilinearCore(*child, decide_variables)) {
-                return true;
-            }
-        }
-    }
-
-    // Scaled bilinear: K * (x * y) or (x * y) * K
-    if (func.is_operator && func.function_name == "*" && func.children.size() == 2) {
-        for (idx_t i = 0; i < 2; i++) {
-            if (func.children[i]->GetExpressionClass() == ExpressionClass::CONSTANT ||
-                !ExprContainsDecideVar(*func.children[i], decide_variables)) {
-                if (SumInnerContainsBilinearCore(*func.children[1 - i], decide_variables)) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // Negated bilinear: -(x * y)
-    if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
-        return SumInnerContainsBilinearCore(*func.children[0], decide_variables);
-    }
-
-    return false;
-}
-
-static bool SumInnerContainsBilinear(const ParsedExpression &inner,
-                                      const case_insensitive_map_t<idx_t> &decide_variables) {
-    if (SumInnerContainsBilinearCore(inner, decide_variables)) {
-        return true;
-    }
-    // Scaled at top level: K * bilinear
-    if (inner.GetExpressionClass() == ExpressionClass::FUNCTION) {
-        auto &func = inner.Cast<FunctionExpression>();
-        if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
-            return SumInnerContainsBilinearCore(*func.children[0], decide_variables);
-        }
-    }
-    return false;
-}
-
 static bool IsDecideObjectiveAggregate(const ParsedExpression &expr) {
     if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &func = expr.Cast<const FunctionExpression>();
@@ -1780,14 +1707,6 @@ static unique_ptr<ParsedExpression> NormalizeObjectiveRecursive(
     // Skip normalization for quadratic objectives — symbolic expansion
     // would destroy the POWER(expr, 2) structure that the QP pipeline needs.
     if (SumInnerIsQuadratic(*f.children[0], decide_variables)) {
-        return expr.Copy();
-    }
-
-    // For bilinear objectives: skip full symbolic expansion (which would destroy
-    // the x*y structure), but still split additive terms so that pure-data terms
-    // like SUM(cost + b*x) get factored into SUM(cost) + SUM(b*x).
-    // This prevents constant data terms from leaking into the optimization pipeline.
-    if (SumInnerContainsBilinear(*f.children[0], decide_variables)) {
         return expr.Copy();
     }
 
