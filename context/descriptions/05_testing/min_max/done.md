@@ -91,3 +91,23 @@ Tests in `test_per_objective.py` cover all 4 × 4 nesting combinations of inner/
 | MIN/MAX (hard) | PER (per-group Big-M) | ✓ |
 | MIN/MAX | multiple constraints in same query | ✓ |
 | MIN/MAX | constraint + objective in same query | ✓ |
+
+### Composed MIN/MAX (additive LHS/objective with mixed aggregate terms)
+
+| Scenario | Test |
+|----------|------|
+| `SUM(x*v) + MAX(x*v) WHEN w <= K` (constraint, easy) | `test_sum_plus_max_leq_composed` |
+| `MAX(...) WHEN w1 + MAX(...) WHEN w2 <= K` (two easy MAXs) | `test_max_plus_max_leq_composed` |
+| `MIN(...) WHEN w1 + MIN(...) WHEN w2 >= K` (two easy MINs) | `test_min_plus_min_geq_composed` |
+| `MINIMIZE SUM(x*v) + MAX(x*v) WHEN w` (easy objective) | `test_minimize_sum_plus_max_composed_objective` |
+| `MAXIMIZE MIN(x*v) WHEN w + SUM(x*v)` (easy objective) | `test_maximize_min_plus_sum_composed_objective` |
+
+### Composed MIN/MAX rejection (binder errors)
+
+| Scenario | Test |
+|----------|------|
+| Hard direction (e.g. `SUM + MAX >= K`) | `test_composed_minmax_hard_rejected` |
+| Subtraction (`MAX - MIN <= K`) | `test_composed_minmax_subtraction_rejected` |
+| Scalar multiplication (`2 * MIN(...) + SUM(...)`) | `test_composed_minmax_scalar_mult_rejected` |
+| Outer `PER` wrapper on composed constraint | `test_composed_minmax_per_wrapper_rejected` |
+| Hard-direction composed objective | `test_composed_minmax_objective_hard_rejected` |

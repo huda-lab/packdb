@@ -87,6 +87,29 @@ Aggregate-local `WHEN` can filter individual aggregate terms in an additive obje
 MAXIMIZE SUM(x * profit) WHEN high_margin + SUM(x * bonus) WHEN strategic
 ```
 
+### Composed MIN/MAX in Additive Objectives
+
+Additive objectives may mix `MIN`/`MAX` terms with `SUM`/`AVG` terms:
+
+```sql
+MAXIMIZE MIN(x * profit) WHEN premium_tier + SUM(x * revenue)
+MINIMIZE SUM(x * cost) + MAX(x * penalty) WHEN at_risk
+```
+
+Each `MIN`/`MAX` term becomes a continuous auxiliary `z_k` pinned per-row to
+the inner expression; the outer sum is linear in `{x, z_k}`.
+
+**v1 scope restrictions** (v2 will relax):
+- Easy-direction terms only — `MAXIMIZE` with `MIN(...)`, or `MINIMIZE` with
+  `MAX(...)`. Hard direction (`MAXIMIZE MAX`, `MINIMIZE MIN` in a composed
+  sum) is rejected at bind time.
+- No subtraction in the additive sum (`MAX - MIN` rejected).
+- No scalar multiplication of aggregate terms (`2 * MIN(...)` rejected).
+- No outer `PER`/`WHEN` wrapper on the composed objective.
+
+See also `such_that/done.md` for composed MIN/MAX in constraints (same
+mechanism).
+
 ### PER on Objective — Nested Aggregate Syntax
 
 PER on objectives uses nested aggregate syntax: `OUTER(INNER(expr)) PER col`. See [per/done.md](../per/done.md) for full details on the two-level formulation, easy/hard classification, and WHEN+PER composition.

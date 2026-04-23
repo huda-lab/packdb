@@ -275,7 +275,7 @@ benchmark/decide/
 ├── queries/
 │   ├── q1_knapsack_baseline.sql
 │   ├── q2_abs_minmax.sql
-│   ├── q3_count_avg_when.sql
+│   ├── q3_avg_when.sql
 │   ├── q4_nested_per.sql
 │   ├── q5_stress.sql
 │   └── manual.sql.example

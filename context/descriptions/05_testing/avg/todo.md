@@ -7,5 +7,4 @@ The previously xfailed `AVG(x) <> K` pair (`test_avg_not_equal_boolean`,
 the RHS inside the deferred NE expansion rather than distributed into LHS
 coefficients. See `physical_decide.cpp` — gated by
 `EvaluatedConstraint::ne_avg_rhs_scale`, applied per-group so PER + AVG + `<>`
-scales by per-group size, and empty PER STRICT groups keep the original K
-(`0 <> K` semantics).
+scales by per-group size.

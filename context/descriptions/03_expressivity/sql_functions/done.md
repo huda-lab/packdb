@@ -43,7 +43,7 @@ SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
 MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 ```
 
-**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so PackDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead (empty PER STRICT groups keep the original K, since `AVG(∅) <> K` collapses to `0 <> K`).
+**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so PackDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
 
 **Tests**: `test/decide/tests/test_avg.py` — 11 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, `<>` with and without WHEN, and no-decide-var passthrough.
 
@@ -104,6 +104,34 @@ MINIMIZE MAX(x * deviation) WHEN active = 1
 
 ---
 
+## Rejected: Non-Linear Scalar Functions over a DECIDE Variable
+
+Any scalar function other than `ABS()` and `POWER(..., 2)` that wraps a decision variable is rejected at bind time with:
+
+```
+Binder Error: Scalar function 'sqrt' over a DECIDE variable is not supported:
+it would make the model non-linear. Only ABS() and POWER(..., 2) can wrap a
+decision variable.
+```
+
+This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND`, `SIN`, `COS`, `TAN`, and any user-defined or built-in scalar function that doesn't have a dedicated linearization path. The rejection fires in every position: per-row constraint LHS (`SUCH THAT sqrt(x) <= 2`), inside an aggregate (`SUM(exp(x))`, `MAXIMIZE SUM(log(x))`), and nested inside `ABS()` or `POWER()` (e.g., `ABS(sqrt(x) - 1)`).
+
+**Scalar functions wrapping only table columns are not affected** — e.g., `SUM(x * sqrt(l_quantity))` would fold `sqrt(l_quantity)` into a per-row coefficient. The walker only flags a function when one of its arguments transitively contains a DECIDE variable.
+
+**Aggregate mis-uses** (e.g., `BIT_AND(x)`, `STDDEV(x)`) are routed to the existing aggregate-specific rejection in `BindAggregate` with the more informative "only SUM, AVG, MIN, MAX, or COUNT is allowed" message. A catalog lookup distinguishes scalar from aggregate so the two rejection paths don't collide.
+
+**Why this guard exists**: before it, per-row non-linear scalars were silently stripped (`SUCH THAT sqrt(x) <= 2` returned `x = 2` instead of `x = 4`), aggregate non-linear scalars crashed the symbolic layer with `InternalException`, and `ABS(sqrt(x))` FATAL-ed the session at physical execution. The validator catches all three classes at bind time.
+
+**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide_binder.cpp`, called from `src/planner/binder/query_node/bind_select_node.cpp` before `NormalizeDecideConstraints` / `NormalizeDecideObjective` (the pre-pass must run before symbolic normalization because the symbolic layer would otherwise throw on unknown functions).
+
+**Tests**: `test/decide/tests/test_error_binder.py` — `test_nonlinear_scalar_per_row_lhs`, `test_nonlinear_scalar_inside_sum`, `test_nonlinear_scalar_inside_abs` (parametrized over SQRT, EXP, LN, LOG, FLOOR, CEIL, ROUND, SIN, COS).
+
+**POWER exponent check**: The same pre-pass rejects `POWER(base, exp)` / `POW(base, exp)` / `base ** exp` when `base` contains a DECIDE variable and `exp` is not a constant numeric equal to `2`. That covers fractional exponents (`POWER(x, 0.5)`), negative exponents (`POWER(x, -1)`), higher-integer exponents (`POWER(x, 3)`), degenerate exponents (`POWER(x, 0)`, `POWER(x, 1)`), and non-constant exponents (`POWER(x, x)`, `POWER(x, col)`). Previously these tripped `InternalException: FromSymbolic: Non-integer exponents are not supported` during symbolic normalization (which happens before binding), exposing a C++ stack trace. The pre-pass now catches all non-2 cases with the same error messages used by the existing `ValidateQuadraticPower` whitelist inside SUM, so error-text tests stay consistent across SUM and non-SUM contexts.
+
+**Known limitation (pre-existing, out of scope for this rejection)**: `SUM(f(col) * x)` where `f` is an arbitrary scalar function on a data column still trips the symbolic normalizer because `ToSymbolicRecursive` doesn't know those functions. Folding data-only scalar subtrees before normalization is a separate improvement; non-decide-var scalars are accepted by the validator but may fail later if they appear inside a SUM aggregate.
+
+---
+
 ## ABS() — Linearized Automatically
 
 `ABS(expr)` over decision variables is automatically linearized using the standard ILP technique. For each `ABS(expr)` that references a DECIDE variable, the system:
@@ -151,6 +179,39 @@ SUM(x * weight)    -- OK: aggregate of linear product
 x + y              -- OK: sum of variables
 SUM(x * a + y * b) -- OK: linear combination in aggregate
 ```
+
+### Division (`/`) by a constant or data column
+
+`x / divisor` is supported in per-row constraints, aggregate constraints, and quadratic objectives (inside `POWER(..., 2)`) as long as the divisor doesn't contain a DECIDE variable. `x / y` between two decision variables is non-linear and rejected at bind time with a clear `Division by a DECIDE variable is not supported` error (previously silently accepted in the per-row path with nonsensical solutions). The divisor folds into the extracted coefficient — for `x / 2`, the solver sees `0.5 * x`; for `x / col`, the per-row coefficient is `1/col[row]`.
+
+```sql
+SUCH THAT x / 2 <= 1                       -- OK: equivalent to x <= 2
+SUCH THAT SUM(x / weight) <= budget        -- OK: per-row scaled sum
+MINIMIZE SUM(POWER(x / 2 - 1, 2))          -- OK: QP with division inside base
+MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
+```
+
+**Code**:
+- Bind-time validation: `IsAllowedNameOverDecideVar` and the dedicated `/`-arm of `ValidateDecideNoNonLinearScalar` (per-row pre-pass) and `ValidateSumArgumentInternal` (SUM/POWER inner) in `src/planner/expression_binder/decide_binder.cpp` reject any `/` whose divisor contains a decide variable.
+- Per-row extraction: `ExtractTerms` at `src/execution/operator/decide/physical_decide.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
+- QP linearity check: `IsLinearInDecideVars` in the same file accepts `/` when the divisor is decide-var-free, so quadratic patterns like `POWER(x/2 - 1, 2)` reach the QP extractor.
+- Symbolic normalization: `FromSymbolic` in `src/packdb/symbolic/decide_symbolic.cpp` recognises negative-integer Power exponents (which the symbolic library produces for `x / w` as `x * w^-1`) and rebuilds them as `1.0 / base^|k|`. Without this round-trip, `SUM(x / col)` would crash with `Non-integer exponents are not supported in DECIDE normalization`.
+
+### Per-row linear LHS (`+ const`, `- col`, `/ const`, unary `-`)
+
+Per-row constraints accept full linear shapes on the LHS, not just `x op K` and `c*x op K`. The extractor walks the LHS tree to separate decide-variable terms from constants and row-varying data columns; the latter are moved to the RHS per row so the solver sees an algebraically equivalent `sum(decide_terms) op adjusted_rhs` constraint.
+
+```sql
+SUCH THAT x + 3 <= 10          -- x <= 7
+SUCH THAT x - ps_availqty <= 1 -- per row: x <= 1 + ps_availqty[row]
+SUCH THAT -x <= -2             -- x >= 2
+SUCH THAT 2 * x + 3 <= 11      -- x <= 4
+SUCH THAT x / 2 + 1 <= 3       -- x <= 4
+```
+
+**Code**: `ExtractTerms` in `src/execution/operator/decide/physical_decide.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/packdb/utility/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
+
+**Tests**: `test/decide/tests/test_cons_perrow.py` — `test_perrow_linear_lhs_upper_bound` (parametrized over `x+c`, `x-c`, `x/c`, `c*x+c`, `x/c+c`, `x+c-c`), `test_perrow_unary_minus_lower_bound`, `test_perrow_data_column_in_lhs`, all oracle-verified.
 
 ---
 
@@ -244,7 +305,8 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `*` (var x var, bilinear) | Yes (McCormick / Gurobi QCQP) | Yes (McCormick / Gurobi non-convex) | N/A |
 | `POWER(expr, 2)` / `expr ** 2` (QP) | N/A | Yes (convex: both solvers; non-convex: Gurobi) | N/A |
-| `+`, `-` | Yes | Yes | Yes |
+| `+`, `-` (binary and unary) | Yes (per-row linear LHS shapes fully supported) | Yes | Yes |
+| `/` (by data column or constant) | Yes | Yes | N/A |
 | `=`, `<`, `<=`, `>`, `>=` | Yes | N/A | Yes |
 | `<>` (not-equal) | Yes (Big-M) | N/A | Yes |
 | `BETWEEN` | Yes | N/A | Yes |
@@ -252,3 +314,4 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | `IS NULL` / `IS NOT NULL` | N/A | N/A | Yes |
 | `AND` (constraint sep.) | Yes | N/A | N/A |
 | `AND` / `OR` (logical) | N/A | N/A | Yes |
+| Any other scalar (`SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND`, trig, ...) over a DECIDE variable | **Rejected** (non-linear) | **Rejected** (non-linear) | Yes (over data columns) |

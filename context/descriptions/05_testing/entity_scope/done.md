@@ -25,7 +25,6 @@ oracle-verified.
 | `test_entity_scoped_mixed_when_per` | All-four: entity + row-scoped + WHEN + PER | ✓ (Gurobi-only; fixture skips on HiGHS-only hosts) |
 | `test_entity_scoped_when_on_objective` | WHEN on objective + entity-scoped | ✓ |
 | `test_entity_scoped_multi_column_per` | Multi-column PER (region × segment) + entity-scoped | ✓ |
-| `test_entity_scoped_per_strict` | PER STRICT + entity-scoped | ✓ |
 | `test_entity_scoped_min_easy_case` | MIN >= K easy case + entity-scoped | ✓ |
 | `test_entity_scoped_avg_per` | AVG + PER + entity-scoped | ✓ |
 | `test_entity_scoped_ne_per` | NE + PER + entity-scoped, oracle via `add_ne_indicator` per region | ✓ |
@@ -60,7 +59,6 @@ oracle-verified.
 | entity_scope | PER (single-column) | ✓ |
 | entity_scope | PER (multi-column) | ✓ |
 | entity_scope | WHEN + PER | ✓ |
-| entity_scope | PER STRICT | ✓ |
 | entity_scope | MAX easy (≤ K) | ✓ |
 | entity_scope | MAX hard (≥ K) | ✓ |
 | entity_scope | MIN easy (≥ K) | ✓ |

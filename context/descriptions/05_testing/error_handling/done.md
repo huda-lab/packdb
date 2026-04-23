@@ -21,7 +21,7 @@ All expect `packdb.ParserException`.
 | Category | Tests |
 |----------|-------|
 | Name/scope conflicts | `test_variable_conflicts_with_column`, `test_duplicate_decide_variables`, `test_unknown_variable_in_constraint` |
-| Unsupported syntax in SUCH THAT | `test_is_null_unsupported`, `test_sum_with_in_not_allowed`, `test_non_decide_variable_in_constraint`, `test_non_sum_avg_min_max_function_in_objective`, `test_count_real_rejected` |
+| Unsupported syntax in SUCH THAT | `test_is_null_unsupported`, `test_sum_with_in_not_allowed`, `test_non_decide_variable_in_constraint`, `test_non_sum_avg_min_max_function_in_objective` |
 | Non-linear / invalid aggregate | `test_no_decide_variable_in_sum`, `test_multiple_decide_variables_in_sum`, `test_nonlinear_decide_variables` |
 | RHS shape | `test_between_non_scalar`, `test_decide_between_decide_variable`, `test_in_rhs_with_decide_variable`, `test_sum_rhs_non_scalar`, `test_decide_variable_rhs_with_decide`, `test_sum_equal_non_scalar` |
 | Objective rejections | `test_objective_with_addition`, `test_objective_bare_column` |

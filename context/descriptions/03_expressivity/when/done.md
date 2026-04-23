@@ -142,6 +142,22 @@ SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
 SUM(x * weight) <= 20 WHEN category = 'A' AND status = 'active'
 ```
 
+### Unparenthesized `NOT`, Comparisons, and Arithmetic Are Rejected
+
+The grammar production for `WHEN` conditions (`decide_when_condition = c_expr`) excludes `NOT`, comparison operators, and arithmetic. Wrapping the condition in parentheses forces it through a different grammar path that supports the full operator set:
+
+```sql
+-- Rejected by the parser
+SUM(x * v) <= 12 WHEN NOT w
+SUM(x * v) WHEN tier = 'high' <= 10      -- also misparses in constraints
+
+-- Correct: parenthesize the condition
+SUM(x * v) <= 12 WHEN (NOT w)
+SUM(x * v) WHEN (tier = 'high') <= 10
+```
+
+See `../when/todo.md` for the grammar-asymmetry limitation (constraint-side error messages for this case are misleading).
+
 ### Expressions Without WHEN Apply Unconditionally
 
 A constraint or objective without `WHEN` applies to all rows.
@@ -156,6 +172,30 @@ PackDB rejects a constraint or objective that contains both a whole-expression `
 ```
 
 Move the shared condition into each aggregate-local filter, or keep one expression-level `WHEN`.
+
+### Aggregate-local WHEN Composes with Constraint-LHS Arithmetic
+
+Constant offsets and constant scalar factors on a WHEN-tagged aggregate are supported in constraints — the symbolic normalizer rewrites them at the parsed-expression level (without touching the WHEN tag) before the per-row extractor runs:
+
+```sql
+-- All OK: WHEN-tagged aggregate composed with constants on the constraint LHS
+SUCH THAT SUM(x) WHEN (w > 1) + 3 <= 10                  -- offset peeled to RHS
+SUCH THAT 2 * (SUM(x) WHEN active) <= 10                 -- scalar folded into SUM body
+SUCH THAT (SUM(x) WHEN active) / 2 <= 5                  -- divisor folded into SUM body
+SUCH THAT (SUM(x) WHEN w) + (SUM(y) + 3) <= 10           -- nested parallel sum + offset
+```
+
+The outer-WHEN form remains supported and equivalent for single-aggregate constraints:
+
+```sql
+SUCH THAT SUM(x) + 3 <= 10 WHEN active
+```
+
+**How it works**: `NormalizeComparisonExpr` in `src/packdb/symbolic/decide_symbolic.cpp` can't run the SymEngine expand/simplify path on a WHEN-bearing LHS — that would flatten the per-aggregate filter. Instead it does a parsed-level rewrite: (1) folds `K * (SUM(...) WHEN c)` (and `(SUM(...) WHEN c) / K`) into `WHEN(SUM(K * inner), c)` so the downstream extractor sees a bare WHEN-tagged aggregate; (2) decomposes the LHS additively (recursing through `+`, binary `-`, unary `-`, CAST), peels pure-numeric leaves into a single offset; (3) rebuilds the LHS from the structural terms and emits `LHS_struct OP (RHS - offset)`.
+
+Objectives get the same treatment as constraints: `MAXIMIZE (SUM(x) WHEN cond) + 3`, `MAXIMIZE 2 * (SUM(x) WHEN cond)`, and combinations like `MINIMIZE SUM(x) + SUM(y) WHEN c - 7` are all supported. Additive constants don't affect `argmax`/`argmin` so the peel drops them from the body (stored on `LogicalDecide.objective_constant_offset` for any future feature that reports the objective value); `K * AGG` and `AGG / K` fold the scalar into the aggregate body via the same rewrite used for constraints.
+
+> **Parser limitation (unchanged)**: writing `SUM(x) WHEN cond + 3 <= K` without parentheses around the condition is a plain `Parser Error` because aggregate-local `WHEN` binds tighter than `>`/`<=` per `POSTFIXOP` precedence, and `%nonassoc` comparisons can't chain. Use `SUM(x) WHEN (cond) + 3 <= K` (parens around the condition).
 
 ---
 
@@ -281,39 +321,8 @@ Expression-level WHEN is a special case of a unified row-grouping system:
 | WHEN only | `0` (included) or `INVALID_INDEX` (excluded) | 1 |
 | PER only | `0..K-1` (group assignment) or `INVALID_INDEX` (NULL PER value) | K |
 | WHEN + PER | WHEN filters first, PER groups the rest | K (of filtered rows) |
-| WHEN + PER STRICT | Groups from ALL rows, WHEN-excluded → INVALID_INDEX | K (of all rows) |
 
-Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Each extracted aggregate term carries its own optional filter mask. With PER, a row participates in a generated group only when it passes the global expression-level WHEN (if present), has a non-NULL PER key, and contributes to at least one aggregate-local term.
-
-### PER STRICT (PER→WHEN Evaluation Order)
-
-By default, WHEN→PER skips empty groups (groups where all rows fail the WHEN condition). `PER STRICT` switches to PER→WHEN order: groups are discovered from ALL rows first, then WHEN filters within each group. Empty groups still emit constraints, evaluated with `AGG(∅)`:
-
-- `SUM(∅) = 0` — lower bounds fail (`0 >= 30` → infeasible), upper bounds pass (`0 <= 500` → true)
-- `MAX(∅) = -∞` — `MAX(∅) <= C` is vacuously true; `MAX(∅) >= C` is infeasible
-- `MIN(∅) = +∞` — `MIN(∅) >= C` is vacuously true; `MIN(∅) <= C` is infeasible
-
-Syntax: `PER STRICT column` or `PER STRICT (col1, col2, ...)`. Applied per-constraint or per-objective (local switch).
-
-```sql
--- Default (WHEN→PER): South has no renewables → no constraint, silently skipped
-SUM(output_mw) >= 30 WHEN is_renewable PER region
-
--- PER STRICT (PER→WHEN): South gets SUM(∅) = 0 >= 30 → infeasible (mandate unmet)
-SUM(output_mw) >= 30 WHEN is_renewable PER STRICT region
-```
-
-Implementation uses two-phase group discovery:
-1. Phase 1: scan ALL rows to discover PER groups (ignoring WHEN)
-2. Phase 2: assign `row_group_ids` — WHEN-excluded rows get `INVALID_INDEX`, but the group exists in `num_groups`
-
-For easy MIN/MAX cases (vacuously true direction), PER STRICT is a no-op — the optimizer strips PER and converts to per-row constraints, which are vacuously satisfied for empty groups.
-
-For hard MIN/MAX cases (existential direction), empty groups produce `SUM(y) >= 1` with 0 indicators → `0 >= 1` → infeasible, which is mathematically correct.
-
-Grammar note: `STRICT` is a `func_name_keyword` (not unreserved) to avoid ambiguity with `PER <columnref>`. A column literally named `strict` must be quoted.
-
-For full analysis of WHEN/PER evaluation order divergence: `context/descriptions/03_expressivity/when/when_per_interaction.tex`.
+Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Each extracted aggregate term carries its own optional filter mask. With PER, a row participates in a generated group only when it passes the global expression-level WHEN (if present), has a non-NULL PER key, and contributes to at least one aggregate-local term. Groups that end up empty after WHEN filtering are skipped — no constraint is emitted.
 
 ---
 
@@ -336,7 +345,7 @@ For full analysis of WHEN/PER evaluation order divergence: `context/descriptions
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.
 
 - **Execution**: `src/execution/operator/decide/physical_decide.cpp`
-  - `AnalyzeConstraint()`: Signature takes `when_condition`, `per_columns`, and `per_strict`. PER tag is unwrapped first (outermost), then WHEN tag is unwrapped inside it. WHEN handler forwards `per_strict` to the recursive call.
+  - `AnalyzeConstraint()`: Signature takes `when_condition` and `per_columns`. PER tag is unwrapped first (outermost), then WHEN tag is unwrapped inside it.
   - `ExtractAggregateConstraintTerms()` / `ExtractAggregateObjectiveTerms()`: Extract additive aggregate expressions and copy aggregate-local filters onto linear, bilinear, and quadratic terms.
   - `Finalize()`, WHEN+PER unified grouping section: `has_when` / `has_per` flags determine evaluation path.
   - `Finalize()`, WHEN evaluation: WHEN condition evaluated into a `when_mask` boolean vector.
@@ -346,23 +355,19 @@ For full analysis of WHEN/PER evaluation order divergence: `context/descriptions
 - **Data structures**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
   - `DecideConstraint::when_condition`: Optional WHEN condition expression.
   - `DecideConstraint::per_columns`: Optional PER grouping columns (vector).
-  - `DecideConstraint::per_strict`: Boolean flag for PER STRICT semantics.
-  - `Objective::per_columns`, `Objective::per_strict`: Same for objectives.
+  - `Objective::per_columns`: Same for objectives.
   - `Term::filter`, `BilinearConstraintTerm::filter`, `DecideConstraint::QuadraticGroup::filter`, and `Objective::BilinearTerm::filter`: Optional aggregate-local WHEN filters carried to coefficient evaluation.
 
 - **Evaluated constraint**: `src/include/duckdb/packdb/solver_input.hpp`
   - `EvaluatedConstraint::row_group_ids`: Per-row group assignment (`INVALID_INDEX` = excluded).
   - `EvaluatedConstraint::num_groups`: `0` = ungrouped fast path, `1` = WHEN-only, `>1` = PER groups.
-  - `EvaluatedConstraint::per_strict`: Propagated from `DecideConstraint::per_strict`. When true, model builder emits constraints for empty groups.
 
 - **Model builder**: `src/packdb/utility/ilp_model_builder.cpp`
-  - Empty group handling: when `per_strict` is true, emits constraint with zero LHS instead of skipping.
+  - Empty groups are skipped — no constraint is emitted.
 
 - **Tag constants and helpers**: `src/include/duckdb/common/enums/decide.hpp`
   ```cpp
   WHEN_CONSTRAINT_TAG        = "__when_constraint__"
   PER_CONSTRAINT_TAG         = "__per_constraint__"
-  PER_STRICT_CONSTRAINT_TAG  = "__per_strict_constraint__"
-  IsPerConstraintTag(alias)  // matches both PER and PER STRICT
-  IsPerStrictTag(alias)      // matches PER STRICT only
+  IsPerConstraintTag(alias)
   ```

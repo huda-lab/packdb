@@ -39,7 +39,7 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 - Logical operator: `src/planner/operator/logical_decide.cpp`
 - Optimizer: `src/optimizer/decide/decide_optimizer.cpp` (algebraic rewrites: AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators, bilinear McCormick linearization)
 - Physical execution + solver integration (Gurobi/HiGHS): `src/execution/operator/decide/physical_decide.cpp`
-- Solver integration: `src/packdb/utility/ilp_model_builder.cpp` (SolverInput → SolverModel, VarIndexer, PER STRICT empty-group handling, quadratic constraint emission), `src/packdb/utility/ilp_solver.cpp` (facade), `src/packdb/gurobi/gurobi_solver.cpp` (Gurobi backend), `src/packdb/naive/deterministic_naive.cpp` (HiGHS backend)
+- Solver integration: `src/packdb/utility/ilp_model_builder.cpp` (SolverInput → SolverModel, VarIndexer, quadratic constraint emission), `src/packdb/utility/ilp_solver.cpp` (facade), `src/packdb/gurobi/gurobi_solver.cpp` (Gurobi backend), `src/packdb/naive/deterministic_naive.cpp` (HiGHS backend)
 - Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, `packdb/solver_input.hpp`, `packdb/ilp_model.hpp`, etc.)
 
 ## DECIDE Syntax (Quick Reference)
@@ -62,8 +62,7 @@ SUCH THAT constraint [AND constraint ...]
 - **Table-scoped variables**: `DECIDE Table.var IS TYPE` — one variable per unique entity in the source table instead of one per result row. All result rows from the same entity share the same variable value. Reduces solver variable count from `num_rows` to `num_entities`. Table qualifier must match an alias or table name in the FROM clause. Mixed queries can have both row-scoped and table-scoped variables.
 - Constraints: linear expressions with `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN` (all operators supported on both per-row and aggregate constraints; `IN` on aggregates not supported)
 - Conditional: `expression WHEN condition` (postfix, on constraints and objectives)
-- Grouping: `SUM(expr) op rhs PER column` or `PER (col1, col2, ...)` (one constraint per distinct value/combination)
-- **PER STRICT**: `PER STRICT column` or `PER STRICT (col1, col2, ...)` — switches from WHEN→PER (default: skip empty groups) to PER→WHEN (evaluate all groups). Empty groups emit constraints with `AGG(∅)`: SUM(∅)=0, MAX(∅)=-∞, MIN(∅)=+∞. Per-constraint/objective modifier. Note: `STRICT` is a `func_name_keyword`, so a column literally named `strict` must be quoted.
+- Grouping: `SUM(expr) op rhs PER column` or `PER (col1, col2, ...)` (one constraint per distinct value/combination). Empty groups (WHEN filters out all rows in a group) are skipped.
 - `SUM()` aggregate supported over decision variables; `AVG(expr)` supported (rewritten to SUM with RHS scaling by row count at execution time)
 - `MIN(expr)` / `MAX(expr)` supported in constraints and objectives via linearization:
   - **Easy cases** (no Big-M): `MAX(expr) <= K` → per-row `expr <= K`; `MIN(expr) >= K` → per-row `expr >= K`. The aggregate is simply stripped because bounding every row individually is equivalent.

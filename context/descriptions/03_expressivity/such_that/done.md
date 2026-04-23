@@ -79,6 +79,16 @@ SUM(x * weight) <= 20 WHEN category = 'A'      -- one constraint over category-A
 SUM(x * weight) WHEN a + SUM(x * hours) WHEN b <= 50  -- independent filters per aggregate term
 ```
 
+**Composed `MIN`/`MAX` in the LHS** — an additive LHS may mix `MIN`/`MAX` terms with `SUM`/`AVG` terms. Each `MIN`/`MAX` becomes a continuous global auxiliary pinned per row; the outer constraint is linear in `{x, z_k}`.
+
+```sql
+SUM(x * v) + MAX(x * v) <= 20                       -- no filter on either term
+SUM(x * v) + (MAX(x * v) WHEN critical) <= 20       -- aggregate-local WHEN on one term
+MIN(x * v) WHEN tier_a + MIN(x * v) WHEN tier_b >= 15
+```
+
+v1 scope: easy-direction terms only (`<=` pushes MAX down / MIN up by `>=`). Rejected at bind time: subtraction (`MAX - MIN`), scalar multiplication (`2 * MIN(...)`), outer `WHEN`/`PER` wrappers, equality (`=`), and hard-direction terms (`MAX` pushed up by `>=`). See also `maximize_minimize/done.md` for composed objectives.
+
 **Per-row constraints** do not use an aggregate. The system generates one constraint per input row.
 
 ```sql
