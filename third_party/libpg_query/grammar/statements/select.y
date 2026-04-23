@@ -268,34 +268,6 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
-			| a_expr WHEN b_expr PER STRICT_P columnref
-				{
-					/* PackDB: objective WHEN condition PER STRICT column */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", when_node, $6, @4);
-				}
-			| a_expr WHEN b_expr PER STRICT_P '(' columnrefList ')'
-				{
-					/* PackDB: objective WHEN condition PER STRICT (col1, col2, ...) */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", when_node, (PGNode *) $7, @4);
-				}
-			| a_expr PER STRICT_P columnref
-				{
-					/* PackDB: objective PER STRICT column */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", $1, $4, @2);
-				}
-			| a_expr PER STRICT_P '(' columnrefList ')'
-				{
-					/* PackDB: objective PER STRICT (col1, col2, ...) */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", $1, (PGNode *) $5, @2);
-				}
 			| a_expr
 				{ $$ = $1; }
 		;
@@ -373,34 +345,6 @@ decide_constraint_item:
 					/* PackDB: constraint PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
-				}
-			| a_expr WHEN b_expr PER STRICT_P columnref
-				{
-					/* PackDB: constraint WHEN condition PER STRICT column */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", when_node, $6, @4);
-				}
-			| a_expr WHEN b_expr PER STRICT_P '(' columnrefList ')'
-				{
-					/* PackDB: constraint WHEN condition PER STRICT (col1, col2, ...) */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", when_node, (PGNode *) $7, @4);
-				}
-			| a_expr PER STRICT_P columnref
-				{
-					/* PackDB: constraint PER STRICT column */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", $1, $4, @2);
-				}
-			| a_expr PER STRICT_P '(' columnrefList ')'
-				{
-					/* PackDB: constraint PER STRICT (col1, col2, ...) */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_strict_constraint", $1, (PGNode *) $5, @2);
 				}
 			| a_expr
 				{ $$ = $1; }

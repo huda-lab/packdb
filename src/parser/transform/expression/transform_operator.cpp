@@ -219,7 +219,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return std::move(result);
 	}
 	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT: {
-		// PackDB: constraint PER [STRICT] column(s)
+		// PackDB: constraint PER column(s)
 		auto constraint_expr = TransformExpression(root.lexpr);
 		vector<unique_ptr<ParsedExpression>> children;
 		children.push_back(std::move(constraint_expr));
@@ -234,8 +234,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 			// Single column PER
 			children.push_back(TransformExpression(root.rexpr));
 		}
-		const char *tag = (name == "per_strict_constraint") ? PER_STRICT_CONSTRAINT_TAG : PER_CONSTRAINT_TAG;
-		auto result = make_uniq<FunctionExpression>(tag, std::move(children));
+		auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(children));
 		result->is_operator = true;
 		return std::move(result);
 	}

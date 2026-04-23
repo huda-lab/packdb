@@ -31,7 +31,7 @@ struct EvaluatedConstraint {
     //! AVG(x) <> K path: original LHS was AVG; instead of dividing LHS coefficients by the
     //! AVG denominator (which would produce fractional coefficients and trip the NE
     //! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
-    //! inside the deferred NE expansion. Empty PER-STRICT groups keep the original K.
+    //! inside the deferred NE expansion.
     bool ne_avg_rhs_scale = false;
 
     //! Bilinear terms in this constraint (var_a * var_b with per-row coefficients)
@@ -60,7 +60,6 @@ struct EvaluatedConstraint {
     //! 0..K-1 = group assignment
     vector<idx_t> row_group_ids;
     idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
-    bool per_strict = false;                  // True: empty groups emit constraints (not skipped)
 };
 
 //! Maps result rows to unique entities in a source table.

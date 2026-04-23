@@ -5,7 +5,6 @@ Tests live in:
 - `test/decide/tests/test_per_multi_column.py` — multi-column PER
 - `test/decide/tests/test_per_objective.py` — PER on objectives (nested aggregates)
 - `test/decide/tests/test_per_interactions.py` — PER composed with auxiliary-variable features (hard MIN/MAX, ABS, multi-variable)
-- `test/decide/tests/test_per_strict.py` — PER STRICT variant
 
 ## Scenarios covered
 
@@ -88,9 +87,3 @@ All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per
 | PER | WHEN + multi-variable | ✓ |
 | PER | equality constraint | ✓ |
 | PER | feasibility (no objective) | ✓ |
-| PER STRICT | WHEN vacuously-true upper bound | ✓ (`test_per_strict.py`) |
-| PER STRICT | WHEN infeasible lower bound | ✓ |
-| PER STRICT | hard MIN/MAX (existential → infeasible) | ✓ |
-| PER STRICT | easy MIN/MAX (no-op) | ✓ |
-| PER STRICT | NE (`<>`) | ✓ |
-| PER STRICT | entity-scoped | ✓ (`test_entity_scope.py::test_entity_scoped_per_strict`) |

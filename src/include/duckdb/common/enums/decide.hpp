@@ -36,17 +36,9 @@ static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 //! Tag used to identify PER-grouped constraints throughout the pipeline
 static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
 
-//! Tag used to identify PER STRICT-grouped constraints (PER→WHEN evaluation order)
-static constexpr const char *PER_STRICT_CONSTRAINT_TAG = "__per_strict_constraint__";
-
-//! Returns true if the alias is either PER_CONSTRAINT_TAG or PER_STRICT_CONSTRAINT_TAG
+//! Returns true if the alias is PER_CONSTRAINT_TAG
 inline bool IsPerConstraintTag(const string &alias) {
-	return alias == PER_CONSTRAINT_TAG || alias == PER_STRICT_CONSTRAINT_TAG;
-}
-
-//! Returns true if the alias is PER_STRICT_CONSTRAINT_TAG
-inline bool IsPerStrictTag(const string &alias) {
-	return alias == PER_STRICT_CONSTRAINT_TAG;
+	return alias == PER_CONSTRAINT_TAG;
 }
 
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
