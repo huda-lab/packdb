@@ -1452,3 +1452,456 @@ def test_aggregate_local_when_objective_reassociation(
         decide_sql=decide_sql, data_sql=data_sql,
         build_oracle=build, packdb_obj_fn=packdb_obj,
     )
+
+
+# ===========================================================================
+# Aggregate-local WHEN combined with arithmetic — peeled in the symbolic
+# normalizer so these compositions actually work end-to-end.
+# ===========================================================================
+#
+# `NormalizeComparisonExpr` in decide_symbolic.cpp can't use the SymEngine
+# expand/simplify path on a WHEN-bearing LHS — that would flatten the
+# aggregate-local WHEN tag and lose the per-aggregate filter. Instead the
+# normalizer does a parsed-level rewrite tailored to WHEN-bearing LHSes:
+#   1. Folds constant scalars into WHEN-tagged aggregate bodies
+#      (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`,
+#      `(SUM(x) WHEN c) / K` → `WHEN(SUM(x/K), c)`).
+#   2. Decomposes the LHS additively, peels pure-numeric terms into a
+#      single offset, and rebuilds the LHS from the structural terms.
+#   3. Moves the offset to the RHS as `RHS - offset`.
+#
+# These tests cover each shape with oracle-verified correctness.
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_when_with_constant_offset_paren_condition(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`SUM(x) WHEN (w > 1) + 3 <= K` — additive constant peeled to RHS."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM (
+            VALUES (1, 2.0), (2, 0.5), (3, 3.0)
+        ) t(id, w)
+    """
+    decide_sql = """
+        SELECT id, w, x FROM (
+            VALUES (1, 2.0), (2, 0.5), (3, 3.0)
+        ) t(id, w)
+        DECIDE x IS REAL
+        SUCH THAT SUM(x) WHEN (w > 1) + 3 <= 10
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        # SUM_{w>1}(x_i) + 3 <= 10  →  SUM_{w>1}(x_i) <= 7
+        coeffs = {vnames[i]: 1.0 for i in range(n) if data[i][1] > 1}
+        oracle.add_constraint(coeffs, "<=", 7.0, name="when_offset")
+        oracle.set_objective(
+            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        return n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x")
+        return sum(float(r[xi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_offset_paren_cond",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_when_with_scalar_multiplier(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`2 * (SUM(x) WHEN cond) <= K` — constant scalar folded into the SUM
+    body so the extractor sees `WHEN(SUM(2*x), cond)` instead of
+    `*(2, BoundAggregate)`."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(w AS BOOLEAN) FROM (
+            VALUES (1, true), (2, false), (3, true)
+        ) t(id, w)
+    """
+    decide_sql = """
+        SELECT id, w, x FROM (
+            VALUES (1, true), (2, false), (3, true)
+        ) t(id, w)
+        DECIDE x IS REAL
+        SUCH THAT 2 * (SUM(x) WHEN w) <= 10
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        # 2 * SUM_{w}(x_i) <= 10  →  per-row coefficient 2 for w-rows.
+        coeffs = {vnames[i]: 2.0 for i in range(n) if data[i][1]}
+        oracle.add_constraint(coeffs, "<=", 10.0, name="scalar_mult_when")
+        oracle.set_objective(
+            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        return n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x")
+        return sum(float(r[xi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_scalar_mult",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_when_with_parallel_sum_and_offset(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`(SUM(x) WHEN w) + (SUM(y) + 3) <= K` — additive walker peels the
+    constant offset out of a deeper parenthesized parallel sum, leaving
+    `(SUM(x) WHEN w) + SUM(y) <= K - 3` for the extractor."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(w AS BOOLEAN) FROM (
+            VALUES (1, true), (2, false), (3, true)
+        ) t(id, w)
+    """
+    decide_sql = """
+        SELECT id, w, x, y FROM (
+            VALUES (1, true), (2, false), (3, true)
+        ) t(id, w)
+        DECIDE x IS REAL, y IS REAL
+        SUCH THAT (SUM(x) WHEN w) + (SUM(y) + 3) <= 10
+            AND x <= 10 AND y <= 10
+        MAXIMIZE SUM(x) + SUM(y)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        ynames = [f"y_{i}" for i in range(n)]
+        for nm in xnames + ynames:
+            oracle.add_variable(nm, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        # SUM_{w}(x_i) + SUM(y_i) + 3 <= 10  →  + SUM <= 7
+        coeffs: dict = {}
+        for i in range(n):
+            if data[i][1]:
+                coeffs[xnames[i]] = 1.0
+            coeffs[ynames[i]] = 1.0
+        oracle.add_constraint(coeffs, "<=", 7.0, name="parallel_when_offset")
+        obj = {nm: 1.0 for nm in xnames + ynames}
+        oracle.set_objective(obj, ObjSense.MAXIMIZE)
+        return 2 * n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); yi = cs.index("y")
+        return sum(float(r[xi]) + float(r[yi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_parallel_offset",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+@pytest.mark.when
+@pytest.mark.error_parser
+@pytest.mark.error
+def test_when_unparenthesized_condition_misparses(packdb_cli):
+    """`(SUM(x) WHEN w > 1) + 3 <= K` — parens in the wrong place. The
+    aggregate-local WHEN binds tighter than `>` per POSTFIXOP precedence,
+    so `(SUM(x) WHEN w)` reduces first and the outer `>` produces a
+    BOOLEAN. The function binder then can't add BOOLEAN + INTEGER. The
+    user-facing message at least names the type mismatch; the intended
+    form `SUM(x) WHEN (w > 1) + 3 <= K` (parens around the condition)
+    is the exercised positive path above."""
+    packdb_cli.assert_error("""
+        SELECT id, x FROM (VALUES (1, 2.0), (2, 0.5), (3, 3.0)) t(id, w)
+        DECIDE x IS REAL
+        SUCH THAT (SUM(x) WHEN w > 1) + 3 <= 10
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """, match=r"\+\(BOOLEAN, INTEGER")
+
+
+@pytest.mark.when
+@pytest.mark.when_objective
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+def test_when_objective_with_constant_offset(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`MAXIMIZE (SUM(x) WHEN cond) + 3` — the additive `+3` is peeled from
+    the objective body by NormalizeDecideObjective. The constant doesn't
+    affect argmax, so packdb's optimal assignment matches an oracle that
+    maximizes just the aggregate without the constant."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM (
+            VALUES (1, 2.0), (2, 0.5), (3, 3.0)
+        ) t(id, w)
+    """
+    decide_sql = """
+        SELECT id, w, x FROM (
+            VALUES (1, 2.0), (2, 0.5), (3, 3.0)
+        ) t(id, w)
+        DECIDE x IS REAL
+        SUCH THAT x <= 10
+        MAXIMIZE (SUM(x) WHEN w > 1) + 3
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        # Only w>1 rows contribute to argmax; others are free up to their bound.
+        oracle.set_objective(
+            {vnames[i]: 1.0 for i in range(n) if data[i][1] > 1},
+            ObjSense.MAXIMIZE,
+        )
+        return n, 0
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); wi = cs.index("w")
+        # Match oracle: sum of x over w>1 rows (no constant offset).
+        return sum(float(r[xi]) for r in rs if float(r[wi]) > 1)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_obj_constant_offset",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+# ===========================================================================
+# Regression guards: legitimate WHEN-aggregate compositions still work.
+# ===========================================================================
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_outer_when_with_arithmetic_offset_works(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`SUM(x) + 3 <= K WHEN cond` — outer-WHEN form. Same semantics as
+    the now-working aggregate-local form `(SUM(x) WHEN cond) + 3 <= K`
+    above; this test pins the equivalence on the outer-WHEN side."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(value AS DOUBLE), CAST(w AS BOOLEAN) FROM (
+            VALUES (1, 6.0, true), (2, 4.0, true), (3, 10.0, false)
+        ) t(id, value, w)
+    """
+    decide_sql = """
+        SELECT id, value, w, x FROM (
+            VALUES (1, 6.0, true), (2, 4.0, true), (3, 10.0, false)
+        ) t(id, value, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * value) + 3 <= 10 WHEN w
+        MAXIMIZE SUM(x * value)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.BINARY)
+        # SUM_{w-true rows}(x_i * value_i) + 3 <= 10  →  SUM <= 7
+        coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2]}
+        oracle.add_constraint(coeffs, "<=", 7.0, name="outer_when_offset")
+        oracle.set_objective(
+            {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        return n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); vi = cs.index("value")
+        return sum(float(r[xi]) * float(r[vi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_outer_when_offset",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+# ===========================================================================
+# K * WHEN fold with a per-row data column (not just a numeric constant).
+# ===========================================================================
+#
+# The fold's correctness condition is "the non-WHEN factor contains no
+# decide variable" — a data column satisfies this just as well as a
+# literal. These tests pin that behavior with non-trivial per-row
+# coefficients so a future regression (e.g., tightening the fold to
+# require a constant) would fail a correctness check, not just a type
+# check.
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_when_with_data_column_scalar_left(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`col * (SUM(x) WHEN w) <= K` — data column on the left of the `*`.
+    The fold rewrites to `WHEN(SUM(col * x), w)`, giving per-row
+    coefficient `col[i]` for matching rows."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+    """
+    decide_sql = """
+        SELECT id, col, w, x FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+        DECIDE x IS REAL
+        SUCH THAT col * (SUM(x) WHEN w) <= 20
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        # col_i * SUM_{w}(x_i) <= 20  →  per-row coefficient col_i for w-rows.
+        coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2]}
+        oracle.add_constraint(coeffs, "<=", 20.0, name="col_mul_when")
+        oracle.set_objective(
+            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        return n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x")
+        return sum(float(r[xi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_col_mul_left",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_when_with_data_column_scalar_right(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`(SUM(x) WHEN w) * col <= K` — data column on the right of the `*`.
+    The fold accepts either operand order and produces the same rewrite
+    as the left-side variant."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+    """
+    decide_sql = """
+        SELECT id, col, w, x FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+        DECIDE x IS REAL
+        SUCH THAT (SUM(x) WHEN w) * col <= 20
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2]}
+        oracle.add_constraint(coeffs, "<=", 20.0, name="when_mul_col")
+        oracle.set_objective(
+            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        return n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x")
+        return sum(float(r[xi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_col_mul_right",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_when_divided_by_data_column(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`(SUM(x) WHEN w) / col <= K` — WHEN-tagged aggregate divided by a
+    per-row data column. The fold rewrites to `WHEN(SUM(x / col), w)`,
+    giving per-row coefficient `1/col[i]` for matching rows."""
+    data_sql = """
+        SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
+            VALUES (1, 2.0, true), (2, 4.0, false), (3, 1.0, true), (4, 0.5, true)
+        ) t(id, col, w)
+    """
+    decide_sql = """
+        SELECT id, col, w, x FROM (
+            VALUES (1, 2.0, true), (2, 4.0, false), (3, 1.0, true), (4, 0.5, true)
+        ) t(id, col, w)
+        DECIDE x IS REAL
+        SUCH THAT (SUM(x) WHEN w) / col <= 5
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """
+
+    def build(oracle, data, cols, rows):
+        n = len(data)
+        vnames = [f"x_{i}" for i in range(n)]
+        for v in vnames:
+            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        # SUM_{w}(x_i) / col_i <= 5  →  per-row coefficient 1/col_i for w-rows.
+        coeffs = {vnames[i]: 1.0 / data[i][1] for i in range(n) if data[i][2]}
+        oracle.add_constraint(coeffs, "<=", 5.0, name="when_div_col")
+        oracle.set_objective(
+            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+        )
+        return n, 1
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x")
+        return sum(float(r[xi]) for r in rs)
+
+    _run_constraint_test(
+        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        test_id="alw_when_div_col",
+        decide_sql=decide_sql, data_sql=data_sql,
+        build_oracle=build, packdb_obj_fn=packdb_obj,
+    )

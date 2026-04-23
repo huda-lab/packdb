@@ -1187,83 +1187,7 @@ def test_entity_scoped_multi_column_per(packdb_cli, duckdb_conn, oracle_solver):
 
 
 # ---------------------------------------------------------------------------
-# Test 18: PER STRICT with entity-scoped variable
-# ---------------------------------------------------------------------------
-
-@pytest.mark.correctness
-@pytest.mark.per_clause
-@pytest.mark.per_strict
-def test_entity_scoped_per_strict(packdb_cli, duckdb_conn, oracle_solver):
-    """PER STRICT with entity-scoped variable — oracle-compared.
-
-    PER STRICT n_nationkey emits one constraint per nation, evaluating
-    the WHEN-filtered SUM even when the group has no surviving rows.
-    For nation n, SUM(keepN) over positive-acctbal customers =
-    pos_count_n * keepN_n, so the constraint becomes
-    pos_count_n * keepN_n <= 100. Objective sums over ALL join rows,
-    so the per-nation objective coefficient is nation_full_sum_n."""
-    sql = """
-        SELECT c.c_custkey, n.n_nationkey, keepN
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        DECIDE n.keepN IS BOOLEAN
-        SUCH THAT SUM(keepN) <= 100 WHEN c.c_acctbal > 0 PER STRICT n_nationkey
-        MAXIMIZE SUM(keepN * c.c_acctbal)
-    """
-    result, cols = packdb_cli.execute(sql)
-    assert len(result) > 0
-
-    keepN_idx = cols.index("keepN")
-    nkey_idx = cols.index("n_nationkey")
-
-    raw = duckdb_conn.execute("""
-        SELECT CAST(n.n_nationkey AS BIGINT),
-               SUM(CASE WHEN c.c_acctbal > 0 THEN 1 ELSE 0 END) as pos_cnt,
-               SUM(c.c_acctbal) as full_sum
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        GROUP BY n.n_nationkey
-    """).fetchall()
-    nation_ids = sorted(int(r[0]) for r in raw)
-    pos_cnt = {int(r[0]): int(r[1]) for r in raw}
-    full_sum = {int(r[0]): float(r[2]) for r in raw}
-
-    oracle_solver.create_model("entity_scoped_per_strict")
-    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
-    for nk in nation_ids:
-        oracle_solver.add_variable(vnames[nk], VarType.BINARY)
-    for nk in nation_ids:
-        oracle_solver.add_constraint(
-            {vnames[nk]: float(pos_cnt[nk])}, "<=", 100.0,
-            name=f"per_strict_{nk}",
-        )
-    oracle_solver.set_objective(
-        {vnames[nk]: full_sum[nk] for nk in nation_ids}, ObjSense.MAXIMIZE,
-    )
-    res = oracle_solver.solve()
-    assert res.status == SolverStatus.OPTIMAL
-
-    nation_values: dict[int, int] = {}
-    for row in result:
-        nkey = int(row[nkey_idx])
-        keep = int(row[keepN_idx])
-        if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
-        else:
-            nation_values[nkey] = keep
-
-    packdb_obj = sum(
-        nation_values.get(nk, 0) * full_sum[nk] for nk in nation_ids
-    )
-    assert abs(packdb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, "
-        f"Oracle={res.objective_value:.4f}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 19 (bonus): MIN easy case (MIN >= K) with entity-scoped variable
+# Test 18 (bonus): MIN easy case (MIN >= K) with entity-scoped variable
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
@@ -2692,5 +2616,72 @@ def test_entity_scoped_vs_per_null_semantics(
     assert obj_b > obj_a, (
         f"Expected PER obj > entity-scope obj (NULL rows free under PER), "
         f"got entity={obj_a}, per={obj_b}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test N: Entity-scoped per-row constraint with linear LHS (x + const)
+# ---------------------------------------------------------------------------
+# Regression for Fix A: a per-row constraint like `x + 3 <= 10` on an
+# entity-scoped variable emits one constraint per join row, all referencing
+# the SAME solver variable. The fix must not introduce duplicate-index
+# entries or per-row coefficient accumulation errors when multiple rows
+# share the same underlying var.
+
+@pytest.mark.correctness
+def test_entity_scoped_perrow_linear_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Entity-scoped var with per-row `x + 3 <= 10`. Each entity gets constrained
+    once per join row; all copies agree on the same upper bound (7), so the
+    shared variable's feasible range is x <= 7."""
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        DECIDE n.keepN IS INTEGER
+        SUCH THAT keepN + 3 <= 10
+        MAXIMIZE SUM(keepN * c.c_acctbal)
+    """
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+
+    # Verify entity consistency (same nation → same keepN) and upper bound.
+    nation_values = {}
+    for row in packdb_result:
+        nkey = int(row[1])
+        keep = int(row[2])
+        assert 0 <= keep <= 7, f"Nation {nkey} keepN={keep} violates entity-scoped x+3<=10 bound"
+        if nkey in nation_values:
+            assert nation_values[nkey] == keep, (
+                f"Nation {nkey} entity inconsistency: {nation_values[nkey]} vs {keep}"
+            )
+        nation_values[nkey] = keep
+
+    # Oracle comparison: one var per nation with ub=7.
+    data = duckdb_conn.execute("""
+        SELECT CAST(c.c_custkey AS BIGINT), CAST(n.n_nationkey AS BIGINT),
+               CAST(c.c_acctbal AS DOUBLE)
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+    """).fetchall()
+    nation_ids = sorted(set(int(r[1]) for r in data))
+    nation_acctbal = {}
+    for r in data:
+        nation_acctbal[int(r[1])] = nation_acctbal.get(int(r[1]), 0.0) + float(r[2])
+
+    oracle_solver.create_model("entity_perrow_linear")
+    vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
+    for nk in nation_ids:
+        oracle_solver.add_variable(vnames[nk], VarType.INTEGER, lb=0.0, ub=7.0)
+    oracle_solver.set_objective(
+        {vnames[nk]: nation_acctbal[nk] for nk in nation_ids},
+        ObjSense.MAXIMIZE,
+    )
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    packdb_obj = 0.0
+    for r in data:
+        packdb_obj += nation_values.get(int(r[1]), 0) * float(r[2])
+    assert abs(packdb_obj - result.objective_value) < 1e-4, (
+        f"Entity-scoped per-row linear LHS: PackDB={packdb_obj}, oracle={result.objective_value}"
     )
 

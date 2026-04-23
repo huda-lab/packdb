@@ -187,3 +187,184 @@ def test_sum_gte_with_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
+
+
+# --- Aggregate constraint with constant offset on LHS ---
+# The symbolic normalizer moves the constant to RHS for aggregate constraints
+# (unlike per-row where the ilp_model_builder does the move). This test locks
+# in that behavior and guards against a regression where a future refactor
+# might skip symbolic normalization and leave an INVALID_INDEX term in the
+# aggregate path (where it would still be silently dropped by line 405-411).
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_aggregate_lhs_with_constant_offset(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`SUM(x) + 3 <= 10` must give `SUM(x) <= 7`. If the `+3` silently drops
+    instead of moving to RHS, packdb would solve `SUM(x) <= 10` and produce
+    a larger objective than the oracle."""
+    sql = """
+        SELECT ps_partkey, ps_availqty, x
+        FROM partsupp WHERE ps_partkey < 10
+        DECIDE x IS INTEGER
+        SUCH THAT SUM(x) + 3 <= 10
+            AND x <= 5
+        MAXIMIZE SUM(x * ps_availqty)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
+        FROM partsupp WHERE ps_partkey < 10
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("agg_const_offset")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=5.0)
+    # SUM(x) <= 10 - 3 = 7
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(len(data))},
+        "<=", 7.0, name="sum_bound",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+    )
+    perf_tracker.record(
+        "agg_const_offset", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+# --- Aggregate constraint with division coefficients ---
+# `/` was previously rejected inside SUM; the SUM-argument validator now
+# allows it when the divisor is decide-var-free, which lets users write
+# `SUM(x / 2)` and `SUM(x / col)` directly. The downstream symbolic
+# normalizer also had to learn to emit a real division expression for
+# negative-integer Power exponents (so `x * w^-1` round-trips back to
+# `x / w`).
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_aggregate_sum_divided_by_constant(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`SUM(x / 2) <= 5` is equivalent to `SUM(x) <= 10` (constant divisor)."""
+    sql = """
+        SELECT ps_partkey, ps_availqty, x
+        FROM partsupp WHERE ps_partkey < 10
+        DECIDE x IS INTEGER
+        SUCH THAT SUM(x / 2) <= 5
+            AND x <= 5
+        MAXIMIZE SUM(x * ps_availqty)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
+        FROM partsupp WHERE ps_partkey < 10
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("agg_div_const")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=5.0)
+    # SUM(x_i * 0.5) <= 5 — same shape as `x_i / 2` per row.
+    oracle_solver.add_constraint(
+        {vnames[i]: 0.5 for i in range(len(data))},
+        "<=", 5.0, name="sum_div2",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(len(data))}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+    )
+    perf_tracker.record(
+        "agg_div_const", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_aggregate_sum_divided_by_data_column(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`SUM(x / w) <= K` with per-row divisor w. The coefficient on each
+    x_i is 1/w_i; the symbolic normalizer must reconstruct the division
+    instead of throwing on the negative exponent it produced internally."""
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 2.0 AS w UNION ALL
+            SELECT 2, 4.0 UNION ALL
+            SELECT 3, 0.5
+        )
+        SELECT id, w, ROUND(x, 4) AS x FROM data
+        DECIDE x IS REAL
+        SUCH THAT SUM(x / w) <= 10
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM (
+            SELECT 1 AS id, 2.0 AS w UNION ALL
+            SELECT 2, 4.0 UNION ALL
+            SELECT 3, 0.5
+        )
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("agg_div_col")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 / data[i][1] for i in range(len(data))},
+        "<=", 10.0, name="sum_div_w",
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: 1.0 for i in range(len(data))}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    cmp = compare_solutions(
+        packdb_result, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 1.0},
+    )
+    perf_tracker.record(
+        "agg_div_col", packdb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )

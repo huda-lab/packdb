@@ -432,6 +432,111 @@ class TestQuadraticBasic:
             comparison_status="optimal",
         )
 
+    def test_qp_power_with_constant_division(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """MINIMIZE SUM(POWER(x/2 - 1, 2)).
+
+        Expansion: (x/2 - 1)^2 = x^2/4 - x + 1, so per-row linear coeff = -1
+        and quadratic coeff = 0.25. Unconstrained optimum at x = 2 in [0, 10].
+        """
+        data_sql = (
+            "SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3"
+        )
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, ROUND(x, 4) AS x FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 10
+            MINIMIZE SUM(POWER(x/2 - 1, 2))
+        """
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT) FROM ({data_sql})"
+        ).fetchall()
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_const_div")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        linear = {xnames[i]: -1.0 for i in range(n)}
+        quadratic = {(xnames[i], xnames[i]): 0.25 for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+
+        def packdb_obj(rs, cs):
+            xi = cs.index("x")
+            # Match oracle: drop the per-row constant +1 (oracle's
+            # set_quadratic_objective ignores the additive constant).
+            return sum(0.25 * float(r[xi]) ** 2 - float(r[xi]) for r in rs)
+
+        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        perf_tracker.record(
+            "qp_power_const_div", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_qp_power_with_column_division(
+        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """MINIMIZE SUM(POWER(x/w - 1, 2)) with per-row data divisor w.
+
+        Per-row expansion: (x/w - 1)^2 = x^2/w^2 - 2x/w + 1, so linear
+        coeff = -2/w_i, quadratic coeff = 1/w_i^2. Unconstrained optimum
+        at x_i = w_i.
+        """
+        data_sql = """
+            SELECT 1 AS id, 2.0 AS w UNION ALL
+            SELECT 2, 4.0 UNION ALL
+            SELECT 3, 0.5
+        """
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, w, ROUND(x, 4) AS x FROM data
+            DECIDE x IS REAL
+            SUCH THAT x >= 0 AND x <= 10
+            MINIMIZE SUM(POWER(x/w - 1, 2))
+        """
+        t0 = time.perf_counter()
+        rows, cols = packdb_cli.execute(sql)
+        packdb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("qp_col_div")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        linear = {xnames[i]: -2.0 / data[i][1] for i in range(n)}
+        quadratic = {(xnames[i], xnames[i]): 1.0 / (data[i][1] ** 2) for i in range(n)}
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
+        build_time = time.perf_counter() - t_build
+
+        def packdb_obj(rs, cs):
+            xi = cs.index("x"); wi = cs.index("w")
+            return sum(
+                (float(r[xi]) ** 2) / (float(r[wi]) ** 2)
+                - 2.0 * float(r[xi]) / float(r[wi])
+                for r in rs
+            )
+
+        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        perf_tracker.record(
+            "qp_power_col_div", packdb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
 
 # ===========================================================================
 # MAXIMIZE quadratic
@@ -914,7 +1019,7 @@ class TestQuadraticErrors:
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 3))
-        """, match=r"Triple or higher-order products|Product of different DECIDE variable expressions|must remain linear")
+        """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
 
     def test_product_of_different_vars_now_supported(
         self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
@@ -1008,7 +1113,7 @@ class TestQuadraticErrors:
             DECIDE x IS REAL
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, exp))
-        """, match=r"Non-integer exponents are not supported")
+        """, match=r"POWER exponent.*must be a constant integer")
 
     def test_qp_multiple_quadratic_groups_rejected(self, packdb_cli):
         packdb_cli.assert_error("""

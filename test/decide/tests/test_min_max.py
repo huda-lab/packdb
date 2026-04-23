@@ -974,3 +974,438 @@ def test_max_notequal_error(packdb_cli):
         SUCH THAT MAX(x) <> 0
         MAXIMIZE SUM(x) LIMIT 1
     """, match=r"does not support <> comparison with MIN/MAX")
+
+
+# ============================================================================
+# Composed MIN/MAX in additive expressions (v1: easy-direction terms only).
+# The composed LHS `T1 + T2 + ... <= K` (or >= K) is emitted as a global raw
+# ILP constraint with a continuous z_k auxiliary per MIN/MAX term. Each
+# auxiliary is pinned by per-row constraints to the row-wise inner value.
+# ============================================================================
+
+
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_sum_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """SUM(x*v) + MAX(x*v) WHEN w <= K — minimum repro for the composed MIN/MAX bug.
+
+    LHS is additive with one SUM and one MAX term. The MAX has a WHEN filter.
+    Easy-direction: pushed down by <=, MAX pushed down ⇒ easy.
+    """
+    sql = """
+        SELECT id, v, w, x FROM (
+            VALUES (1, 10.0, false),
+                   (2, 5.0, true),
+                   (3, 7.0, false)
+        ) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12
+        MAXIMIZE SUM(x * v)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0, False), (2, 5.0, True), (3, 7.0, False)]
+    n = len(data)
+    # Build oracle with explicit z auxiliary for the MAX term.
+    t_build = time.perf_counter()
+    oracle_solver.create_model("composed_sum_plus_max")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    # z = MAX(x*v) WHEN w. Easy case (pushed down): z >= x*v for each w-matching row.
+    z_ub = max(d[1] for d in data if d[2]) + 1.0
+    oracle_solver.add_variable("z_max", VarType.CONTINUOUS, lb=0.0, ub=z_ub)
+    for i, d in enumerate(data):
+        if d[2]:
+            oracle_solver.add_constraint(
+                {"z_max": 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"z_pin_{i}",
+            )
+    # Outer: SUM(x*v) + z <= 12
+    outer_coeffs = {vnames[i]: data[i][1] for i in range(n)}
+    outer_coeffs["z_max"] = 1.0
+    oracle_solver.add_constraint(outer_coeffs, "<=", 12.0, name="outer")
+    oracle_solver.set_objective({vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
+    )
+    perf_tracker.record(
+        "composed_sum_plus_max", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 1, n + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_max_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MAX(x*v) WHEN w1 + MAX(x*v) WHEN w2 <= K — two easy-direction MAX terms."""
+    sql = """
+        SELECT id, v, x FROM (
+            VALUES (1, 10.0, true, false),
+                   (2, 5.0, false, true),
+                   (3, 7.0, false, false)
+        ) t(id, v, w1, w2)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MAX(x * v) WHEN w1 + MAX(x * v) WHEN w2 <= 12
+        MAXIMIZE SUM(x * v)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0, True, False), (2, 5.0, False, True), (3, 7.0, False, False)]
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("composed_max_plus_max")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    # z1 = MAX over w1, z2 = MAX over w2
+    for name, mask_col in [("z1", 2), ("z2", 3)]:
+        ub = max(d[1] for d in data if d[mask_col]) + 1.0 if any(d[mask_col] for d in data) else 1.0
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=ub)
+        for i, d in enumerate(data):
+            if d[mask_col]:
+                oracle_solver.add_constraint(
+                    {name: 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"{name}_pin_{i}",
+                )
+    oracle_solver.add_constraint({"z1": 1.0, "z2": 1.0}, "<=", 12.0, name="outer")
+    oracle_solver.set_objective({vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
+    )
+    perf_tracker.record(
+        "composed_max_plus_max", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 2, n + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_min_plus_min_geq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MIN(x*v) WHEN w1 + MIN(x*v) WHEN w2 >= K — two easy-direction MIN terms.
+
+    Easy-direction: pushed up by >=, MIN pushed up ⇒ easy. Forces both
+    MIN aggregates to at least K/2 each (roughly) via per-row constraints
+    z_k <= v_i * x_i, so the outer z1+z2 >= K can be satisfied.
+    """
+    # Use positive decision problem: SUM(x) >= 1 PER group so solution exists.
+    # Simpler: force x=1 on the binding rows by constraint direction.
+    sql = """
+        SELECT id, v, x FROM (
+            VALUES (1, 10.0, true, false),
+                   (2, 8.0, false, true),
+                   (3, 7.0, false, false)
+        ) t(id, v, w1, w2)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MIN(x * v) WHEN w1 + MIN(x * v) WHEN w2 >= 15
+        MINIMIZE SUM(x * v)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0, True, False), (2, 8.0, False, True), (3, 7.0, False, False)]
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("composed_min_plus_min")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for name, mask_col in [("z1", 2), ("z2", 3)]:
+        ub = max(d[1] for d in data if d[mask_col]) + 1.0 if any(d[mask_col] for d in data) else 1.0
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=ub)
+        # MIN easy (pushed up): z <= v_i * x_i for each matching row
+        for i, d in enumerate(data):
+            if d[mask_col]:
+                oracle_solver.add_constraint(
+                    {name: 1.0, vnames[i]: -d[1]}, "<=", 0.0, name=f"{name}_pin_{i}",
+                )
+    oracle_solver.add_constraint({"z1": 1.0, "z2": 1.0}, ">=", 15.0, name="outer")
+    oracle_solver.set_objective({vnames[i]: data[i][1] for i in range(n)}, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
+    )
+    perf_tracker.record(
+        "composed_min_plus_min", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 2, n + 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.error_binder
+def test_composed_minmax_hard_rejected(packdb_cli):
+    """Composed MIN/MAX in hard direction (e.g. MAX(...) pushed up) should
+    raise a BinderException in v1 — indicator linearization not yet implemented."""
+    packdb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w >= 3
+        MAXIMIZE SUM(x * v)
+    """, match=r"easy-direction|hard|not yet implemented")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_subtraction_rejected(packdb_cli):
+    """Subtraction in a composed MIN/MAX LHS is rejected in v1."""
+    packdb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MAX(x * v) WHEN w - MIN(x * v) WHEN w <= 3
+        MAXIMIZE SUM(x * v)
+    """, match=r"does not support subtraction")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_scalar_mult_rejected(packdb_cli):
+    """`(2 * MIN(x * v) WHEN w) + SUM(x * v) <= K` — composed MIN/MAX
+    constraints in v1 still don't support hard-direction MIN terms (a
+    `MIN(...) <= K` style bound that needs Big-M indicator linearization).
+
+    The query used to be rejected here for "scalar multiplication of an
+    aggregate term" by the composed walker; the symbolic normalizer's
+    K*WHEN fold now collapses `2 * (MIN(...) WHEN w)` into
+    `WHEN(MIN(2 * x * v), w)` before the walker runs, so the rejection
+    that fires now is the upstream "Big-M MIN term" limitation."""
+    packdb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT (2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20
+        MAXIMIZE SUM(x * v)
+    """, match=r"requires Big-M indicator linearization")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_per_wrapper_rejected(packdb_cli):
+    """PER on a composed MIN/MAX constraint is rejected in v1."""
+    packdb_cli.assert_error("""
+        SELECT id, v, g FROM (VALUES (1, 10.0, true, 'A'), (2, 5.0, true, 'B')) t(id, v, w, g)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12 PER g
+        MAXIMIZE SUM(x * v)
+    """, match=r"does not support outer WHEN/PER")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_nonconst_rhs_subquery_rejected(packdb_cli):
+    """Composed MIN/MAX with a scalar-subquery RHS is rejected in v1.
+
+    v1 requires the outer RHS of a composed MIN/MAX constraint to be a
+    constant literal (possibly cast-wrapped). A scalar subquery — even
+    one that returns a constant — trips the dedicated guard.
+    """
+    packdb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= (SELECT 12)
+        MAXIMIZE SUM(x * v)
+    """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_nonconst_rhs_column_rejected(packdb_cli):
+    """Composed MIN/MAX with a column-reference RHS is rejected in v1.
+
+    Different rejection path than the subquery shape: the binder fails
+    earlier with a generic SUM-comparison error before the composed
+    guard runs. Pinned anyway so a future widen of the composed RHS
+    grammar surfaces here.
+    """
+    packdb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10.0, true, 12), (2, 5.0, true, 12)) t(id, v, w, cap)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= cap
+        MAXIMIZE SUM(x * v)
+    """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_outer_when_rejected(packdb_cli):
+    """Outer expression-level WHEN on a composed MIN/MAX is rejected in v1.
+
+    Distinct from the PER-rejection pin above: shares the
+    "expression-level vs aggregate-local WHEN" guard rather than the
+    "outer WHEN/PER on composed" guard, but tests the same v1 limitation
+    on outer modifiers. Pinned separately so a widened composed grammar
+    that admits one but not the other is detectable.
+    """
+    packdb_cli.assert_error("""
+        SELECT id, v, tier FROM (
+            VALUES (1, 10.0, true, 'high'), (2, 5.0, true, 'low')
+        ) t(id, v, w, tier)
+        DECIDE x IS BOOLEAN
+        SUCH THAT (SUM(x * v) + MAX(x * v) WHEN w) <= 12 WHEN (tier = 'high')
+        MAXIMIZE SUM(x * v)
+    """, match=r"Cannot combine expression-level WHEN with aggregate-local WHEN")
+
+
+# ----- Composed MIN/MAX in objectives -----
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_minimize
+@pytest.mark.when_objective
+@pytest.mark.correctness
+def test_minimize_sum_plus_max_composed_objective(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MINIMIZE SUM(x*v) + MAX(x*v) WHEN w — both terms pushed down (easy)."""
+    sql = """
+        SELECT id, v, w, x FROM (
+            VALUES (1, 10.0, true),
+                   (2, 5.0, false),
+                   (3, 7.0, false)
+        ) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MINIMIZE SUM(x * v) + MAX(x * v) WHEN w
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0, True), (2, 5.0, False), (3, 7.0, False)]
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("min_sum_plus_max_obj")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 1.0, name="atleastone")
+    # z = MAX(x*v) WHEN w, pushed down (easy): z >= x*v per w-matching row
+    z_ub = max(d[1] for d in data if d[2]) + 1.0 if any(d[2] for d in data) else 1.0
+    oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=z_ub)
+    for i, d in enumerate(data):
+        if d[2]:
+            oracle_solver.add_constraint(
+                {"z": 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"z_pin_{i}",
+            )
+    obj = {vnames[i]: data[i][1] for i in range(n)}
+    obj["z"] = 1.0
+    oracle_solver.set_objective(obj, ObjSense.MINIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj_m(rs, cs):
+        xi = cs.index("x"); vi = cs.index("v"); wi = cs.index("w")
+        sum_part = sum(int(r[xi]) * float(r[vi]) for r in rs)
+        max_vals = [float(r[vi]) * int(r[xi]) for r in rs if r[wi]]
+        max_part = max(max_vals) if max_vals else 0.0
+        return sum_part + max_part
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj_m,
+    )
+    perf_tracker.record(
+        "min_sum_plus_max_obj", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 1, 1 + sum(1 for d in data if d[2]),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.when_objective
+@pytest.mark.correctness
+def test_maximize_min_plus_sum_composed_objective(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE MIN(x*v) WHEN w + SUM(x*v) — MIN pushed up (easy) + SUM pushed up."""
+    sql = """
+        SELECT id, v, w, x FROM (
+            VALUES (1, 10.0, true),
+                   (2, 5.0, true),
+                   (3, 7.0, false)
+        ) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <= 2
+        MAXIMIZE MIN(x * v) WHEN w + SUM(x * v)
+    """
+    t0 = time.perf_counter()
+    rows, cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0, True), (2, 5.0, True), (3, 7.0, False)]
+    n = len(data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_min_plus_sum_obj")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_constraint({v: 1.0 for v in vnames}, "<=", 2.0, name="budget")
+    # z = MIN(x*v) WHEN w, pushed up (easy): z <= x*v per w-matching row
+    z_ub = max(d[1] for d in data if d[2]) + 1.0 if any(d[2] for d in data) else 1.0
+    oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=z_ub)
+    for i, d in enumerate(data):
+        if d[2]:
+            oracle_solver.add_constraint(
+                {"z": 1.0, vnames[i]: -d[1]}, "<=", 0.0, name=f"z_pin_{i}",
+            )
+    obj = {vnames[i]: data[i][1] for i in range(n)}
+    obj["z"] = 1.0
+    oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); vi = cs.index("v"); wi = cs.index("w")
+        sum_part = sum(int(r[xi]) * float(r[vi]) for r in rs)
+        min_vals = [float(r[vi]) * int(r[xi]) for r in rs if r[wi]]
+        min_part = min(min_vals) if min_vals else 0.0
+        return sum_part + min_part
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "max_min_plus_sum_obj", packdb_time, build_time, result.solve_time_seconds,
+        n, n + 1, 1 + sum(1 for d in data if d[2]),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.when_objective
+@pytest.mark.error_binder
+def test_composed_minmax_objective_hard_rejected(packdb_cli):
+    """MAXIMIZE MAX(...) + SUM(...) — MAX pushed UP is hard direction; v1 rejects."""
+    packdb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MAXIMIZE MAX(x * v) WHEN w + SUM(x * v)
+    """, match=r"easy-direction|hard|not yet implemented")

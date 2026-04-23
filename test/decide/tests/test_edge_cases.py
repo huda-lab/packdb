@@ -267,6 +267,641 @@ def test_zero_rows_empty_input(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 
 
 @pytest.mark.edge_case
+@pytest.mark.when_constraint
+@pytest.mark.avg_rewrite
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_avg_constraint_when_filters_all_rows(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """AVG(...) WHEN <cond> where no row matches the WHEN condition.
+
+    The AVG rewrite scales RHS by the WHEN-matching row count; with zero
+    matches the denominator-guard path in physical_decide.cpp zeros all
+    coefficients, producing ``0 <= RHS`` (trivially true). The solution
+    should therefore be identical to the same query without the AVG
+    constraint.
+    """
+    sql = """
+        SELECT id, val, flag, x FROM (
+            VALUES (1, 10.0, 'A'),
+                   (2, 7.0, 'A'),
+                   (3, 5.0, 'B'),
+                   (4, 12.0, 'B')
+        ) t(id, val, flag)
+        DECIDE x IS BOOLEAN
+        SUCH THAT AVG(x * val) WHEN (flag = 'Z') <= 1
+        MAXIMIZE SUM(x * val)
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0, 'A'), (2, 7.0, 'A'), (3, 5.0, 'B'), (4, 12.0, 'B')]
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_when_empty")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    # No rows match flag='Z' → AVG constraint is trivially satisfied and
+    # should not appear in the oracle. Objective alone drives selection.
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("val")])},
+    )
+    # Without the AVG constraint the maximiser picks every row.
+    x_idx = packdb_cols.index("x")
+    assert all(int(r[x_idx]) == 1 for r in packdb_rows), (
+        "AVG(...) WHEN <false> should be trivially satisfied; "
+        "expected all rows selected"
+    )
+
+    perf_tracker.record(
+        "avg_when_empty", packdb_time, build_time, result.solve_time_seconds,
+        n, n, 0,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.per_clause
+@pytest.mark.when_constraint
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_maximize_sum_max_per_with_empty_when_group(
+    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """MAXIMIZE SUM(MAX(x*v)) WHEN flag PER grp where one group has no
+    WHEN-matching rows — hard-case inner-MAX with an empty group.
+
+    The hard case emits a per-row binary indicator ``y_i`` plus
+    ``SUM(y_i) >= 1`` to pin the auxiliary ``z_g`` to a row's value. An
+    empty WHEN-bucket in a group would naively produce ``0 >= 1``
+    (spurious infeasibility). Per the documented default PER policy
+    (empty groups skipped), group B should contribute nothing and the
+    objective should reflect only group A.
+    """
+    from ._oracle_helpers import emit_hard_inner_max
+
+    sql = """
+        SELECT id, grp, val, flag, x FROM (
+            VALUES (1, 'A', 10.0, true),
+                   (2, 'A', 7.0, true),
+                   (3, 'A', 4.0, false),
+                   (4, 'B', 12.0, false),
+                   (5, 'B', 6.0, false)
+        ) t(id, grp, val, flag)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1 PER grp
+        MAXIMIZE SUM(MAX(x * val)) WHEN flag PER grp
+    """
+    t0 = time.perf_counter()
+    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = [
+        (1, 'A', 10.0, True),
+        (2, 'A', 7.0, True),
+        (3, 'A', 4.0, False),
+        (4, 'B', 12.0, False),
+        (5, 'B', 6.0, False),
+    ]
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("max_sum_max_per_empty_when_group")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+
+    groups: dict = {}
+    for i, row in enumerate(data):
+        groups.setdefault(row[1], []).append(i)
+
+    # SUM(x) >= 1 PER grp: applied to every group.
+    for g, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_{g}",
+        )
+
+    # Hard-case inner-MAX aux per non-empty WHEN group.
+    z_names = []
+    for g, idxs in groups.items():
+        qualifying = [i for i in idxs if data[i][3]]
+        if not qualifying:
+            # Empty WHEN-bucket — default PER policy skips this group.
+            continue
+        z = emit_hard_inner_max(
+            oracle_solver,
+            name_prefix=f"mx_{g}",
+            row_coeffs=[{vnames[i]: data[i][2]} for i in qualifying],
+            row_ub=max(data[i][2] for i in qualifying) + 1.0,
+        )
+        z_names.append(z)
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    from solver.types import SolverStatus
+    assert result.status == SolverStatus.OPTIMAL, (
+        f"Oracle expected OPTIMAL; got {result.status}. "
+        f"PackDB returned {len(packdb_rows)} rows."
+    )
+
+    def packdb_obj(rs, cs):
+        xi = cs.index("x"); vi = cs.index("val"); fi = cs.index("flag"); gi = cs.index("grp")
+        per_grp: dict = {}
+        for r in rs:
+            if not bool(r[fi]):
+                continue
+            key = r[gi]
+            contrib = float(r[vi]) if float(r[xi]) > 0.5 else 0.0
+            per_grp.setdefault(key, []).append(contrib)
+        return sum(max(vs) for vs in per_grp.values() if vs)
+
+    cmp = compare_solutions(
+        packdb_rows, packdb_cols, result, data, ["x"],
+        packdb_objective_fn=packdb_obj,
+    )
+    perf_tracker.record(
+        "max_sum_max_per_empty_when_group", packdb_time, build_time,
+        result.solve_time_seconds, n, n + len(z_names), len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Empty-set aggregate probe matrix: document concrete behavior for every
+# combination of {aggregate kind} × {position} × {empty origin}.
+#
+# Expected contract (from code trace):
+#   - Empty aggregate in a CONSTRAINT → constraint is skipped (trivially true).
+#     Holds for SUM, AVG, MIN, MAX; for both flat-WHEN-empty and PER-empty.
+#   - Empty aggregate in an OBJECTIVE → contributes 0 to a linear/AVG obj,
+#     or the empty group is dropped from a nested PER sum. For FLAT MIN/MAX
+#     objectives over a completely-empty WHEN bucket, the auxiliary z has no
+#     linking constraints and collapses to its bound — documented here.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_min_geq_constraint_when_empty(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MIN(...) >= K WHEN <never> — easy case, rewrites to per-row v*x >= K.
+
+    With zero matching rows, no per-row constraints are emitted → trivially
+    true. Maximizer picks every row.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0), (3, 4.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MIN(x * val) >= 5 WHEN val > 100
+        MAXIMIZE SUM(x * val)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx = cols.index("x")
+    assert all(int(r[x_idx]) == 1 for r in rows), (
+        f"Expected all x=1 (trivially-satisfied MIN>=K); got {[r[x_idx] for r in rows]}"
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_min_leq_constraint_when_empty(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MIN(...) <= K WHEN <never> — hard case, Big-M indicator path.
+
+    Hard MIN<=K emits per-row binary y_i with SUM(y_i) >= 1 (at least one row
+    "is" the min ≤ K). Empty row set would naively produce 0 >= 1 →
+    infeasible. The correct behavior is to skip the constraint entirely.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0), (3, 4.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MIN(x * val) <= 3 WHEN val > 100
+        MAXIMIZE SUM(x * val)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx = cols.index("x")
+    assert all(int(r[x_idx]) == 1 for r in rows), (
+        "Empty hard-MIN-LEQ constraint should be skipped (not emit SUM(y)>=1 "
+        "over nothing); expected all x=1 from unfettered maximize"
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_max_leq_constraint_when_empty(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MAX(...) <= K WHEN <never> — easy case (per-row rewrite)."""
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0), (3, 4.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MAX(x * val) <= 2 WHEN val > 100
+        MAXIMIZE SUM(x * val)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx = cols.index("x")
+    assert all(int(r[x_idx]) == 1 for r in rows)
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_max_geq_constraint_when_empty(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MAX(...) >= K WHEN <never> — hard case (Big-M indicator)."""
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0), (3, 4.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT MAX(x * val) >= 999 WHEN val > 100
+        MAXIMIZE SUM(x * val)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx = cols.index("x")
+    assert all(int(r[x_idx]) == 1 for r in rows), (
+        "Empty hard-MAX-GEQ should be skipped, not produce SUM(y)>=1 over "
+        "empty indicator set"
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.avg_rewrite
+@pytest.mark.per_clause
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_avg_per_constraint_with_empty_group(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """AVG(...) <= K PER grp WHEN <flag> where one group has no matching rows.
+
+    Per-group AVG zeroes coefficients for empty groups (physical_decide.cpp
+    :2004), and the per-group constraint should reduce to 0 <= K (trivially
+    true) for that group. Group with matches enforces its AVG cap.
+    """
+    sql = """
+        SELECT id, grp, val, flag, x FROM (
+            VALUES (1, 'A', 10.0, true),
+                   (2, 'A', 20.0, true),
+                   (3, 'A', 5.0, true),
+                   (4, 'B', 50.0, false),
+                   (5, 'B', 100.0, false)
+        ) t(id, grp, val, flag)
+        DECIDE x IS BOOLEAN
+        SUCH THAT AVG(x * val) WHEN flag <= 8 PER grp
+        MAXIMIZE SUM(x * val)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx, grp_idx, val_idx = cols.index("x"), cols.index("grp"), cols.index("val")
+
+    # Group B is empty after WHEN → constraint skipped → both B rows selected.
+    b_rows = [r for r in rows if r[grp_idx] == 'B']
+    assert all(int(r[x_idx]) == 1 for r in b_rows), (
+        f"Group B (empty after WHEN) should have no constraint; expected "
+        f"all x=1, got {[r[x_idx] for r in b_rows]}"
+    )
+
+    # Group A enforces AVG(x*val) <= 8, i.e. SUM(x*val over flag rows) <= 8 * 3 = 24.
+    a_rows = [r for r in rows if r[grp_idx] == 'A']
+    a_when_sum = sum(float(r[val_idx]) * int(r[x_idx]) for r in a_rows)
+    assert a_when_sum <= 24.0 + 1e-6, (
+        f"Group A AVG cap violated: SUM={a_when_sum} > 24"
+    )
+
+
+_EMPTY_WHEN_XFAIL_REASON = (
+    "Silent empty-WHEN: PackDB returns OPTIMAL but the math says infeasible "
+    "(MIN(∅) = +∞, MAX(∅) = −∞). Tracked in "
+    "context/descriptions/05_testing/min_max/todo.md and root todo.md "
+    "(\"Reject all cases of an empty set\"). Once the bug is fixed, "
+    "xfail-strict flips this to XPASS → failure → update the mark."
+)
+_EMPTY_WHEN_ERROR_REGEX = r"infeasible|empty|WHEN|MIN|MAX"
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_objective
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_maximize_min_objective_when_empty(packdb_cli):
+    """MAXIMIZE MIN(...) WHEN <never> — easy-case flat MIN over empty.
+
+    Formulation: global z with per-row `z <= expr_i` for WHEN-matching rows.
+    Zero rows → no linking constraints → z is unbounded upward, constrained
+    only by its declared upper bound. ILP semantics: MIN(∅) = +∞,
+    so MAXIMIZE drives z to +∞ → unbounded → infeasibility/error.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MAXIMIZE MIN(x * val) WHEN val > 100
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_objective
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_minimize_max_objective_when_empty(packdb_cli):
+    """MINIMIZE MAX(...) WHEN <never> — easy-case flat MAX over empty.
+
+    Mirror of `test_maximize_min_objective_when_empty`. MAX(∅) = −∞,
+    so MINIMIZE drives z to −∞ → unbounded → infeasibility/error.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MINIMIZE MAX(x * val) WHEN val > 100
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_objective
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_maximize_max_objective_when_empty(packdb_cli):
+    """MAXIMIZE MAX(...) WHEN <never> — HARD-case flat MAX over empty.
+
+    Hard-case formulation: global z + per-row binary indicators y_i with
+    SUM(y_i) >= 1 pinning z to one row's value. Empty row set means no
+    indicator can satisfy SUM(y) >= 1 → the model is infeasible. Today
+    PackDB silently returns OPTIMAL because the indicator block is skipped
+    when there are zero matching rows.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MAXIMIZE MAX(x * val) WHEN val > 100
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+@pytest.mark.edge_case
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_mixed_empty_and_populated_when_terms_constraint(packdb_cli):
+    """Two aggregate-local WHEN terms summed together: one empty, one populated.
+
+    ``SUM(x*v) WHEN <never> + SUM(x*v) WHEN <sometimes> <= K`` — per the
+    aggregate-local WHEN semantics (each SUM filters independently,
+    coefficients merge row-wise), the first term contributes 0 to every
+    coefficient and the second term enforces a real constraint on its
+    matching rows. The whole constraint should NOT be dropped just because
+    one term has an empty mask.
+
+    Probe: set K so the populated term alone is binding. If PackDB enforces
+    the merged constraint correctly, the maximizer cannot pick all w2 rows.
+    """
+    # Rows a,b match w2 (v=10,5). Nothing matches w1 (never-true). K=8.
+    # Merged constraint: 10*x_a + 5*x_b <= 8  → cannot pick both a and b.
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0, true),
+                   (2, 5.0, true),
+                   (3, 7.0, false)
+        ) t(id, val, w2)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) WHEN (val > 1000)
+                + SUM(x * val) WHEN w2 <= 8
+        MAXIMIZE SUM(x * val)
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx, id_idx, val_idx = cols.index("x"), cols.index("id"), cols.index("val")
+    by_id = {int(r[id_idx]): int(r[x_idx]) for r in rows}
+
+    # Populated-term constraint: 10 * x_a + 5 * x_b <= 8  →  picking both
+    # would give 15 > 8, so at most one of a,b can be selected.
+    a_plus_b = by_id[1] + by_id[2]
+    assert a_plus_b <= 1, (
+        f"Constraint should still bind from the populated WHEN term; got "
+        f"x_a+x_b={a_plus_b}. If this equals 2, the empty term caused the "
+        f"whole constraint to be incorrectly dropped."
+    )
+    # Row c (w2=false) is unconstrained → maximizer picks it.
+    assert by_id[3] == 1, f"Row c (not in any WHEN) should be free; got x={by_id[3]}"
+
+
+@pytest.mark.edge_case
+@pytest.mark.when_objective
+@pytest.mark.correctness
+def test_mixed_empty_and_populated_when_terms_objective(packdb_cli):
+    """Same composition in the OBJECTIVE: empty term + populated term.
+
+    ``MAXIMIZE SUM(x*v) WHEN <never> + SUM(x*bonus) WHEN w2`` — the empty
+    term contributes 0 per-row, the populated term should still drive row
+    selection. If the whole objective is incorrectly treated as empty, the
+    solver would return an arbitrary feasible x.
+    """
+    # Populated term coefficient on row id=2 is bonus=100 → huge signal.
+    # If obj is honored, row id=2 must be selected (x=1) in any optimum.
+    sql = """
+        SELECT id, val, bonus, x FROM (
+            VALUES (1, 10.0, 0.0, false),
+                   (2, 1.0, 100.0, true),
+                   (3, 3.0, 5.0, false)
+        ) t(id, val, bonus, w2)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <= 1
+        MAXIMIZE SUM(x * val) WHEN (val > 1000)
+               + SUM(x * bonus) WHEN w2
+    """
+    rows, cols = packdb_cli.execute(sql)
+    x_idx, id_idx = cols.index("x"), cols.index("id")
+    by_id = {int(r[id_idx]): int(r[x_idx]) for r in rows}
+    assert by_id[2] == 1, (
+        f"Row id=2 has the only non-zero objective coefficient (bonus=100 via "
+        f"the populated WHEN term); expected x=1, got {by_id[2]}. An x=0 "
+        f"result means the objective was incorrectly dropped as a whole."
+    )
+    assert by_id[1] == 0 and by_id[3] == 0, (
+        f"SUM(x)<=1 binds with id=2 selected; others should be 0. "
+        f"Got {by_id}"
+    )
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_objective
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_minimize_min_objective_when_empty(packdb_cli):
+    """MINIMIZE MIN(...) WHEN <never> — HARD-case flat MIN over empty.
+
+    Mirror of `test_maximize_max_objective_when_empty` for the MIN side.
+    Per-row binary indicators y_i with SUM(y_i) >= 1; empty row set means
+    no indicator → infeasible. Currently silently returns OPTIMAL.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1
+        MINIMIZE MIN(x * val) WHEN val > 100
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+# ----- Empty-WHEN on the CONSTRAINT side (mirrors the four objective tests above) -----
+#
+# Same root bug as the objective-side tests: a WHEN filter that matches zero
+# rows leaves the MIN/MAX auxiliary `z` (or `z_k` per term in the composed
+# path) unpinned. Hard-direction shapes are observably infeasible by math
+# (MIN(∅) = +∞, MAX(∅) = −∞); easy-direction composed shapes happen to
+# coincide with the math but the SUM term inside the same constraint is
+# silently vacated rather than enforced. See
+# `context/descriptions/05_testing/min_max/todo.md` and
+# `context/descriptions/05_testing/when/todo.md`.
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_max_when_empty_constraint_hard(packdb_cli):
+    """`(MAX(x*val) WHEN <never>) >= K` — hard direction. MAX(∅) = −∞ < K
+    so semantically infeasible. Currently silently OPTIMAL with arbitrary x.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT (MAX(x * val) WHEN (val > 100)) >= 5
+        MAXIMIZE SUM(x * val)
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_min_when_empty_constraint_hard(packdb_cli):
+    """`(MIN(x*val) WHEN <never>) <= K` — hard direction. MIN(∅) = +∞ > K
+    so semantically infeasible. Currently silently OPTIMAL with arbitrary x.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT (MIN(x * val) WHEN (val > 100)) <= 5
+        MAXIMIZE SUM(x * val)
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.error_infeasible
+@pytest.mark.xfail(strict=True, reason=_EMPTY_WHEN_XFAIL_REASON)
+def test_sum_plus_max_when_empty_silently_vacates_constraint(packdb_cli):
+    """`SUM(x*val) + (MAX(x*val) WHEN <never>) <= K` — composed easy
+    direction. The doc reports the entire constraint is silently vacated:
+    the SUM term should still bind even when the MAX term has empty WHEN.
+
+    On `(VALUES (1, 10.0), (2, 7.0))` with K=5, the SUM term alone is binding
+    (SUM=17 > 5 if both x=1, so the constraint should force x_1+x_2 ≤ 0
+    if MAX vanishes, or be infeasible per the root-todo's "reject empty"
+    directive). Currently PackDB picks x=[1,1] (SUM=17), confirming the
+    constraint is a no-op.
+    """
+    sql = """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) + (MAX(x * val) WHEN (val > 100)) <= 5
+        MAXIMIZE SUM(x * val)
+    """
+    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+
+
+@pytest.mark.edge_case
+@pytest.mark.min_max
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+def test_composed_easy_min_when_empty_regression_pin(packdb_cli):
+    """`SUM(x*val) + (MIN(x*val) WHEN <never>) >= K` — composed easy
+    direction with K too large for the SUM alone (SUM_max = 17 < 100).
+
+    REGRESSION PIN, NOT xfail. PackDB currently returns OPTIMAL with
+    x=[1,1] because the per-term auxiliary `z_k` for the MIN floats free
+    and the solver picks z_k large enough to satisfy `SUM + z_k >= 100`.
+    This *coincides* with the mathematical answer (MIN(∅) = +∞ would also
+    swamp the constraint) but for the wrong reason — the bug is the free-
+    floating aux, not principled +∞ handling.
+
+    When the empty-set rejection lands per the root todo, this test will
+    start failing (PackDB will reject instead of returning OPTIMAL). At
+    that point either delete this test or convert it to assert_error like
+    its siblings above. The pin is here so the change in behavior is
+    detected, not silently absorbed.
+    """
+    rows, cols = packdb_cli.execute(sql := """
+        SELECT id, val, x FROM (
+            VALUES (1, 10.0), (2, 7.0)
+        ) t(id, val)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) + (MIN(x * val) WHEN (val > 100)) >= 100
+        MAXIMIZE SUM(x * val)
+    """)
+    x_idx, id_idx = cols.index("x"), cols.index("id")
+    by_id = {int(r[id_idx]): int(r[x_idx]) for r in rows}
+    assert by_id == {1: 1, 2: 1}, (
+        f"Regression pin: PackDB historically returns x=[1,1] for this "
+        f"composed-easy MIN empty-WHEN shape (the dead MIN aux floats "
+        f"free, allowing any feasible SUM). Got x={by_id}. If this fails, "
+        f"the empty-WHEN handling has changed — see this test's docstring."
+    )
+
+
+@pytest.mark.edge_case
 def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Feasibility problem (no MAXIMIZE/MINIMIZE) — should find any feasible solution."""
     sql = """
