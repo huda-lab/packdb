@@ -173,6 +173,17 @@ bool PhysicalDecide::IsLinearInDecideVars(const Expression &expr) const {
             return factors_with_vars <= 1;
         }
 
+        // Division is linear iff the divisor is decide-var-free and the
+        // numerator is linear. `x / 2` is a coefficient scale (linear);
+        // `x / y` is non-linear (already rejected upstream by the bind-time
+        // validator, but we guard here anyway for defence-in-depth).
+        if (fname == "/" && func.children.size() == 2) {
+            if (FindDecideVariable(*func.children[1]) != DConstants::INVALID_INDEX) {
+                return false;
+            }
+            return IsLinearInDecideVars(*func.children[0]);
+        }
+
         // Any other function (POWER, SIN, ABS, ...) is linear only when none
         // of its arguments reference a decide variable (it is a pure data
         // expression evaluated at runtime into a coefficient).
@@ -366,6 +377,16 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
             return;
         }
 
+        // Unary minus: recurse and flip sign of every produced term.
+        if (func.function.name == "-" && func.children.size() == 1) {
+            idx_t before = out_terms.size();
+            ExtractTerms(*func.children[0], out_terms);
+            for (idx_t i = before; i < out_terms.size(); i++) {
+                out_terms[i].sign *= -1;
+            }
+            return;
+        }
+
         // Multiplication: extract variable and coefficient
         if (func.function.name == "*") {
             idx_t var_idx = FindDecideVariable(func);
@@ -377,6 +398,34 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
                 // Variable found - extract coefficient
                 auto coef = ExtractCoefficientWithoutVariable(func, var_idx);
                 out_terms.push_back(Term{var_idx, std::move(coef)});
+            }
+            return;
+        }
+
+        // Division by a DECIDE-variable-free expression: recurse into the
+        // numerator and wrap every produced term's coefficient in `coef / divisor`.
+        // Division where the divisor itself contains a decide variable is
+        // non-linear and is already rejected upstream by the bind-time validator.
+        // Cast both sides to the `/` function's expected argument types so
+        // an extracted integer coefficient doesn't silently turn into
+        // integer-division truncation (e.g., `x/2` gave 0 when coef was INT 1).
+        if (func.function.name == "/" && func.children.size() == 2 &&
+            FindDecideVariable(*func.children[1]) == DConstants::INVALID_INDEX) {
+            idx_t before = out_terms.size();
+            ExtractTerms(*func.children[0], out_terms);
+            D_ASSERT(func.function.arguments.size() == 2);
+            const auto &num_type = func.function.arguments[0];
+            const auto &denom_type = func.function.arguments[1];
+            for (idx_t i = before; i < out_terms.size(); i++) {
+                auto coef = BoundCastExpression::AddDefaultCastToType(
+                    std::move(out_terms[i].coefficient), num_type);
+                auto divisor = BoundCastExpression::AddDefaultCastToType(
+                    func.children[1]->Copy(), denom_type);
+                vector<unique_ptr<Expression>> div_children;
+                div_children.push_back(std::move(coef));
+                div_children.push_back(std::move(divisor));
+                out_terms[i].coefficient = make_uniq_base<Expression, BoundFunctionExpression>(
+                    func.return_type, func.function, std::move(div_children), nullptr);
             }
             return;
         }
@@ -418,6 +467,20 @@ static bool BoundExpressionContainsAggregate(const Expression &expr) {
     return found;
 }
 
+// PackDB: reject an aggregate whose effective row set is empty (after WHEN
+// filtering). An empty aggregate has no well-defined value — MIN(∅)=+∞ and
+// MAX(∅)=-∞ cannot be represented in the MILP encoding, SUM(∅)=0 and AVG(∅)
+// is undefined. Without this guard the hard-direction MIN/MAX z_k auxiliary
+// floats free and silently vacates the outer constraint or objective.
+static void RejectEmptyAggregate(idx_t effective_row_count, const char *agg_name, const char *ctx) {
+    if (effective_row_count == 0) {
+        throw InvalidInputException(
+            "DECIDE aggregate %s over empty row set in %s. "
+            "An empty aggregate has no well-defined value; check your WHEN clause.",
+            agg_name, ctx);
+    }
+}
+
 //===--------------------------------------------------------------------===//
 // Constructor
 //===--------------------------------------------------------------------===//
@@ -448,7 +511,7 @@ static void CollectConstraintStringsPhysical(const Expression &expr, vector<stri
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-			string per_suffix = IsPerStrictTag(conj.alias) ? " PER STRICT " : " PER ";
+			string per_suffix = " PER ";
 			for (idx_t i = 1; i < conj.children.size(); i++) {
 				if (i > 1) {
 					per_suffix += ", ";
@@ -731,30 +794,28 @@ public:
 
     void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr,
                            unique_ptr<Expression> when_condition = nullptr,
-                           vector<unique_ptr<Expression>> per_columns = {},
-                           bool per_strict = false) {
+                           vector<unique_ptr<Expression>> per_columns = {}) {
         auto &expr = *expr_ptr;
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // PackDB: PER [STRICT] wrapper — outermost layer
+                // PackDB: PER wrapper — outermost layer
                 if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
                     // child[0] = the constraint (possibly WHEN-wrapped)
                     // children[1..N] = the PER column expressions
                     vector<unique_ptr<Expression>> per_cols;
-                    bool strict = IsPerStrictTag(conj.alias);
                     for (idx_t i = 1; i < conj.children.size(); i++) {
                         per_cols.push_back(conj.children[i]->Copy());
                     }
                     AnalyzeConstraint(conj.children[0], std::move(when_condition),
-                                      std::move(per_cols), strict);
+                                      std::move(per_cols));
                     break;
                 }
                 // PackDB: Check if this is a WHEN constraint wrapper
                 if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
                     // child[0] = the actual constraint, child[1] = the WHEN condition
                     AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(),
-                                      std::move(per_columns), per_strict);
+                                      std::move(per_columns));
                     break;
                 }
                 // Regular conjunction: recursively analyze each child
@@ -786,7 +847,6 @@ public:
                 if (!per_columns.empty()) {
                     constraint->per_columns = std::move(per_columns);
                 }
-                constraint->per_strict = per_strict;
 
                 // Extract terms from LHS
                 Expression *lhs = comp.left.get();
@@ -1265,13 +1325,11 @@ public:
             expr = expr->Cast<BoundCastExpression>().child.get();
         }
 
-        // PackDB: Check for PER [STRICT] wrapper on objective (outermost layer)
+        // PackDB: Check for PER wrapper on objective (outermost layer)
         vector<unique_ptr<Expression>> per_cols;
-        bool obj_per_strict = false;
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conj = expr->Cast<BoundConjunctionExpression>();
             if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-                obj_per_strict = IsPerStrictTag(conj.alias);
                 for (idx_t i = 1; i < conj.children.size(); i++) {
                     per_cols.push_back(conj.children[i]->Copy());
                 }
@@ -1324,13 +1382,11 @@ public:
 
             objective->when_condition = std::move(when_cond);
             objective->per_columns = std::move(per_cols);
-            objective->per_strict = obj_per_strict;
         } else if (BoundExpressionContainsAggregate(*expr)) {
             objective = make_uniq<Objective>();
             ExtractAggregateObjectiveTerms(*expr, *objective, 1);
             objective->when_condition = std::move(when_cond);
             objective->per_columns = std::move(per_cols);
-            objective->per_strict = obj_per_strict;
         }
     }
 
@@ -1656,7 +1712,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         eval_const.minmax_indicator_idx = constraint->minmax_indicator_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
         eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
-        eval_const.per_strict = constraint->per_strict;
 
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
@@ -1942,66 +1997,75 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
             if (has_per) {
                 // PER (with or without WHEN)
-                // Map distinct composite PER keys to group IDs (first-seen order)
-                bool is_strict = constraint->per_strict;
+                // Map distinct composite PER keys to group IDs (first-seen order).
+                // WHEN→PER: discover groups only from WHEN-qualifying rows.
                 unordered_map<string, idx_t> value_to_group;
                 idx_t next_group = 0;
 
-                if (is_strict) {
-                    // PER STRICT: Phase 1 — discover groups from ALL rows (ignoring WHEN)
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        bool has_null = false;
-                        string key = build_per_key(row, has_null);
-                        if (has_null) continue;
-                        if (value_to_group.find(key) == value_to_group.end()) {
-                            value_to_group[key] = next_group++;
-                        }
+                for (idx_t row = 0; row < num_rows; row++) {
+                    if (!row_is_included(row)) {
+                        eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                        continue;
                     }
-                    // Phase 2: Assign row_group_ids (WHEN-excluded → INVALID_INDEX)
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        bool has_null = false;
-                        string key = build_per_key(row, has_null);
-                        if (has_null) {
-                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                            continue;
-                        }
-                        if (!row_is_included(row)) {
-                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                            continue;
-                        }
-                        eval_const.row_group_ids[row] = value_to_group[key];
+                    bool has_null = false;
+                    string key = build_per_key(row, has_null);
+                    if (has_null) {
+                        eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                        continue;
                     }
-                } else {
-                    // Standard WHEN→PER: discover groups only from WHEN-qualifying rows
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        if (!row_is_included(row)) {
-                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                            continue;
-                        }
-                        bool has_null = false;
-                        string key = build_per_key(row, has_null);
-                        if (has_null) {
-                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                            continue;
-                        }
-                        auto it = value_to_group.find(key);
-                        if (it == value_to_group.end()) {
-                            value_to_group[key] = next_group;
-                            eval_const.row_group_ids[row] = next_group;
-                            next_group++;
-                        } else {
-                            eval_const.row_group_ids[row] = it->second;
-                        }
+                    auto it = value_to_group.find(key);
+                    if (it == value_to_group.end()) {
+                        value_to_group[key] = next_group;
+                        eval_const.row_group_ids[row] = next_group;
+                        next_group++;
+                    } else {
+                        eval_const.row_group_ids[row] = it->second;
                     }
                 }
                 eval_const.num_groups = next_group;
+                // PER: individual empty groups are skipped downstream (preserved),
+                // but reject when *every* group is empty (the aggregate as a whole
+                // sees no rows after WHEN filtering).
+                RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
             } else {
                 // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
+                idx_t included_rows = 0;
                 for (idx_t row = 0; row < num_rows; row++) {
-                    eval_const.row_group_ids[row] = row_is_included(row) ? 0 : DConstants::INVALID_INDEX;
+                    bool inc = row_is_included(row);
+                    eval_const.row_group_ids[row] = inc ? 0 : DConstants::INVALID_INDEX;
+                    if (inc) included_rows++;
                 }
                 eval_const.num_groups = 1;
+                RejectEmptyAggregate(included_rows, "aggregate", "constraint");
             }
+        }
+
+        // Per-term aggregate-local WHEN: reject any term whose own filter mask
+        // matches zero rows. Without this the term contributes nothing to the
+        // constraint (its coefficients are all zero-masked at line 1829-1840);
+        // for a MIN/MAX term routed via the z_k pathway, that would leave z_k
+        // unpinned and silently vacuous. This guards composed-like LHS shapes
+        // that flow through the lhs_terms path.
+        for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+            if (!term_filters[term_idx].has_filter) continue;
+            idx_t cnt = 0;
+            auto &mask = term_filters[term_idx].mask;
+            for (bool m : mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, "aggregate term", "constraint");
+        }
+        for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
+            if (!bilinear_filters[term_idx].has_filter) continue;
+            idx_t cnt = 0;
+            auto &mask = bilinear_filters[term_idx].mask;
+            for (bool m : mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, "bilinear aggregate term", "constraint");
+        }
+        for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
+            if (!quadratic_filters[group_idx].has_filter) continue;
+            idx_t cnt = 0;
+            auto &mask = quadratic_filters[group_idx].mask;
+            for (bool m : mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, "quadratic aggregate term", "constraint");
         }
 
         auto ScaleAvgRowCoefficients = [&](vector<double> &coefficients, bool has_filter,
@@ -2387,6 +2451,27 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
             }
+
+            // Reject objective aggregates over an empty row set. The expression-
+            // level WHEN guards the whole objective; per-term aggregate-local
+            // WHEN guards individual terms. Without this guard, flat MIN/MAX
+            // objectives (cats 1 & 2) build a z aux + per-row linking over all
+            // num_rows, with every linking constraint vacuously satisfied — the
+            // solver drives z to whatever extreme the objective sense prefers.
+            if (objective_has_when) {
+                idx_t cnt = 0;
+                for (bool m : objective_when_mask) if (m) cnt++;
+                RejectEmptyAggregate(cnt, "aggregate", "objective");
+            }
+            for (auto &b : buckets) {
+                for (idx_t term_idx = 0; term_idx < b.out_term_filters->size(); term_idx++) {
+                    if (!(*b.out_term_filters)[term_idx].has_filter) continue;
+                    idx_t cnt = 0;
+                    auto &mask = (*b.out_term_filters)[term_idx].mask;
+                    for (bool m : mask) if (m) cnt++;
+                    RejectEmptyAggregate(cnt, "aggregate term", "objective");
+                }
+            }
         }
 
         obj_bilinear_filters.resize(gstate.objective->bilinear_terms.size());
@@ -2400,6 +2485,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     throw InternalException("DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
                                             num_rows, obj_bilinear_filters[term_idx].mask.size());
                 }
+                idx_t cnt = 0;
+                for (bool m : obj_bilinear_filters[term_idx].mask) if (m) cnt++;
+                RejectEmptyAggregate(cnt, "bilinear aggregate term", "objective");
             }
         }
 
@@ -2545,7 +2633,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false; // per-row!
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
-                ec_row.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_row));
 
                 // SUM(y) >= 1 (at least one row must satisfy)
@@ -2557,7 +2644,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
-                ec_sum.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_sum));
             } else {
                 // MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M
@@ -2575,7 +2661,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false;
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
-                ec_row.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_row));
 
                 // SUM(y) >= 1
@@ -2587,7 +2672,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
-                ec_sum.per_strict = ec.per_strict;
                 new_constraints.push_back(std::move(ec_sum));
             }
         }
@@ -2696,7 +2780,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec1.lhs_is_aggregate = false; // per-row
                     ec1.row_group_ids = ec.row_group_ids;
                     ec1.num_groups = ec.num_groups;
-                    ec1.per_strict = ec.per_strict;
                     new_constraints.push_back(std::move(ec1));
 
                     // Constraint 2: x - M*z ≥ K + 1 - M
@@ -2713,7 +2796,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec2.lhs_is_aggregate = false; // per-row
                     ec2.row_group_ids = ec.row_group_ids;
                     ec2.num_groups = ec.num_groups;
-                    ec2.per_strict = ec.per_strict;
                     new_constraints.push_back(std::move(ec2));
                 }
             } else {
@@ -2856,7 +2938,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_input.objective_row_group_ids.resize(num_rows);
         unordered_map<string, idx_t> obj_value_to_group;
         idx_t obj_next_group = 0;
-        bool obj_strict = gstate.objective->per_strict;
 
         // Helper: build composite PER key for objective
         auto build_obj_per_key = [&](idx_t row, bool &has_null_out) -> string {
@@ -2881,47 +2962,25 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return true;
         };
 
-        if (obj_strict) {
-            // PER STRICT: Phase 1 — discover groups from ALL rows (ignoring WHEN)
-            for (idx_t row = 0; row < num_rows; row++) {
-                bool has_null = false;
-                string key = build_obj_per_key(row, has_null);
-                if (has_null) continue;
-                if (obj_value_to_group.find(key) == obj_value_to_group.end()) {
-                    obj_value_to_group[key] = obj_next_group++;
-                }
+        // WHEN→PER: discover groups only from qualifying rows
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (!obj_row_is_included(row)) {
+                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                continue;
             }
-            // Phase 2: Assign row_group_ids (WHEN-excluded → INVALID_INDEX)
-            for (idx_t row = 0; row < num_rows; row++) {
-                bool has_null = false;
-                string key = build_obj_per_key(row, has_null);
-                if (has_null || !obj_row_is_included(row)) {
-                    solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                    continue;
-                }
-                solver_input.objective_row_group_ids[row] = obj_value_to_group[key];
+            bool has_null = false;
+            string key = build_obj_per_key(row, has_null);
+            if (has_null) {
+                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
+                continue;
             }
-        } else {
-            // Standard WHEN→PER: discover groups only from qualifying rows
-            for (idx_t row = 0; row < num_rows; row++) {
-                if (!obj_row_is_included(row)) {
-                    solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                    continue;
-                }
-                bool has_null = false;
-                string key = build_obj_per_key(row, has_null);
-                if (has_null) {
-                    solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                    continue;
-                }
-                auto it = obj_value_to_group.find(key);
-                if (it == obj_value_to_group.end()) {
-                    obj_value_to_group[key] = obj_next_group;
-                    solver_input.objective_row_group_ids[row] = obj_next_group;
-                    obj_next_group++;
-                } else {
-                    solver_input.objective_row_group_ids[row] = it->second;
-                }
+            auto it = obj_value_to_group.find(key);
+            if (it == obj_value_to_group.end()) {
+                obj_value_to_group[key] = obj_next_group;
+                solver_input.objective_row_group_ids[row] = obj_next_group;
+                obj_next_group++;
+            } else {
+                solver_input.objective_row_group_ids[row] = it->second;
             }
         }
         solver_input.objective_num_groups = obj_next_group;
@@ -3049,24 +3108,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
         // Base (unscaled) RHS. For AVG(x) <> K we store the original K in rhs_values and
-        // multiply by group size per non-empty group below. Empty PER-STRICT groups keep
-        // the original K (AVG over ∅ degenerates to 0 <> K, matching SUM semantics).
+        // multiply by group size per non-empty group below.
         double base_rhs = ec.rhs_values[0];
 
         for (idx_t g = 0; g < num_groups_to_process; g++) {
             if (group_rows[g].empty()) {
-                if (!ec.per_strict) {
-                    continue;
-                }
-                // PER STRICT + NE + empty group: SUM(∅) <> K means 0 <> K
-                // If K != 0: trivially true (no constraint needed)
-                // If K == 0: infeasible — emit 0 >= 1
-                if (std::abs(base_rhs) < 1e-15) {
-                    SolverInput::RawConstraint rc;
-                    rc.sense = '>';
-                    rc.rhs = 1.0;
-                    solver_input.global_constraints.push_back(std::move(rc));
-                }
                 continue;
             }
 
@@ -3534,6 +3580,391 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             sum_y.sense = '>';
             sum_y.rhs = 1.0;
             solver_input.global_constraints.push_back(std::move(sum_y));
+        }
+    }
+
+    // ================================================================
+    // Composed MIN/MAX constraints: additive LHS mixing SUM/AVG/MIN/MAX.
+    // Each MIN/MAX term gets a global auxiliary z_k pinned by per-row
+    // constraints. The outer composed constraint is emitted as a
+    // RawConstraint summing SUM/AVG contributions + z_k references.
+    // v1 scope: easy cases only (MAX pushed down / MIN pushed up),
+    // constant RHS, no outer WHEN/PER wrappers.
+    // ================================================================
+    if (!composed_minmax_constraints.empty()) {
+        // Helper: evaluate a Term's per-row coefficient (scaled by term.sign)
+        auto EvaluateTermCoefs = [&](const Term &term) -> vector<double> {
+            vector<double> coefs;
+            coefs.reserve(num_rows);
+            auto transformed = TransformToChunkExpression(*term.coefficient, context);
+            ExpressionExecutor exec(context);
+            exec.AddExpression(*transformed);
+            ColumnDataScanState scan;
+            gstate.data.InitializeScan(scan);
+            DataChunk chunk;
+            chunk.Initialize(context, gstate.data.Types());
+            while (gstate.data.Scan(scan, chunk)) {
+                DataChunk result;
+                result.Initialize(context, {transformed->return_type});
+                exec.Execute(chunk, result);
+                for (idx_t r = 0; r < chunk.size(); r++) {
+                    Value val = result.data[0].GetValue(r);
+                    if (val.IsNull()) {
+                        throw InvalidInputException(
+                            "Composed MIN/MAX constraint: coefficient expression returned NULL.");
+                    }
+                    double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                    if (!std::isfinite(d)) {
+                        throw InvalidInputException(
+                            "Composed MIN/MAX constraint: coefficient is not finite (NaN/Inf).");
+                    }
+                    coefs.push_back(d * term.sign);
+                }
+            }
+            return coefs;
+        };
+
+        for (auto &spec : composed_minmax_constraints) {
+            // RHS must be constant (possibly cast-wrapped) in v1.
+            const Expression *rhs_inner = spec.rhs_expr.get();
+            while (rhs_inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                rhs_inner = rhs_inner->Cast<BoundCastExpression>().child.get();
+            }
+            if (rhs_inner->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+                throw BinderException(
+                    "Composed MIN/MAX in DECIDE v1 requires a constant RHS; got '%s'.",
+                    spec.rhs_expr->ToString());
+            }
+            double rhs_val = rhs_inner->Cast<BoundConstantExpression>()
+                                 .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+
+            struct TermAnalysis {
+                LogicalDecide::ComposedMinMaxTerm::Kind kind;
+                string agg_name;
+                int sign;
+                bool is_easy;
+                vector<bool> filter_mask;
+                vector<Term> inner_terms;
+                vector<vector<double>> per_term_coefs;
+                idx_t z_idx = DConstants::INVALID_INDEX;
+            };
+            vector<TermAnalysis> analyses;
+
+            for (auto &term : spec.terms) {
+                TermAnalysis ta;
+                ta.kind = term.kind;
+                ta.agg_name = term.agg_name;
+                ta.sign = term.sign;
+                ta.is_easy = term.is_easy;
+
+                ExtractTerms(*term.inner_expr, ta.inner_terms);
+                for (auto &inner_t : ta.inner_terms) {
+                    ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t));
+                }
+                if (term.filter) {
+                    ta.filter_mask = EvaluateBooleanMask(*term.filter);
+                } else {
+                    ta.filter_mask.assign(num_rows, true);
+                }
+                analyses.push_back(std::move(ta));
+            }
+
+            // Allocate global z_k for each MIN/MAX term. Reject hard cases in v1.
+            for (auto &ta : analyses) {
+                if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+                if (!ta.is_easy) {
+                    throw BinderException(
+                        "Composed MIN/MAX in DECIDE v1 supports only easy-direction "
+                        "MIN/MAX terms (MAX pushed down by <=, MIN pushed up by >=). "
+                        "The '%s' term here requires Big-M indicator linearization, "
+                        "which is not yet implemented for composed expressions.",
+                        ta.agg_name);
+                }
+                // Reject empty WHEN on composed MIN/MAX terms: without this the
+                // z_k auxiliary floats free (no per-row pinning), silently
+                // vacating the entire additive constraint.
+                idx_t cnt = 0;
+                for (bool m : ta.filter_mask) if (m) cnt++;
+                RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed constraint");
+                ta.z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+                solver_input.num_global_vars += 1;
+                solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
+                solver_input.global_lower_bounds.push_back(-1e30);
+                solver_input.global_upper_bounds.push_back(1e30);
+                solver_input.global_obj_coeffs.push_back(0.0);
+            }
+            // Also reject empty WHEN on composed SUM/AVG terms for consistency
+            // with the reject-all rule. Without the check, an empty SUM just
+            // contributes 0 (vacuous but defined); an empty AVG currently
+            // divides by zero at line ~3662 and skips, silently losing the term.
+            for (auto &ta : analyses) {
+                if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+                idx_t cnt = 0;
+                for (bool m : ta.filter_mask) if (m) cnt++;
+                RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed constraint");
+            }
+
+            // Emit per-row pinning constraints for each MIN/MAX term.
+            for (auto &ta : analyses) {
+                if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+                bool is_max = (ta.agg_name == "max");
+                // Easy case:
+                //   MAX pushed down: z_k >= inner_expr  (solver drives z_k to max)
+                //   MIN pushed up:   z_k <= inner_expr  (solver drives z_k to min)
+                char sense = is_max ? '>' : '<';
+                for (idx_t row = 0; row < num_rows; row++) {
+                    if (!ta.filter_mask[row]) continue;
+                    SolverInput::RawConstraint rc;
+                    rc.indices.push_back((int)ta.z_idx);
+                    rc.coefficients.push_back(1.0);
+                    double row_rhs = 0.0;
+                    for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
+                        auto &inner_t = ta.inner_terms[it];
+                        double coef = ta.per_term_coefs[it][row];
+                        if (inner_t.variable_index == DConstants::INVALID_INDEX) {
+                            row_rhs += coef;
+                        } else {
+                            idx_t abs_idx = pre_indexer.Get(inner_t.variable_index, row);
+                            rc.indices.push_back((int)abs_idx);
+                            rc.coefficients.push_back(-coef);
+                        }
+                    }
+                    rc.sense = sense;
+                    rc.rhs = row_rhs;
+                    solver_input.global_constraints.push_back(std::move(rc));
+                }
+            }
+
+            // Build the outer composed RawConstraint
+            std::unordered_map<int, double> outer_accum;
+            double outer_rhs = rhs_val;
+            for (auto &ta : analyses) {
+                if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
+                    outer_accum[(int)ta.z_idx] += (double)ta.sign;
+                } else {
+                    // SUM/AVG term. For AVG, divide by filtered row count.
+                    double avg_divisor = 1.0;
+                    if (ta.agg_name == "avg") {
+                        idx_t cnt = 0;
+                        for (idx_t r = 0; r < num_rows; r++) {
+                            if (ta.filter_mask[r]) cnt++;
+                        }
+                        if (cnt == 0) {
+                            // Empty aggregate — contributes 0; skip.
+                            continue;
+                        }
+                        avg_divisor = static_cast<double>(cnt);
+                    }
+                    for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
+                        auto &inner_t = ta.inner_terms[it];
+                        for (idx_t row = 0; row < num_rows; row++) {
+                            if (!ta.filter_mask[row]) continue;
+                            double coef = ta.per_term_coefs[it][row] * (double)ta.sign / avg_divisor;
+                            if (inner_t.variable_index == DConstants::INVALID_INDEX) {
+                                outer_rhs -= coef;
+                            } else {
+                                int abs_idx = (int)pre_indexer.Get(inner_t.variable_index, row);
+                                outer_accum[abs_idx] += coef;
+                            }
+                        }
+                    }
+                }
+            }
+
+            SolverInput::RawConstraint outer;
+            for (auto &p : outer_accum) {
+                if (p.second != 0.0) {
+                    outer.indices.push_back(p.first);
+                    outer.coefficients.push_back(p.second);
+                }
+            }
+            switch (spec.outer_cmp) {
+            case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+            case ExpressionType::COMPARE_LESSTHAN:
+                outer.sense = '<';
+                outer.rhs = outer_rhs;
+                break;
+            case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+            case ExpressionType::COMPARE_GREATERTHAN:
+                outer.sense = '>';
+                outer.rhs = outer_rhs;
+                break;
+            default:
+                throw InternalException("Composed MIN/MAX: unexpected comparison type.");
+            }
+            solver_input.global_constraints.push_back(std::move(outer));
+        }
+    }
+
+    // ================================================================
+    // Composed MIN/MAX objective: `MAXIMIZE|MINIMIZE T1 + T2 + ...`
+    // Each MIN/MAX term gets a global z_k pinned by per-row constraints;
+    // SUM/AVG terms populate objective_coefficients. v1: easy-direction
+    // terms only, no outer PER/WHEN on the objective.
+    // ================================================================
+    if (!composed_minmax_objective_terms.empty()) {
+        auto EvaluateTermCoefsObj = [&](const Term &term) -> vector<double> {
+            vector<double> coefs;
+            coefs.reserve(num_rows);
+            auto transformed = TransformToChunkExpression(*term.coefficient, context);
+            ExpressionExecutor exec(context);
+            exec.AddExpression(*transformed);
+            ColumnDataScanState scan;
+            gstate.data.InitializeScan(scan);
+            DataChunk chunk;
+            chunk.Initialize(context, gstate.data.Types());
+            while (gstate.data.Scan(scan, chunk)) {
+                DataChunk result;
+                result.Initialize(context, {transformed->return_type});
+                exec.Execute(chunk, result);
+                for (idx_t r = 0; r < chunk.size(); r++) {
+                    Value val = result.data[0].GetValue(r);
+                    if (val.IsNull()) {
+                        throw InvalidInputException(
+                            "Composed MIN/MAX objective: coefficient expression returned NULL.");
+                    }
+                    double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                    if (!std::isfinite(d)) {
+                        throw InvalidInputException(
+                            "Composed MIN/MAX objective: coefficient is not finite.");
+                    }
+                    coefs.push_back(d * term.sign);
+                }
+            }
+            return coefs;
+        };
+
+        // Clear any existing objective terms — the placeholder constant produced
+        // none, but be defensive in case other paths populated them.
+        solver_input.objective_coefficients.clear();
+        solver_input.objective_variable_indices.clear();
+
+        struct ObjTermAnalysis {
+            LogicalDecide::ComposedMinMaxTerm::Kind kind;
+            string agg_name;
+            int sign;
+            bool is_easy;
+            vector<bool> filter_mask;
+            vector<Term> inner_terms;
+            vector<vector<double>> per_term_coefs;
+            idx_t z_idx = DConstants::INVALID_INDEX;
+        };
+        vector<ObjTermAnalysis> obj_analyses;
+
+        for (auto &term : composed_minmax_objective_terms) {
+            ObjTermAnalysis ta;
+            ta.kind = term.kind;
+            ta.agg_name = term.agg_name;
+            ta.sign = term.sign;
+            ta.is_easy = term.is_easy;
+            ExtractTerms(*term.inner_expr, ta.inner_terms);
+            for (auto &inner_t : ta.inner_terms) {
+                ta.per_term_coefs.push_back(EvaluateTermCoefsObj(inner_t));
+            }
+            if (term.filter) {
+                ta.filter_mask = EvaluateBooleanMask(*term.filter);
+            } else {
+                ta.filter_mask.assign(num_rows, true);
+            }
+            obj_analyses.push_back(std::move(ta));
+        }
+
+        // Allocate z_k per MIN/MAX term. v1 rejects hard direction.
+        for (auto &ta : obj_analyses) {
+            if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+            if (!ta.is_easy) {
+                throw BinderException(
+                    "Composed MIN/MAX objective in DECIDE v1 supports only "
+                    "easy-direction terms (MAXIMIZE+MIN or MINIMIZE+MAX). "
+                    "The '%s' term here requires indicator linearization, "
+                    "which is not yet implemented for composed objectives.",
+                    ta.agg_name);
+            }
+            // Reject empty WHEN on composed MIN/MAX objective terms: without
+            // this the z_k floats free and the objective silently ignores the
+            // missing piece.
+            idx_t cnt = 0;
+            for (bool m : ta.filter_mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed objective");
+            ta.z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+            solver_input.num_global_vars += 1;
+            solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
+            solver_input.global_lower_bounds.push_back(-1e30);
+            solver_input.global_upper_bounds.push_back(1e30);
+            solver_input.global_obj_coeffs.push_back(0.0);
+        }
+        // Mirror the SUM/AVG empty-set rejection from the composed constraint path.
+        for (auto &ta : obj_analyses) {
+            if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+            idx_t cnt = 0;
+            for (bool m : ta.filter_mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed objective");
+        }
+
+        // Pinning constraints for MIN/MAX terms.
+        for (auto &ta : obj_analyses) {
+            if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+            bool is_max = (ta.agg_name == "max");
+            // MAXIMIZE+MIN: z_k <= expr_i per row (solver drives z_k up to min)
+            // MINIMIZE+MAX: z_k >= expr_i per row (solver drives z_k down to max)
+            char sense = is_max ? '>' : '<';
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (!ta.filter_mask[row]) continue;
+                SolverInput::RawConstraint rc;
+                rc.indices.push_back((int)ta.z_idx);
+                rc.coefficients.push_back(1.0);
+                double row_rhs = 0.0;
+                for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
+                    auto &inner_t = ta.inner_terms[it];
+                    double coef = ta.per_term_coefs[it][row];
+                    if (inner_t.variable_index == DConstants::INVALID_INDEX) {
+                        row_rhs += coef;
+                    } else {
+                        idx_t abs_idx = pre_indexer.Get(inner_t.variable_index, row);
+                        rc.indices.push_back((int)abs_idx);
+                        rc.coefficients.push_back(-coef);
+                    }
+                }
+                rc.sense = sense;
+                rc.rhs = row_rhs;
+                solver_input.global_constraints.push_back(std::move(rc));
+            }
+        }
+
+        // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k
+        // is ta.sign (i.e., sign×1.0); set via global_obj_coeffs. For SUM/AVG
+        // terms, accumulate per-row linear coefficients into objective_coefficients
+        // keyed by decide variable.
+        // Accumulator: decide_var_index -> per-row coefficient vector.
+        std::unordered_map<idx_t, vector<double>> obj_coef_accum;
+        for (auto &ta : obj_analyses) {
+            if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
+                // The z_k's obj coef is ta.sign (the MIN/MAX term's sign in the additive sum).
+                idx_t gslot = ta.z_idx - pre_indexer.global_block_start;
+                solver_input.global_obj_coeffs[gslot] = (double)ta.sign;
+            } else {
+                double avg_divisor = 1.0;
+                if (ta.agg_name == "avg") {
+                    idx_t cnt = 0;
+                    for (idx_t r = 0; r < num_rows; r++) if (ta.filter_mask[r]) cnt++;
+                    if (cnt == 0) continue;
+                    avg_divisor = (double)cnt;
+                }
+                for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
+                    auto &inner_t = ta.inner_terms[it];
+                    if (inner_t.variable_index == DConstants::INVALID_INDEX) continue;
+                    auto &dst = obj_coef_accum[inner_t.variable_index];
+                    if (dst.empty()) dst.assign(num_rows, 0.0);
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (!ta.filter_mask[row]) continue;
+                        dst[row] += ta.per_term_coefs[it][row] * (double)ta.sign / avg_divisor;
+                    }
+                }
+            }
+        }
+        for (auto &p : obj_coef_accum) {
+            solver_input.objective_variable_indices.push_back(p.first);
+            solver_input.objective_coefficients.push_back(std::move(p.second));
         }
     }
 

@@ -46,7 +46,6 @@ struct DecideConstraint {
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
     unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
-    bool per_strict = false;                        // PackDB: PER STRICT semantics (all groups emit, even empty)
 
     // Bilinear terms in constraint (non-Boolean pairs left by optimizer)
     vector<BilinearConstraintTerm> bilinear_terms;
@@ -77,7 +76,6 @@ struct Objective {
     vector<Term> terms;                    // Linear objective terms
     unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns; // PackDB: optional PER grouping columns (empty = no grouping)
-    bool per_strict = false;                    // PackDB: PER STRICT semantics (all groups emit, even empty)
 
     //! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
     //! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
@@ -147,6 +145,14 @@ public:
     // Links from bilinear McCormick auxiliary variables: w = b * x
     // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
     vector<LogicalDecide::BilinearLink> bilinear_links;
+
+    // Composed MIN/MAX constraints (additive LHS with MIN/MAX terms mixed in).
+    // Each is emitted as a block of RawConstraints in global_constraints at sink finalize.
+    vector<LogicalDecide::ComposedMinMaxConstraint> composed_minmax_constraints;
+
+    // Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms.
+    // Empty when the objective is not composed.
+    vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
