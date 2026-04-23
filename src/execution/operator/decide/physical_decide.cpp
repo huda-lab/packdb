@@ -1039,17 +1039,11 @@ public:
                         } else if (b_is_one) {
                             combined_coef = std::move(coef_a);
                         } else {
-                            // Need to create a multiplication expression
-                            auto mul = make_uniq<BoundFunctionExpression>(
-                                LogicalType::DOUBLE, func.function,
-                                vector<unique_ptr<Expression>>(), nullptr);
-                            // We need to build coef_a * coef_b — but we don't have the function binding.
-                            // Simpler: just keep one of them as the coefficient and handle at eval time
-                            // Actually, we can create the multiplication differently. For now,
-                            // just store coef_a and handle coef_b multiplication in the coefficient.
-                            // This is a simplification — a full solution would combine them.
-                            combined_coef = std::move(coef_a);
-                            // TODO: properly multiply coef_a * coef_b
+                            vector<unique_ptr<Expression>> mul_children;
+                            mul_children.push_back(std::move(coef_a));
+                            mul_children.push_back(std::move(coef_b));
+                            combined_coef = make_uniq_base<Expression, BoundFunctionExpression>(
+                                func.return_type, func.function, std::move(mul_children), nullptr);
                         }
 
                         Objective::BilinearTerm bt;

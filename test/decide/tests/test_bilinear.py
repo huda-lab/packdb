@@ -1250,6 +1250,115 @@ def test_bilinear_minimize_objective(packdb_cli, duckdb_conn, oracle_solver, per
     )
 
 
+def _run_split_coefficient_bilinear_query(packdb_cli, objective_expr):
+    sql = f"""
+        WITH t(id, a, b) AS (
+            VALUES (1, 4.0, 4.0), (2, 9.0, 1.0), (3, 1.0, 9.0)
+        )
+        SELECT id, a, b, x, y
+        FROM t
+        DECIDE x IS INTEGER, y IS INTEGER
+        SUCH THAT x >= 0 AND x <= 1 AND y >= 0 AND y <= 1
+              AND SUM(x) = 1 AND SUM(y) = 1
+        MAXIMIZE SUM({objective_expr})
+    """
+    return packdb_cli.execute(sql)
+
+
+def _build_split_coefficient_bilinear_oracle(oracle_solver):
+    data = [(1, 4.0, 4.0), (2, 9.0, 1.0), (3, 1.0, 9.0)]
+    n = len(data)
+
+    oracle_solver.create_model("bilinear_split_coefficient_objective")
+    xnames = [f"x_{i}" for i in range(n)]
+    ynames = [f"y_{i}" for i in range(n)]
+    for vn in xnames + ynames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=1.0)
+
+    oracle_solver.add_constraint(
+        {xnames[i]: 1.0 for i in range(n)}, "=", 1.0, name="pick_x",
+    )
+    oracle_solver.add_constraint(
+        {ynames[i]: 1.0 for i in range(n)}, "=", 1.0, name="pick_y",
+    )
+    oracle_solver.set_quadratic_objective(
+        {},
+        {(xnames[i], ynames[i]): data[i][1] * data[i][2] for i in range(n)},
+        ObjSense.MAXIMIZE,
+    )
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    return result
+
+
+def _packdb_split_coefficient_objective(packdb_rows, packdb_cols):
+    ci = {name: i for i, name in enumerate(packdb_cols)}
+    return sum(
+        float(row[ci["a"]]) * float(row[ci["b"]]) * int(row[ci["x"]]) * int(row[ci["y"]])
+        for row in packdb_rows
+    )
+
+
+def _selected_ids_xy(packdb_rows, packdb_cols):
+    ci = {name: i for i, name in enumerate(packdb_cols)}
+    return {
+        int(row[ci["id"]]) for row in packdb_rows
+        if int(row[ci["x"]]) == 1 and int(row[ci["y"]]) == 1
+    }
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_objective_multiplies_both_side_coeffs(packdb_cli_gurobi, oracle_solver):
+    """Regression: (a*x)*(b*y) must use coefficient a*b (not just one side)."""
+    packdb_rows, packdb_cols = _run_split_coefficient_bilinear_query(
+        packdb_cli_gurobi, "(a * x) * (b * y)",
+    )
+    oracle_result = _build_split_coefficient_bilinear_oracle(oracle_solver)
+
+    packdb_obj = _packdb_split_coefficient_objective(packdb_rows, packdb_cols)
+    assert abs(packdb_obj - oracle_result.objective_value) <= 1e-6, (
+        f"Objective mismatch: PackDB={packdb_obj}, "
+        f"Oracle={oracle_result.objective_value}"
+    )
+    assert _selected_ids_xy(packdb_rows, packdb_cols) == {1}
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.bilinear
+@pytest.mark.correctness
+def test_bilinear_objective_split_shape_matches_flat_product(packdb_cli_gurobi, oracle_solver):
+    """(a*x)*(b*y) and a*b*x*y should produce the same optimal objective."""
+    split_rows, split_cols = _run_split_coefficient_bilinear_query(
+        packdb_cli_gurobi, "(a * x) * (b * y)",
+    )
+    flat_rows, flat_cols = _run_split_coefficient_bilinear_query(
+        packdb_cli_gurobi, "a * b * x * y",
+    )
+    oracle_result = _build_split_coefficient_bilinear_oracle(oracle_solver)
+
+    split_obj = _packdb_split_coefficient_objective(split_rows, split_cols)
+    flat_obj = _packdb_split_coefficient_objective(flat_rows, flat_cols)
+    assert abs(split_obj - oracle_result.objective_value) <= 1e-6, (
+        f"Split-shape objective mismatch: PackDB={split_obj}, "
+        f"Oracle={oracle_result.objective_value}"
+    )
+    assert abs(flat_obj - oracle_result.objective_value) <= 1e-6, (
+        f"Flat-shape objective mismatch: PackDB={flat_obj}, "
+        f"Oracle={oracle_result.objective_value}"
+    )
+    assert abs(split_obj - flat_obj) <= 1e-6, (
+        f"Shape mismatch: split={split_obj}, flat={flat_obj}"
+    )
+    assert _selected_ids_xy(split_rows, split_cols) == {1}
+    assert _selected_ids_xy(flat_rows, flat_cols) == {1}
+
+
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
