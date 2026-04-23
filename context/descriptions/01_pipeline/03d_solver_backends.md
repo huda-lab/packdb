@@ -2,11 +2,24 @@
 
 ## Overview
 
-PackDB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the best available solver backend. The function is 6 lines of logic:
+PackDB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the selected backend. It supports a test override (`PACKDB_FORCE_SOLVER=highs|gurobi`) before the default auto-selection:
 
 ```cpp
 vector<double> SolveModel(const SolverInput &input) {
     SolverModel model = SolverModel::Build(input);
+    if (const char *force = std::getenv("PACKDB_FORCE_SOLVER")) {
+        std::string choice(force);
+        if (choice == "highs" || choice == "HIGHS") {
+            return DeterministicNaive::Solve(model);
+        }
+        if (choice == "gurobi" || choice == "GUROBI") {
+            if (!GurobiSolver::IsAvailable()) {
+                throw InvalidInputException(
+                    "PACKDB_FORCE_SOLVER=gurobi but Gurobi is not available on this host");
+            }
+            return GurobiSolver::Solve(model);
+        }
+    }
     if (GurobiSolver::IsAvailable()) {
         return GurobiSolver::Solve(model);
     }
@@ -21,6 +34,7 @@ vector<double> SolveModel(const SolverInput &input) {
 
 ## Solver Selection
 
+- If `PACKDB_FORCE_SOLVER=highs` or `PACKDB_FORCE_SOLVER=gurobi` is set, that backend is used first (unknown values are ignored and fall back to normal auto-selection).
 - If `GurobiSolver::IsAvailable()` returns true, Gurobi is used. **Gurobi is the primary solver** and is strongly recommended — empirical benchmarking has shown it to be significantly faster than HiGHS for PackDB workloads.
 - Otherwise, HiGHS (via `DeterministicNaive`) is used as a fallback. HiGHS is substantially slower in practice and should only be used when a Gurobi license is unavailable.
 

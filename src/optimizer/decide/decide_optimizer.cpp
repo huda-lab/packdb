@@ -574,6 +574,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		unique_ptr<Expression> easy = make_uniq<BoundComparisonExpression>(
 		    easy_cmp_type,
 		    agg.children[0]->Copy(), comp.right->Copy());
+		easy->alias = MINMAX_EASY_REWRITE_TAG;
 		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
 		if (agg.filter) {
 			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
@@ -603,6 +604,10 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			saved_filter = agg.filter->Copy();
 		}
 		comp.left = agg.children[0]->Copy();
+		// Tag the comparison so physical_decide.cpp can enforce empty-WHEN
+		// rejection on constraints the user wrote as MIN/MAX, even after the
+		// optimizer strips the aggregate.
+		comp.alias = MINMAX_EASY_REWRITE_TAG;
 		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
 		if (saved_filter) {
 			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);

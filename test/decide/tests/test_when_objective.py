@@ -154,9 +154,9 @@ def test_when_objective_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_when_objective_no_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """WHEN matches nothing on objective — optimal objective is 0."""
+@pytest.mark.error_infeasible
+def test_when_objective_no_match(packdb_cli):
+    """Aggregate objective with WHEN matching no rows — now rejected pre-solver."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
@@ -166,53 +166,7 @@ def test_when_objective_no_match(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         SUCH THAT SUM(x) <= 10
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'Z'
     """
-    t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_orderkey AS BIGINT),
-               CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE),
-               l_returnflag
-        FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("when_obj_no_match")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.BINARY)
-
-    oracle_solver.add_constraint(
-        {vnames[i]: 1.0 for i in range(len(data))},
-        "<=", 10.0, name="count_limit",
-    )
-    # No rows match 'Z' → all objective coefficients are 0
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(len(data)) if data[i][4] == 'Z'},
-        ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    price_idx = packdb_cols.index("l_extendedprice")
-    flag_idx = packdb_cols.index("l_returnflag")
-    cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {
-            "x": float(row[price_idx]) if row[flag_idx] == 'Z' else 0.0,
-        },
-    )
-
-    perf_tracker.record(
-        "when_obj_no_match", packdb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
-    )
+    packdb_cli.assert_error(sql, match=r"empty|WHEN")
 
 
 @pytest.mark.when_objective

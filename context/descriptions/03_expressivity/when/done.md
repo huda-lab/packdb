@@ -114,6 +114,34 @@ If the `WHEN` condition evaluates to NULL for a row, that row is treated as **no
 
 ---
 
+## Empty Row Sets
+
+A `WHEN` filter that matches zero rows on an aggregate (SUM, AVG, MIN, MAX) is **rejected pre-solver** with `InvalidInputException`:
+
+```
+DECIDE empty row set for {aggregate|min|max|sum|avg} in {constraint|objective|composed constraint|composed objective}.
+An empty aggregate has no well-defined value; check your WHEN clause.
+```
+
+**Scope** — rejected cases:
+- Constraint- or objective-level `WHEN` that filters every row: `SUM(x*v) <= K WHEN false_condition`.
+- Aggregate-local `WHEN` on any single term (SUM/AVG/MIN/MAX) that matches zero rows.
+- Composed MIN/MAX term with empty `WHEN`: `SUM(x*v) + (MAX(x*v) WHEN false) <= K`.
+- Easy-direction MIN/MAX (`MAX(...) <= K WHEN …`, `MIN(...) >= K WHEN …`): the optimizer strips these to per-row, but a `MINMAX_EASY_REWRITE_TAG` on the rewritten comparison lets the execution layer still enforce the rule.
+
+**Not rejected** (preserved behavior):
+- Individual empty groups within `PER`: those groups are skipped downstream. Only rejected when **every** group is empty (the aggregate as a whole sees no rows).
+- Per-row constraints with `WHEN` that matches zero rows (e.g., `x <= 0 WHEN never_condition`): this is a valid no-op (the constraint applies to no rows).
+
+**Rationale**: The MIN/MAX reformulation uses a global auxiliary `z` (or per-term `z_k` in composed shapes) that the solver pins via per-row constraints. With zero rows the auxiliary has no per-row pinning and floats free inside its bounds — the outer constraint or objective becomes silently vacuous. Semantically MIN(∅)=+∞ and MAX(∅)=−∞, so a hard-direction bound should be infeasible rather than ignored. Rejecting pre-solver is cleaner than emitting `0 >= 1` and reporting solver infeasibility — the error points directly at the likely `WHEN` typo. SUM and AVG are rejected for consistency (strict "reject all empty sets" rule) even though SUM(∅)=0 and AVG(∅) would only be mathematically undefined in the pure-aggregate case.
+
+**Code pointers**:
+- Guard helper: `RejectEmptyAggregate` in `src/execution/operator/decide/physical_decide.cpp`.
+- Four insertion sites: constraint `row_group_ids` build (after the WHEN/PER unified evaluation), objective WHEN/per-term filter application, composed MIN/MAX constraint `z_k` loop, composed MIN/MAX objective `z_k` loop.
+- Easy-direction tag: `MINMAX_EASY_REWRITE_TAG` in `src/include/duckdb/common/enums/decide.hpp`, set during `RewriteMinMaxInConstraint` in `src/optimizer/decide/decide_optimizer.cpp`, detected at physical plan construction to set `DecideConstraint.was_minmax_easy`.
+
+---
+
 ## Rules and Restrictions
 
 ### Conditions Must Reference Only Table Columns

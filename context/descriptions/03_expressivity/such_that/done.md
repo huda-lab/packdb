@@ -89,6 +89,8 @@ MIN(x * v) WHEN tier_a + MIN(x * v) WHEN tier_b >= 15
 
 v1 scope: easy-direction terms only (`<=` pushes MAX down / MIN up by `>=`). Rejected at bind time: subtraction (`MAX - MIN`), scalar multiplication (`2 * MIN(...)`), outer `WHEN`/`PER` wrappers, equality (`=`), and hard-direction terms (`MAX` pushed up by `>=`). See also `maximize_minimize/done.md` for composed objectives.
 
+Rejected at execution time: any term whose aggregate-local `WHEN` matches zero rows — without this, the per-term `z_k` auxiliary has no pinning constraints and floats free, silently vacating the entire additive constraint. See `03_expressivity/when/done.md` → "Empty Row Sets" for the full rule.
+
 **Per-row constraints** do not use an aggregate. The system generates one constraint per input row.
 
 ```sql

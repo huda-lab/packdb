@@ -111,3 +111,18 @@ Tests in `test_per_objective.py` cover all 4 × 4 nesting combinations of inner/
 | Scalar multiplication (`2 * MIN(...) + SUM(...)`) | `test_composed_minmax_scalar_mult_rejected` |
 | Outer `PER` wrapper on composed constraint | `test_composed_minmax_per_wrapper_rejected` |
 | Hard-direction composed objective | `test_composed_minmax_objective_hard_rejected` |
+
+### Empty `WHEN` rejection (execution-time errors)
+
+Previously tracked as a bug in `todo.md`: empty-WHEN on hard-direction MIN/MAX silently floated the `z`/`z_k` auxiliary, making constraints vacuous and objectives meaningless. Now rejected pre-solver by `RejectEmptyAggregate` in `physical_decide.cpp`. See `03_expressivity/when/done.md` → "Empty Row Sets" for the full rule.
+
+| Scenario | Test |
+|----------|------|
+| `MAXIMIZE MIN(...) WHEN empty` and MAX/hard mirrors | `test_maximize_min_objective_when_empty` + 3 siblings |
+| `MAX(...) WHEN empty >= K` (hard constraint) | `test_max_when_empty_constraint_hard` |
+| `MIN(...) WHEN empty <= K` (hard constraint) | `test_min_when_empty_constraint_hard` |
+| Easy direction: `MAX(...) <= K WHEN empty`, `MIN(...) >= K WHEN empty` | `test_max_leq_constraint_when_empty`, `test_min_geq_constraint_when_empty` + mirrors |
+| Composed `SUM + (MAX WHEN empty)` | `test_sum_plus_max_when_empty_silently_vacates_constraint`, `test_composed_easy_min_when_empty_rejected` |
+| Mixed empty+populated aggregate-local WHEN terms | `test_mixed_empty_and_populated_when_terms_constraint` / `_objective` |
+| SUM / AVG empty WHEN | `test_sum_when_empty_rejected`, `test_avg_when_empty_rejected`, `test_avg_constraint_when_filters_all_rows` |
+| PER with one empty group (skip preserved) | `test_avg_per_constraint_with_empty_group` |

@@ -682,16 +682,12 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
 @pytest.mark.when
 @pytest.mark.when_constraint
 @pytest.mark.edge_case
-@pytest.mark.correctness
-def test_aggregate_local_when_all_filtered_out(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """One WHEN matches no rows — contributes 0."""
-    data_sql = """
-        SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(flag AS BOOLEAN) FROM (
-            VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
-        ) t(name, value, flag)
-    """
+@pytest.mark.error_infeasible
+def test_aggregate_local_when_all_filtered_out(packdb_cli):
+    """Mixed aggregate-local WHEN with one term's mask all-false — rejected
+    pre-solver per the "reject all empty aggregate sets" rule. Previously the
+    empty term was allowed to contribute 0 while the unmasked term still
+    bound; the strict rule catches it."""
     decide_sql = """
         SELECT name, value, flag, x FROM (
             VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
@@ -700,33 +696,7 @@ def test_aggregate_local_when_all_filtered_out(
         SUCH THAT SUM(x * value) WHEN flag + SUM(x * value) <= 23
         MAXIMIZE SUM(x * value)
     """
-
-    def build(oracle, data, cols, rows):
-        n = len(data)
-        vnames = [f"x_{i}" for i in range(n)]
-        for v in vnames:
-            oracle.add_variable(v, VarType.BINARY)
-        coeffs: dict = {}
-        for i, r in enumerate(data):
-            # masked term (all False) + unmasked term = 0 + value
-            term = r[1] * (1.0 if r[2] else 0.0) + r[1]
-            _accumulate(coeffs, vnames[i], term)
-        oracle.add_constraint(coeffs, "<=", 23.0, name="mixed")
-        oracle.set_objective(
-            {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
-        )
-        return n, 1
-
-    def packdb_obj(rs, cs):
-        xi = cs.index("x"); vi = cs.index("value")
-        return sum(float(r[xi]) * float(r[vi]) for r in rs)
-
-    _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
-        test_id="alw_all_filtered_out",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
-    )
+    packdb_cli.assert_error(decide_sql, match=r"empty|WHEN")
 
 
 @pytest.mark.when

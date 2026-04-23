@@ -183,7 +183,8 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
 - **SUM argument validation**: `src/planner/expression_binder/decide_binder.cpp`
   - `ValidateSumArgumentInternal` validates the expression tree inside SUM()
 
-- **Nested aggregate detection**: `src/planner/binder/query_node/bind_select_node.cpp`
-  - Detects `OUTER(INNER(expr)) PER col` pattern and validates flat MIN/MAX + PER is disallowed
+- **Nested aggregate PER objective rewrite/classification**: `src/optimizer/decide/decide_optimizer.cpp`
+  - `RewriteMinMaxObjective()` detects `OUTER(INNER(expr)) PER col`, sets `per_inner_*` / `per_outer_*` metadata, and rewrites inner `MIN/MAX/AVG` to `SUM`
+  - Rejects flat `MIN(...) PER col` / `MAX(...) PER col` as ambiguous (requires nested aggregate form)
 
 - **Solver input**: `src/include/duckdb/packdb/solver_input.hpp`

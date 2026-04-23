@@ -52,4 +52,11 @@ static constexpr const char *MINMAX_INDICATOR_TAG_PREFIX = "__minmax_ind_";
 //! Format: "__ne_ind_tag_<indicator_idx>__"
 static constexpr const char *NE_INDICATOR_TAG_PREFIX = "__ne_ind_tag_";
 
+//! Tag marking a comparison whose LHS was an easy-direction MIN/MAX aggregate
+//! (MAX(e) <= K, MIN(e) >= K) that the optimizer stripped to a per-row form.
+//! Preserves the empty-WHEN rejection guard: an empty row set for what the user
+//! wrote as MIN/MAX must reject, even though the optimized constraint is now
+//! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
+static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
+
 } // namespace duckdb

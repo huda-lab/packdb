@@ -1570,15 +1570,12 @@ def test_entity_scoped_var_in_when_condition_error(packdb_cli):
 # Test 24: WHEN filters out all rows for some entities
 # ---------------------------------------------------------------------------
 
-@pytest.mark.correctness
+@pytest.mark.error_infeasible
 @pytest.mark.when_constraint
-def test_entity_scoped_when_entity_invisible(packdb_cli, duckdb_conn, oracle_solver):
-    """WHEN condition that filters out all rows for certain entities.
-
-    When all rows for an entity fail the WHEN filter, that entity contributes
-    0 to the constrained aggregate but can still be freely selected or rejected.
-    Should remain feasible (0 <= bound is trivially true).
-    """
+def test_entity_scoped_when_entity_invisible(packdb_cli):
+    """Entity-scoped aggregate constraint with WHEN matching no rows on the
+    given data — now rejected pre-solver per the "reject all empty aggregate
+    sets" rule."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
@@ -1588,67 +1585,7 @@ def test_entity_scoped_when_entity_invisible(packdb_cli, duckdb_conn, oracle_sol
           AND SUM(keepN) <= 10
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
-    assert len(result) > 0
-
-    keepN_idx = cols.index("keepN")
-    acctbal_idx = cols.index("c_acctbal")
-    nkey_idx = cols.index("n_nationkey")
-
-    # Verify entity consistency
-    nation_values = {}
-    for row in result:
-        nkey = int(row[nkey_idx])
-        keep = int(row[keepN_idx])
-        if nkey in nation_values:
-            assert nation_values[nkey] == keep, \
-                f"Nation {nkey} has inconsistent keepN"
-        else:
-            nation_values[nkey] = keep
-
-    # Verify WHEN constraint: filtered sum <= 50000
-    cond_sum = sum(
-        float(row[acctbal_idx]) * int(row[keepN_idx])
-        for row in result if float(row[acctbal_idx]) > 9998
-    )
-    assert cond_sum <= 50000 + 1e-4, \
-        f"WHEN constraint violated: sum={cond_sum:.2f} > 50000"
-
-    # Oracle: WHEN filters to acctbal > 9998 (no such customers in region 0 on sf=0.01).
-    # Active constraint is SUM(keepN) <= 10 (join rows). All nations have >10 customers,
-    # so optimal keepN=0 for all → oracle_obj = 0.
-    raw24 = duckdb_conn.execute("""
-        SELECT CAST(n.n_nationkey AS BIGINT),
-               SUM(CASE WHEN c.c_acctbal > 9998 THEN c.c_acctbal ELSE 0.0 END) as high_acctbal,
-               COUNT(*) as cnt
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        GROUP BY n.n_nationkey
-    """).fetchall()
-    nation_ids24 = sorted(int(r[0]) for r in raw24)
-    nation_high24 = {int(r[0]): float(r[1]) for r in raw24}
-    nation_cnt24 = {int(r[0]): int(r[2]) for r in raw24}
-
-    oracle_solver.create_model("entity_scoped_when_invisible")
-    vnames24 = {nkey: f"keepN_{nkey}" for nkey in nation_ids24}
-    for nkey in nation_ids24:
-        oracle_solver.add_variable(vnames24[nkey], VarType.BINARY)
-    oracle_solver.add_constraint(
-        {vnames24[nkey]: nation_high24[nkey] for nkey in nation_ids24},
-        "<=", 50000.0, name="when_limit",
-    )
-    oracle_solver.add_constraint(
-        {vnames24[nkey]: float(nation_cnt24[nkey]) for nkey in nation_ids24},
-        "<=", 10.0, name="sum_limit",
-    )
-    oracle_solver.set_objective(
-        {vnames24[nkey]: float(nation_cnt24[nkey]) for nkey in nation_ids24},
-        ObjSense.MAXIMIZE,
-    )
-    oracle_result24 = oracle_solver.solve()
-    packdb_obj24 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(packdb_obj24 - oracle_result24.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj24:.4f}, Oracle={oracle_result24.objective_value:.4f}"
+    packdb_cli.assert_error(sql, match=r"empty|WHEN")
 
 
 # ---------------------------------------------------------------------------

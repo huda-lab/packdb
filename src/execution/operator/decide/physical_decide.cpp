@@ -472,12 +472,12 @@ static bool BoundExpressionContainsAggregate(const Expression &expr) {
 // MAX(∅)=-∞ cannot be represented in the MILP encoding, SUM(∅)=0 and AVG(∅)
 // is undefined. Without this guard the hard-direction MIN/MAX z_k auxiliary
 // floats free and silently vacates the outer constraint or objective.
-static void RejectEmptyAggregate(idx_t effective_row_count, const char *agg_name, const char *ctx) {
+static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, const char *ctx) {
     if (effective_row_count == 0) {
         throw InvalidInputException(
-            "DECIDE aggregate %s over empty row set in %s. "
+            "DECIDE empty row set for %s in %s. "
             "An empty aggregate has no well-defined value; check your WHEN clause.",
-            agg_name, ctx);
+            what, ctx);
     }
 }
 
@@ -838,6 +838,11 @@ public:
                     auto payload = comp.alias.substr(strlen(NE_INDICATOR_TAG_PREFIX));
                     payload = payload.substr(0, payload.size() - 2);  // strip trailing "__"
                     constraint->ne_indicator_idx = std::stoull(payload);
+                }
+
+                // Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
+                if (comp.alias == MINMAX_EASY_REWRITE_TAG) {
+                    constraint->was_minmax_easy = true;
                 }
 
                 // PackDB: Store WHEN condition and PER columns if present
@@ -2025,8 +2030,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 eval_const.num_groups = next_group;
                 // PER: individual empty groups are skipped downstream (preserved),
                 // but reject when *every* group is empty (the aggregate as a whole
-                // sees no rows after WHEN filtering).
-                RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+                // sees no rows after WHEN filtering). Per-row constraints are
+                // exempt — a per-row WHEN matching zero rows is a valid no-op
+                // (the constraint applies to no rows), not an empty aggregate.
+                // Easy-direction MIN/MAX were rewritten by the optimizer to
+                // per-row form but still count as aggregates for rejection.
+                if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+                    RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+                }
             } else {
                 // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
                 idx_t included_rows = 0;
@@ -2036,7 +2047,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (inc) included_rows++;
                 }
                 eval_const.num_groups = 1;
-                RejectEmptyAggregate(included_rows, "aggregate", "constraint");
+                if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+                    RejectEmptyAggregate(included_rows, "aggregate", "constraint");
+                }
             }
         }
 
@@ -2452,17 +2465,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
             }
 
-            // Reject objective aggregates over an empty row set. The expression-
-            // level WHEN guards the whole objective; per-term aggregate-local
-            // WHEN guards individual terms. Without this guard, flat MIN/MAX
-            // objectives (cats 1 & 2) build a z aux + per-row linking over all
-            // num_rows, with every linking constraint vacuously satisfied — the
-            // solver drives z to whatever extreme the objective sense prefers.
-            if (objective_has_when) {
-                idx_t cnt = 0;
-                for (bool m : objective_when_mask) if (m) cnt++;
-                RejectEmptyAggregate(cnt, "aggregate", "objective");
-            }
             for (auto &b : buckets) {
                 for (idx_t term_idx = 0; term_idx < b.out_term_filters->size(); term_idx++) {
                     if (!(*b.out_term_filters)[term_idx].has_filter) continue;
@@ -2472,6 +2474,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     RejectEmptyAggregate(cnt, "aggregate term", "objective");
                 }
             }
+        }
+
+        // Reject an objective-level WHEN that matches zero rows. Hoisted out
+        // of the `if (!buckets.empty())` block so it also covers bilinear-only
+        // objectives (where `terms` is empty but a bilinear WHEN filter still
+        // needs to be guarded). Without this, flat MIN/MAX objectives build a
+        // z aux + per-row linking over all num_rows, with every linking
+        // constraint vacuously satisfied — the solver drives z to whatever
+        // extreme the objective sense prefers.
+        if (objective_has_when) {
+            idx_t cnt = 0;
+            for (bool m : objective_when_mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, "aggregate", "objective");
         }
 
         obj_bilinear_filters.resize(gstate.objective->bilinear_terms.size());
