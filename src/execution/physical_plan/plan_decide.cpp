@@ -24,6 +24,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->ne_indicator_indices = std::move(op.ne_indicator_indices);
     decide_op->minmax_indicator_links = std::move(op.minmax_indicator_links);
     decide_op->bilinear_links = std::move(op.bilinear_links);
+    decide_op->abs_maximize_links = std::move(op.abs_maximize_links);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
     decide_op->flat_objective_agg = op.flat_objective_agg;

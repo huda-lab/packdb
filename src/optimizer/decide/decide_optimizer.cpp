@@ -794,37 +794,71 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
-	// Phase 1: Find ABS(expr) nodes over decide vars, replace with auxiliary variables
-	vector<pair<idx_t, unique_ptr<Expression>>> abs_pairs;
+	// Phase 1: Find ABS(expr) nodes over decide vars, replace with auxiliary variables.
+	// Each entry records the aux index, a copy of the inner expression, and whether
+	// the ABS node originated in the objective (vs. a constraint).
+	vector<AbsPairInfo> abs_pairs;
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs);
+		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, /*in_objective=*/false);
 	}
 	if (decide.decide_objective) {
-		FindAndReplaceAbs(decide.decide_objective, decide, abs_pairs);
+		FindAndReplaceAbs(decide.decide_objective, decide, abs_pairs, /*in_objective=*/true);
 	}
 
-	// Phase 2: Generate linearization constraints for each auxiliary variable
-	for (auto &[aux_idx, inner_expr] : abs_pairs) {
-		auto &aux_var = decide.decide_variables[aux_idx];
+	// Phase 2: Generate linearization constraints for each auxiliary variable.
+	// For MINIMIZE (or ABS in constraints): emit only the lower-bound envelope
+	//   aux >= inner  and  aux >= -inner
+	// which is sufficient because the solver drives aux down to |inner|.
+	//
+	// For MAXIMIZE + ABS in objective: also allocate a binary sign indicator y and
+	// record an AbsMaximizeLink so physical_decide.cpp can emit the upper-bound
+	// constraints at execution time (after variable bounds are known):
+	//   aux <= inner  + 2M*(1-y)   (pins aux to inner  when y=1)
+	//   aux <= -inner + 2M*y       (pins aux to -inner when y=0)
+	// Together all four constraints force aux = |inner| regardless of sense.
+	for (idx_t pi = 0; pi < abs_pairs.size(); pi++) {
+		auto &pair = abs_pairs[pi];
+		auto &aux_var = decide.decide_variables[pair.aux_idx];
 		auto &aux_ref = aux_var->Cast<BoundColumnRefExpression>();
 
-		// Constraint 1: aux >= inner_expr
+		// Constraint 1 (C1): aux >= inner_expr
 		auto aux_ref1 = make_uniq<BoundColumnRefExpression>(
 		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
 		auto c1 = make_uniq<BoundComparisonExpression>(
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-		    std::move(aux_ref1), inner_expr->Copy());
+		    std::move(aux_ref1), pair.inner_expr->Copy());
 
-		// Constraint 2: aux >= -inner_expr  (computed as 0 - inner_expr)
+		// Constraint 2 (C2): aux >= -inner_expr  (computed as 0 - inner_expr)
 		auto aux_ref2 = make_uniq<BoundColumnRefExpression>(
 		    aux_ref.alias, aux_ref.return_type, aux_ref.binding);
 		auto neg_expr = optimizer.BindScalarFunction(
 		    "-",
 		    make_uniq<BoundConstantExpression>(Value::INTEGER(0)),
-		    inner_expr->Copy());
+		    pair.inner_expr->Copy());
 		auto c2 = make_uniq<BoundComparisonExpression>(
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 		    std::move(aux_ref2), std::move(neg_expr));
+
+		if (pair.in_objective && decide.decide_sense == DecideSense::MAXIMIZE) {
+			// Allocate a boolean sign indicator variable y.
+			idx_t y_idx = decide.decide_variables.size();
+			string y_name = "__abs_y_" + to_string(pi) + "__";
+			auto y_var = make_uniq<BoundColumnRefExpression>(
+			    y_name, LogicalType::BOOLEAN,
+			    ColumnBinding(decide.decide_index, y_idx));
+			decide.decide_variables.push_back(std::move(y_var));
+			decide.num_auxiliary_vars++;
+			decide.is_boolean_var.push_back(true);
+			if (!decide.variable_entity_scope.empty()) {
+				decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+			}
+
+			// Tag C1 and C2 so physical_decide.cpp can find them by y_idx at finalization.
+			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(y_idx) + "__";
+			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(y_idx) + "__";
+
+			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
+		}
 
 		AppendConstraint(decide, std::move(c1));
 		AppendConstraint(decide, std::move(c2));
@@ -832,7 +866,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                        vector<pair<idx_t, unique_ptr<Expression>>> &abs_pairs) {
+                                        vector<AbsPairInfo> &abs_pairs, bool in_objective) {
 	if (!expr) {
 		return;
 	}
@@ -866,7 +900,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				}
 
 				// Stash the bound inner expression for constraint generation
-				abs_pairs.emplace_back(aux_idx, func.children[0]->Copy());
+				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective});
 
 				// Replace ABS(inner) with aux var reference
 				expr = make_uniq<BoundColumnRefExpression>(
@@ -879,7 +913,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, abs_pairs);
+		FindAndReplaceAbs(child, decide, abs_pairs, in_objective);
 	});
 }
 

@@ -203,40 +203,14 @@ bool IsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t
     return variables.count(name) > 0;
 }
 
-bool IsRowVarying(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &decide_variables) {
-    // deb("IsRowVarying: Checking expression:", expr.ToString());
-    
-    bool has_row_varying = false;
-    
-    // Use ParsedExpressionIterator to traverse the expression tree
-    ParsedExpressionIterator::EnumerateChildren(expr, 
-        [&](const ParsedExpression &child) {
-            if (child.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-                if (!IsDecideVariable(child, decide_variables)) {
-                    // deb("  -> Found row-varying column:", child.ToString());
-                    has_row_varying = true;
-                }
-            }
-        });
-    
-    // deb("  -> Result:", has_row_varying);
-    return has_row_varying;
-}
-
 //===--------------------------------------------------------------------===//
 // ToSymbolic Implementation
 //===--------------------------------------------------------------------===//
 
 Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationContext &ctx) {
-    // deb("\n=== ToSymbolic ===");
-    // deb("Input expression:", expr.ToString());
-    // deb("Expression class:", EnumUtil::ToString(expr.GetExpressionClass()));
-    
     switch (expr.GetExpressionClass()) {
         case ExpressionClass::CONSTANT: {
             auto &const_expr = expr.Cast<ConstantExpression>();
-            // deb("Processing CONSTANT:", const_expr.value.ToString());
-            
             // Extract numeric value
             double value;
             switch (const_expr.value.type().id()) {
@@ -254,7 +228,6 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                     break;
                 case LogicalTypeId::VARCHAR: {
                     auto s = const_expr.value.GetValue<string>();
-                    // deb("  -> Converted string constant to symbol:", s);
                     return Symbolic(s.c_str());
                 }
                 case LogicalTypeId::SMALLINT:
@@ -276,29 +249,17 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                         const_expr.value.type().ToString());
             }
             
-            // deb("  -> Converted to numeric:", value);
             return Symbolic(value);
         }
         
         case ExpressionClass::COLUMN_REF: {
             auto &colref = expr.Cast<ColumnRefExpression>();
             const auto &name = colref.GetColumnName();
-            // deb("Processing COLUMN_REF:", name);
-            
-            if (IsDecideVariable(expr, ctx.decide_variables)) {
-                // deb("  -> This is a DECIDE variable, creating symbol:", name);
-                return Symbolic(name);
-            } else {
-                // deb("  -> This is a row-varying column, creating symbol:", name);
-                return Symbolic(name);
-            }
+            return Symbolic(name);
         }
         
         case ExpressionClass::OPERATOR: {
             auto &op_expr = expr.Cast<OperatorExpression>();
-            // deb("Processing OPERATOR:", ExpressionTypeToString(op_expr.type));
-            // deb("Number of children:", op_expr.children.size());
-
             if (op_expr.type == ExpressionType::OPERATOR_NOT) {
                 D_ASSERT(op_expr.children.size() == 1);
                 auto child = ToSymbolicRecursive(*op_expr.children[0], ctx);
@@ -330,13 +291,11 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
 
         case ExpressionClass::CAST: {
             auto &cast_expr = expr.Cast<CastExpression>();
-            // deb("Processing CAST to:", cast_expr.cast_type.ToString());
             return ToSymbolicRecursive(*cast_expr.child, ctx);
         }
 
         case ExpressionClass::COMPARISON: {
             auto &cmp = expr.Cast<ComparisonExpression>();
-            // deb("Processing COMPARISON:", ExpressionTypeToString(cmp.type));
             auto left = ToSymbolicRecursive(*cmp.left, ctx);
             auto right = ToSymbolicRecursive(*cmp.right, ctx);
             std::stringstream ls, rs;
@@ -365,7 +324,6 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
 
         case ExpressionClass::BETWEEN: {
             auto &between = expr.Cast<BetweenExpression>();
-            // deb("Processing BETWEEN expression");
             auto input = ToSymbolicRecursive(*between.input, ctx);
             auto lower = ToSymbolicRecursive(*between.lower, ctx);
             auto upper = ToSymbolicRecursive(*between.upper, ctx);
@@ -376,7 +334,6 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
 
         case ExpressionClass::CONJUNCTION: {
             auto &conj = expr.Cast<ConjunctionExpression>();
-            // deb("Processing CONJUNCTION:", ExpressionTypeToString(conj.type));
             D_ASSERT(!conj.children.empty());
             string tag;
             if (conj.type == ExpressionType::CONJUNCTION_AND) tag = "AND";
@@ -395,9 +352,6 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
         
         case ExpressionClass::FUNCTION: {
             auto &func_expr = expr.Cast<FunctionExpression>();
-            // deb("Processing FUNCTION:", func_expr.function_name);
-            // deb("Number of arguments:", func_expr.children.size());
-        
             string func_name_lower = StringUtil::Lower(func_expr.function_name);
         
             // Handle built-in arithmetic operators rendered as functions
@@ -487,10 +441,6 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
             throw InternalException("ToSymbolic: Unsupported expression class: %s", 
                 EnumUtil::ToString(expr.GetExpressionClass()));
     }
-}
-
-Symbolic ToSymbolicObj(const ParsedExpression &expr, SymbolicTranslationContext &ctx) {
-    return ToSymbolicRecursive(expr, ctx);
 }
 
 //===--------------------------------------------------------------------===//
@@ -1325,7 +1275,7 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     }
 
     SymbolicTranslationContext ctx(decide_variables);
-    Symbolic lhs_sym = ToSymbolicObj(*cmp.left, ctx).expand().simplify();
+    Symbolic lhs_sym = ToSymbolicRecursive(*cmp.left, ctx).expand().simplify();
 
     vector<Symbolic> additive_terms;
     CollectAdditiveTerms(lhs_sym, additive_terms);
@@ -1415,6 +1365,7 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
             for (auto &c : conj.children) {
                 norm_children.push_back(NormalizeConstraintsRecursive(*c, decide_variables));
             }
+            D_ASSERT(norm_children.size() >= 2);
             auto result = make_uniq<ConjunctionExpression>(conj.type, std::move(norm_children[0]), std::move(norm_children[1]));
             for (idx_t i = 2; i < norm_children.size(); i++) {
                 result = make_uniq<ConjunctionExpression>(conj.type, std::move(result), std::move(norm_children[i]));
@@ -1554,7 +1505,7 @@ static bool SumInnerIsQuadraticCore(const ParsedExpression &inner,
     // (expr) * (expr) where both sides are identical and contain a DECIDE variable
     if (func.is_operator && func.function_name == "*") {
         if (func.children.size() == 2 &&
-            func.children[0]->ToString() == func.children[1]->ToString()) {
+            BaseExpression::Equals(*func.children[0], *func.children[1])) {
             return ExprContainsDecideVar(*func.children[0], decide_variables);
         }
     }
@@ -1712,7 +1663,7 @@ static unique_ptr<ParsedExpression> NormalizeObjectiveRecursive(
 
     // Convert inner to Symbolic and simplify
     SymbolicTranslationContext ctx(decide_variables);
-    Symbolic inner_sym = ToSymbolicObj(*f.children[0], ctx).expand().simplify();
+    Symbolic inner_sym = ToSymbolicRecursive(*f.children[0], ctx).expand().simplify();
 
     auto factored_terms = CollectFactoredTerms(inner_sym, ctx.decide_variables);
     vector<FactoredTerm> decide_terms;

@@ -19,6 +19,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
@@ -199,26 +200,30 @@ static bool ClassifyNormalizedProduct(const Expression &expr, const PhysicalDeci
 // Expression Analysis Helper Functions
 //===--------------------------------------------------------------------===//
 
+// ExpressionIterator::EnumerateChildren has no const overload; this wrapper
+// isolates the const_cast so no call site needs to mention it.
+static void EnumerateChildrenConst(const Expression &expr,
+                                   const std::function<void(unique_ptr<Expression> &)> &callback) {
+	ExpressionIterator::EnumerateChildren(const_cast<Expression &>(expr), callback);
+}
+
 idx_t PhysicalDecide::FindDecideVariable(const Expression &expr) const {
     // Base case: check if this is a column reference to a DECIDE variable
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
         auto &colref = expr.Cast<BoundColumnRefExpression>();
-        for (idx_t i = 0; i < decide_variables.size(); i++) {
-            auto &decide_var = decide_variables[i]->Cast<BoundColumnRefExpression>();
-            if (colref.binding == decide_var.binding) {
-                return i;
-            }
+        auto it = decide_variable_map.find(colref.binding);
+        if (it != decide_variable_map.end()) {
+            return it->second;
         }
     }
 
     // Recursive case: search in children
     idx_t result = DConstants::INVALID_INDEX;
-    ExpressionIterator::EnumerateChildren(const_cast<Expression&>(expr),
-        [&](unique_ptr<Expression> &child) {
-            if (result == DConstants::INVALID_INDEX && child) {
-                result = FindDecideVariable(*child);
-            }
-        });
+    EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
+        if (result == DConstants::INVALID_INDEX && child) {
+            result = FindDecideVariable(*child);
+        }
+    });
     return result;
 }
 
@@ -232,12 +237,11 @@ bool PhysicalDecide::ContainsVariable(const Expression &expr, idx_t var_idx) con
 
     // Recursively check children
     bool found = false;
-    ExpressionIterator::EnumerateChildren(const_cast<Expression&>(expr),
-        [&](unique_ptr<Expression> &child) {
-            if (!found && child && ContainsVariable(*child, var_idx)) {
-                found = true;
-            }
-        });
+    EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
+        if (!found && child && ContainsVariable(*child, var_idx)) {
+            found = true;
+        }
+    });
     return found;
 }
 
@@ -333,7 +337,8 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
 
             // Rebuild multiplication with remaining children
             return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function,
-                                                     std::move(filtered_children), nullptr);
+                                                     std::move(filtered_children),
+                                                     func.bind_info ? func.bind_info->Copy() : nullptr);
         }
     }
 
@@ -441,7 +446,7 @@ PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Ex
 
     // (expr) * (expr) with identical children containing a DECIDE variable
     if (fname == "*" && func.children.size() == 2 &&
-        func.children[0]->ToString() == func.children[1]->ToString() &&
+        Expression::Equals(*func.children[0], *func.children[1]) &&
         FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
         const Expression *inner = func.children[0].get();
         while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -568,7 +573,7 @@ static bool BoundExpressionContainsAggregate(const Expression &expr) {
         return BoundExpressionContainsAggregate(*cast.child);
     }
     bool found = false;
-    ExpressionIterator::EnumerateChildren(const_cast<Expression &>(expr), [&](unique_ptr<Expression> &child) {
+    EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
         if (!found && child && BoundExpressionContainsAggregate(*child)) {
             found = true;
         }
@@ -606,6 +611,10 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
     , decide_sense(decide_sense)
     , decide_objective(std::move(decide_objective)) {
     children.push_back(std::move(child));
+    for (idx_t i = 0; i < this->decide_variables.size(); i++) {
+        auto &var = this->decide_variables[i]->Cast<BoundColumnRefExpression>();
+        decide_variable_map[var.binding] = i;
+    }
 }
 
 //===--------------------------------------------------------------------===//
@@ -949,6 +958,20 @@ public:
                     constraint->ne_indicator_idx = std::stoull(payload);
                 }
 
+                // Parse ABS MAXIMIZE upper-bound tag: marks a lower-bound ABS constraint
+                // (aux >= inner or aux >= -inner) that needs Big-M upper bounds at finalization.
+                if (comp.alias.size() > strlen(ABS_UB_POS_TAG_PREFIX) + 2 &&
+                    comp.alias.substr(0, strlen(ABS_UB_POS_TAG_PREFIX)) == ABS_UB_POS_TAG_PREFIX) {
+                    auto payload = comp.alias.substr(strlen(ABS_UB_POS_TAG_PREFIX));
+                    constraint->abs_y_idx = std::stoull(payload.substr(0, payload.size() - 2));
+                    constraint->abs_is_pos_bound = true;
+                } else if (comp.alias.size() > strlen(ABS_UB_NEG_TAG_PREFIX) + 2 &&
+                           comp.alias.substr(0, strlen(ABS_UB_NEG_TAG_PREFIX)) == ABS_UB_NEG_TAG_PREFIX) {
+                    auto payload = comp.alias.substr(strlen(ABS_UB_NEG_TAG_PREFIX));
+                    constraint->abs_y_idx = std::stoull(payload.substr(0, payload.size() - 2));
+                    constraint->abs_is_pos_bound = false;
+                }
+
                 // Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
                 if (comp.alias == MINMAX_EASY_REWRITE_TAG) {
                     constraint->was_minmax_easy = true;
@@ -1200,7 +1223,7 @@ public:
                 }
                 // Self-product: (expr)*(expr) with identical sides
                 if (qname == "*" && qf.children.size() == 2 &&
-                    qf.children[0]->ToString() == qf.children[1]->ToString() &&
+                    Expression::Equals(*qf.children[0], *qf.children[1]) &&
                     op.FindDecideVariable(*qf.children[0]) != DConstants::INVALID_INDEX) {
                     const Expression *inner = qf.children[0].get();
                     while (inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -1501,18 +1524,81 @@ public:
                                 bound_value = rhs.value.GetValue<double>();
                             }
 
+                            bool is_integer_var =
+                                (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
+                                 op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
                             // Apply bound based on comparison type
                             if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                                // x <= bound
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                                // x >= bound
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
-                                // x = bound (if enabled in future)
                                 lower_bounds[var_idx] = bound_value;
                                 upper_bounds[var_idx] = bound_value;
+                            } else if (comp.type == ExpressionType::COMPARE_LESSTHAN) {
+                                // x < bound → x <= bound-1 for integers
+                                double ub = is_integer_var ? bound_value - 1.0 : bound_value;
+                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], ub);
+                            } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN) {
+                                // x > bound → x >= bound+1 for integers
+                                double lb = is_integer_var ? bound_value + 1.0 : bound_value;
+                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lb);
                             }
+                        }
+                    }
+                }
+                break;
+            }
+
+            case ExpressionClass::BOUND_BETWEEN: {
+                auto &between = expr.Cast<BoundBetweenExpression>();
+
+                auto *input = between.input.get();
+                while (input->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    input = input->Cast<BoundCastExpression>().child.get();
+                }
+
+                if (input->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    auto &colref = input->Cast<BoundColumnRefExpression>();
+                    idx_t var_idx = DConstants::INVALID_INDEX;
+                    for (idx_t i = 0; i < op.decide_variables.size(); i++) {
+                        auto &decide_var = op.decide_variables[i]->Cast<BoundColumnRefExpression>();
+                        if (colref.binding == decide_var.binding) {
+                            var_idx = i;
+                            break;
+                        }
+                    }
+
+                    if (var_idx != DConstants::INVALID_INDEX) {
+                        bool is_integer_var =
+                            (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
+                             op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
+
+                        auto ExtractBound = [](const Expression *e) -> double {
+                            while (e->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                                e = e->Cast<BoundCastExpression>().child.get();
+                            }
+                            if (e->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+                                return std::numeric_limits<double>::quiet_NaN();
+                            }
+                            auto &c = e->Cast<BoundConstantExpression>();
+                            if (c.value.type().id() == LogicalTypeId::INTEGER ||
+                                c.value.type().id() == LogicalTypeId::BIGINT) {
+                                return static_cast<double>(c.value.GetValue<int64_t>());
+                            }
+                            return c.value.GetValue<double>();
+                        };
+
+                        double lo = ExtractBound(between.lower.get());
+                        double hi = ExtractBound(between.upper.get());
+
+                        if (!std::isnan(lo)) {
+                            if (!between.lower_inclusive && is_integer_var) lo += 1.0;
+                            lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lo);
+                        }
+                        if (!std::isnan(hi)) {
+                            if (!between.upper_inclusive && is_integer_var) hi -= 1.0;
+                            upper_bounds[var_idx] = std::min(upper_bounds[var_idx], hi);
                         }
                     }
                 }
@@ -1706,13 +1792,26 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool avg_scale = false;
     };
 
-    auto EvaluateBooleanMask = [&](const Expression &condition) {
-        vector<bool> mask;
-        auto transformed_condition = TransformToChunkExpression(condition, context);
-        ExpressionExecutor cond_executor(context);
-        cond_executor.AddExpression(*transformed_condition);
+    // Evaluate N boolean filter expressions in a single scan over gstate.data.
+    auto EvaluateBooleanMasks = [&](const vector<const Expression*> &conditions) -> vector<vector<bool>> {
+        if (conditions.empty()) return {};
 
-        mask.reserve(num_rows);
+        vector<unique_ptr<Expression>> transformed;
+        transformed.reserve(conditions.size());
+        for (auto *cond : conditions) {
+            transformed.push_back(TransformToChunkExpression(*cond, context));
+        }
+
+        ExpressionExecutor cond_executor(context);
+        for (auto &expr : transformed) {
+            cond_executor.AddExpression(*expr);
+        }
+
+        vector<vector<bool>> masks(conditions.size());
+        for (auto &m : masks) m.reserve(num_rows);
+
+        vector<LogicalType> result_types(conditions.size(), LogicalType::BOOLEAN);
+
         ColumnDataScanState cond_scan_state;
         gstate.data.InitializeScan(cond_scan_state);
         DataChunk cond_chunk;
@@ -1720,16 +1819,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         while (gstate.data.Scan(cond_scan_state, cond_chunk)) {
             DataChunk cond_result;
-            cond_result.Initialize(context, {LogicalType::BOOLEAN});
+            cond_result.Initialize(context, result_types);
             cond_executor.Execute(cond_chunk, cond_result);
 
-            auto &vec = cond_result.data[0];
-            for (idx_t row_in_chunk = 0; row_in_chunk < cond_chunk.size(); row_in_chunk++) {
-                Value val = vec.GetValue(row_in_chunk);
-                mask.push_back(val.IsNull() ? false : val.GetValue<bool>());
+            for (idx_t col = 0; col < conditions.size(); col++) {
+                auto &vec = cond_result.data[col];
+                for (idx_t row = 0; row < cond_chunk.size(); row++) {
+                    Value val = vec.GetValue(row);
+                    masks[col].push_back(val.IsNull() ? false : val.GetValue<bool>());
+                }
             }
         }
-        return mask;
+        return masks;
+    };
+
+    auto EvaluateBooleanMask = [&](const Expression &condition) -> vector<bool> {
+        return EvaluateBooleanMasks({&condition})[0];
     };
 
     // 1. Evaluate constraints
@@ -1743,6 +1848,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         eval_const.minmax_indicator_idx = constraint->minmax_indicator_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
         eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
+        eval_const.abs_y_idx = constraint->abs_y_idx;
+        eval_const.abs_is_pos_bound = constraint->abs_is_pos_bound;
 
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
@@ -1766,49 +1873,64 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool has_local_filters = false;
         bool has_unfiltered_aggregate_part = false;
 
-        auto RegisterLocalFilter = [&](const unique_ptr<Expression> &filter, TermFilterState &state) {
-            state.mask = EvaluateBooleanMask(*filter);
-            if (state.mask.size() != num_rows) {
-                throw InternalException("DECIDE aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                                        num_rows, state.mask.size());
-            }
-            state.has_filter = true;
-            has_local_filters = true;
-            for (idx_t row = 0; row < num_rows; row++) {
-                if (state.mask[row]) {
-                    local_row_active[row] = true;
-                }
-            }
-        };
-
         if (constraint->lhs_is_aggregate) {
-            for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-                auto &term = constraint->lhs_terms[term_idx];
-                term_filters[term_idx].avg_scale = term.avg_scale;
+            // Collect all per-term filter expressions and their target states, then
+            // batch-evaluate them in a single scan instead of one scan per filter.
+            struct FilterSlot { const Expression *cond; TermFilterState *state; };
+            vector<FilterSlot> filter_slots;
+
+            for (idx_t i = 0; i < constraint->lhs_terms.size(); i++) {
+                auto &term = constraint->lhs_terms[i];
+                term_filters[i].avg_scale = term.avg_scale;
                 if (term.filter) {
-                    RegisterLocalFilter(term.filter, term_filters[term_idx]);
+                    filter_slots.push_back({term.filter.get(), &term_filters[i]});
                 } else {
                     has_unfiltered_aggregate_part = true;
                 }
             }
-            for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
-                auto &term = constraint->bilinear_terms[term_idx];
-                bilinear_filters[term_idx].avg_scale = term.avg_scale;
+            for (idx_t i = 0; i < constraint->bilinear_terms.size(); i++) {
+                auto &term = constraint->bilinear_terms[i];
+                bilinear_filters[i].avg_scale = term.avg_scale;
                 if (term.filter) {
-                    RegisterLocalFilter(term.filter, bilinear_filters[term_idx]);
+                    filter_slots.push_back({term.filter.get(), &bilinear_filters[i]});
                 } else {
                     has_unfiltered_aggregate_part = true;
                 }
             }
-            for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
-                auto &group = constraint->quadratic_groups[group_idx];
-                quadratic_filters[group_idx].avg_scale = group.avg_scale;
+            for (idx_t i = 0; i < constraint->quadratic_groups.size(); i++) {
+                auto &group = constraint->quadratic_groups[i];
+                quadratic_filters[i].avg_scale = group.avg_scale;
                 if (group.filter) {
-                    RegisterLocalFilter(group.filter, quadratic_filters[group_idx]);
+                    filter_slots.push_back({group.filter.get(), &quadratic_filters[i]});
                 } else {
                     has_unfiltered_aggregate_part = true;
                 }
             }
+
+            if (!filter_slots.empty()) {
+                vector<const Expression *> cond_ptrs;
+                cond_ptrs.reserve(filter_slots.size());
+                for (auto &s : filter_slots) cond_ptrs.push_back(s.cond);
+
+                auto masks = EvaluateBooleanMasks(cond_ptrs);
+
+                has_local_filters = true;
+                for (idx_t i = 0; i < filter_slots.size(); i++) {
+                    if (masks[i].size() != num_rows) {
+                        throw InternalException(
+                            "DECIDE aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
+                            num_rows, masks[i].size());
+                    }
+                    filter_slots[i].state->mask = std::move(masks[i]);
+                    filter_slots[i].state->has_filter = true;
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (filter_slots[i].state->mask[row]) {
+                            local_row_active[row] = true;
+                        }
+                    }
+                }
+            }
+
             if (has_unfiltered_aggregate_part) {
                 std::fill(local_row_active.begin(), local_row_active.end(), true);
             }
@@ -2385,7 +2507,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
         if (!buckets.empty()) {
-            // Per-bucket: pre-size filters + out_coeffs and snapshot variable indices.
+            // Pre-size filters + out_coeffs, snapshot variable indices, and collect
+            // all filter expressions so they can be batch-evaluated in one scan.
+            struct ObjFilterSlot { const Expression *cond; TermFilterState *state; };
+            vector<ObjFilterSlot> obj_filter_slots;
+
             for (auto &b : buckets) {
                 b.out_term_filters->resize(b.src_terms->size());
                 b.out_coeffs->resize(b.src_terms->size());
@@ -2394,14 +2520,24 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     (*b.out_term_filters)[term_idx].avg_scale = term.avg_scale;
                     if (term.filter) {
                         (*b.out_term_filters)[term_idx].has_filter = true;
-                        (*b.out_term_filters)[term_idx].mask = EvaluateBooleanMask(*term.filter);
-                        if ((*b.out_term_filters)[term_idx].mask.size() != num_rows) {
-                            throw InternalException(
-                                "DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                                num_rows, (*b.out_term_filters)[term_idx].mask.size());
-                        }
+                        obj_filter_slots.push_back({term.filter.get(), &(*b.out_term_filters)[term_idx]});
                     }
                     b.out_var_indices->push_back(term.variable_index);
+                }
+            }
+
+            if (!obj_filter_slots.empty()) {
+                vector<const Expression *> cond_ptrs;
+                cond_ptrs.reserve(obj_filter_slots.size());
+                for (auto &s : obj_filter_slots) cond_ptrs.push_back(s.cond);
+                auto masks = EvaluateBooleanMasks(cond_ptrs);
+                for (idx_t i = 0; i < obj_filter_slots.size(); i++) {
+                    if (masks[i].size() != num_rows) {
+                        throw InternalException(
+                            "DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
+                            num_rows, masks[i].size());
+                    }
+                    obj_filter_slots[i].state->mask = std::move(masks[i]);
                 }
             }
 
@@ -2516,19 +2652,34 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
         obj_bilinear_filters.resize(gstate.objective->bilinear_terms.size());
-        for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size(); term_idx++) {
-            auto &term = gstate.objective->bilinear_terms[term_idx];
-            obj_bilinear_filters[term_idx].avg_scale = term.avg_scale;
-            if (term.filter) {
-                obj_bilinear_filters[term_idx].has_filter = true;
-                obj_bilinear_filters[term_idx].mask = EvaluateBooleanMask(*term.filter);
-                if (obj_bilinear_filters[term_idx].mask.size() != num_rows) {
-                    throw InternalException("DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
-                                            num_rows, obj_bilinear_filters[term_idx].mask.size());
+        {
+            struct BilFilterSlot { const Expression *cond; idx_t term_idx; };
+            vector<BilFilterSlot> bil_slots;
+            for (idx_t i = 0; i < gstate.objective->bilinear_terms.size(); i++) {
+                auto &term = gstate.objective->bilinear_terms[i];
+                obj_bilinear_filters[i].avg_scale = term.avg_scale;
+                if (term.filter) {
+                    obj_bilinear_filters[i].has_filter = true;
+                    bil_slots.push_back({term.filter.get(), i});
                 }
-                idx_t cnt = 0;
-                for (bool m : obj_bilinear_filters[term_idx].mask) if (m) cnt++;
-                RejectEmptyAggregate(cnt, "bilinear aggregate term", "objective");
+            }
+            if (!bil_slots.empty()) {
+                vector<const Expression *> cond_ptrs;
+                cond_ptrs.reserve(bil_slots.size());
+                for (auto &s : bil_slots) cond_ptrs.push_back(s.cond);
+                auto masks = EvaluateBooleanMasks(cond_ptrs);
+                for (idx_t i = 0; i < bil_slots.size(); i++) {
+                    idx_t tidx = bil_slots[i].term_idx;
+                    if (masks[i].size() != num_rows) {
+                        throw InternalException(
+                            "DECIDE objective aggregate-local WHEN mask size mismatch: expected %llu rows, got %llu",
+                            num_rows, masks[i].size());
+                    }
+                    obj_bilinear_filters[tidx].mask = std::move(masks[i]);
+                    idx_t cnt = 0;
+                    for (bool m : obj_bilinear_filters[tidx].mask) if (m) cnt++;
+                    RejectEmptyAggregate(cnt, "bilinear aggregate term", "objective");
+                }
             }
         }
 
@@ -2881,6 +3032,106 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
         ec2.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec2));
+    }
+
+    // Generate Big-M upper-bound constraints for MAXIMIZE + ABS auxiliary variables.
+    // For each AbsMaximizeLink, find the two tagged lower-bound EvaluatedConstraints
+    // (C1: aux >= inner tagged ABS_UB_POS, C2: aux >= -inner tagged ABS_UB_NEG) and emit:
+    //   C_ub1: derived from C1, add y with coeff +2M, comparison <=, rhs[r] += 2M
+    //   C_ub2: derived from C2, add y with coeff -2M, comparison <=, rhs unchanged
+    // Together with C1/C2 these force aux = |inner| under MAXIMIZE.
+    if (!abs_maximize_links.empty()) {
+        struct AbsConstraintPair {
+            idx_t c1 = DConstants::INVALID_INDEX;
+            idx_t c2 = DConstants::INVALID_INDEX;
+        };
+        unordered_map<idx_t, AbsConstraintPair> abs_tag_map;
+        for (idx_t ci = 0; ci < gstate.evaluated_constraints.size(); ci++) {
+            auto &ec = gstate.evaluated_constraints[ci];
+            if (ec.abs_y_idx == DConstants::INVALID_INDEX) {
+                continue;
+            }
+            if (ec.abs_is_pos_bound) {
+                abs_tag_map[ec.abs_y_idx].c1 = ci;
+            } else {
+                abs_tag_map[ec.abs_y_idx].c2 = ci;
+            }
+        }
+
+        for (auto &link : abs_maximize_links) {
+            auto it = abs_tag_map.find(link.y_idx);
+            D_ASSERT(it != abs_tag_map.end() &&
+                     it->second.c1 != DConstants::INVALID_INDEX &&
+                     it->second.c2 != DConstants::INVALID_INDEX);
+
+            // Copy all data out of C1 and C2 before any push_back that could reallocate
+            // the evaluated_constraints vector and invalidate references.
+            auto c1_vis   = gstate.evaluated_constraints[it->second.c1].variable_indices;
+            auto c1_rcs   = gstate.evaluated_constraints[it->second.c1].row_coefficients;
+            auto c1_rhs   = gstate.evaluated_constraints[it->second.c1].rhs_values;
+            auto c1_rgids = gstate.evaluated_constraints[it->second.c1].row_group_ids;
+            auto c1_ngrps = gstate.evaluated_constraints[it->second.c1].num_groups;
+
+            auto c2_vis   = gstate.evaluated_constraints[it->second.c2].variable_indices;
+            auto c2_rcs   = gstate.evaluated_constraints[it->second.c2].row_coefficients;
+            auto c2_rhs   = gstate.evaluated_constraints[it->second.c2].rhs_values;
+            auto c2_rgids = gstate.evaluated_constraints[it->second.c2].row_group_ids;
+            auto c2_ngrps = gstate.evaluated_constraints[it->second.c2].num_groups;
+
+            // Compute M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|).
+            // This upper-bounds |inner| across all rows and variable values.
+            double M = 0.0;
+            for (idx_t r = 0; r < num_rows; r++) {
+                double row_bound = std::abs(c1_rhs[r]);
+                for (idx_t t = 0; t < c1_vis.size(); t++) {
+                    if (c1_vis[t] == link.aux_idx) {
+                        continue;
+                    }
+                    double lb = solver_input.lower_bounds[c1_vis[t]];
+                    double ub = solver_input.upper_bounds[c1_vis[t]];
+                    if (ub >= 1e20 || lb <= -1e20) {
+                        throw InvalidInputException(
+                            "MAXIMIZE SUM(ABS(...)) requires a finite bound on variable '%s'. "
+                            "Add constraints '%s >= <lower>' and '%s <= <upper>'.",
+                            decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias,
+                            decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias,
+                            decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias);
+                    }
+                    row_bound += std::abs(c1_rcs[t][r]) * std::max(std::abs(lb), std::abs(ub));
+                }
+                M = std::max(M, row_bound);
+            }
+            double two_M = 2.0 * M;
+
+            // C_ub1: same as C1 but add y_idx with coeff +2M, flip to <=, rhs[r] += 2M
+            EvaluatedConstraint ec_ub1;
+            ec_ub1.variable_indices = c1_vis;
+            ec_ub1.row_coefficients = c1_rcs;
+            ec_ub1.variable_indices.push_back(link.y_idx);
+            ec_ub1.row_coefficients.push_back(vector<double>(num_rows, two_M));
+            ec_ub1.rhs_values.resize(num_rows);
+            for (idx_t r = 0; r < num_rows; r++) {
+                ec_ub1.rhs_values[r] = c1_rhs[r] + two_M;
+            }
+            ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+            ec_ub1.lhs_is_aggregate = false;
+            ec_ub1.row_group_ids = c1_rgids;
+            ec_ub1.num_groups = c1_ngrps;
+            gstate.evaluated_constraints.push_back(std::move(ec_ub1));
+
+            // C_ub2: same as C2 but add y_idx with coeff -2M, flip to <=, rhs unchanged
+            EvaluatedConstraint ec_ub2;
+            ec_ub2.variable_indices = c2_vis;
+            ec_ub2.row_coefficients = c2_rcs;
+            ec_ub2.variable_indices.push_back(link.y_idx);
+            ec_ub2.row_coefficients.push_back(vector<double>(num_rows, -two_M));
+            ec_ub2.rhs_values = c2_rhs;
+            ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+            ec_ub2.lhs_is_aggregate = false;
+            ec_ub2.row_group_ids = c2_rgids;
+            ec_ub2.num_groups = c2_ngrps;
+            gstate.evaluated_constraints.push_back(std::move(ec_ub2));
+        }
     }
 
     // Constraints
@@ -3691,6 +3942,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             };
             vector<TermAnalysis> analyses;
 
+            // Collect filter expressions for batch evaluation (one scan for all terms).
+            vector<const Expression *> composed_cond_ptrs;
+            for (auto &term : spec.terms) {
+                if (term.filter) composed_cond_ptrs.push_back(term.filter.get());
+            }
+            auto composed_masks = EvaluateBooleanMasks(composed_cond_ptrs);
+
+            idx_t mask_slot = 0;
             for (auto &term : spec.terms) {
                 TermAnalysis ta;
                 ta.kind = term.kind;
@@ -3703,7 +3962,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t));
                 }
                 if (term.filter) {
-                    ta.filter_mask = EvaluateBooleanMask(*term.filter);
+                    ta.filter_mask = std::move(composed_masks[mask_slot++]);
                 } else {
                     ta.filter_mask.assign(num_rows, true);
                 }
@@ -3892,22 +4151,32 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         };
         vector<ObjTermAnalysis> obj_analyses;
 
-        for (auto &term : composed_minmax_objective_terms) {
-            ObjTermAnalysis ta;
-            ta.kind = term.kind;
-            ta.agg_name = term.agg_name;
-            ta.sign = term.sign;
-            ta.is_easy = term.is_easy;
-            ExtractTerms(*term.inner_expr, ta.inner_terms);
-            for (auto &inner_t : ta.inner_terms) {
-                ta.per_term_coefs.push_back(EvaluateTermCoefsObj(inner_t));
+        // Batch-evaluate all per-term filter conditions for composed objective terms.
+        {
+            vector<const Expression *> obj_comp_cond_ptrs;
+            for (auto &term : composed_minmax_objective_terms) {
+                if (term.filter) obj_comp_cond_ptrs.push_back(term.filter.get());
             }
-            if (term.filter) {
-                ta.filter_mask = EvaluateBooleanMask(*term.filter);
-            } else {
-                ta.filter_mask.assign(num_rows, true);
+            auto obj_comp_masks = EvaluateBooleanMasks(obj_comp_cond_ptrs);
+
+            idx_t mask_slot = 0;
+            for (auto &term : composed_minmax_objective_terms) {
+                ObjTermAnalysis ta;
+                ta.kind = term.kind;
+                ta.agg_name = term.agg_name;
+                ta.sign = term.sign;
+                ta.is_easy = term.is_easy;
+                ExtractTerms(*term.inner_expr, ta.inner_terms);
+                for (auto &inner_t : ta.inner_terms) {
+                    ta.per_term_coefs.push_back(EvaluateTermCoefsObj(inner_t));
+                }
+                if (term.filter) {
+                    ta.filter_mask = std::move(obj_comp_masks[mask_slot++]);
+                } else {
+                    ta.filter_mask.assign(num_rows, true);
+                }
+                obj_analyses.push_back(std::move(ta));
             }
-            obj_analyses.push_back(std::move(ta));
         }
 
         // Allocate z_k per MIN/MAX term. v1 rejects hard direction.

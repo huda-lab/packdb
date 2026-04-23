@@ -43,18 +43,11 @@ struct SymbolicTranslationContext {
         : decide_variables(vars) {}
 };
 
-//! Converts a ParsedExpression to a Symbolic object (for programmatic use)
-//! Throws InternalException if the expression cannot be converted
-::Symbolic ToSymbolicObj(const ParsedExpression &expr, SymbolicTranslationContext &ctx);
-
 //! Converts a Symbolic object back to a ParsedExpression (preferred)
 unique_ptr<ParsedExpression> FromSymbolic(const ::Symbolic &symbolic, SymbolicTranslationContext &ctx);
 
 //! Helper: Check if an expression is a DECIDE variable
 bool IsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
-
-//! Helper: Check if an expression is row-varying (contains column references that aren't DECIDE variables)
-bool IsRowVarying(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &decide_variables);
 
 //! Normalize constraints: factor numeric scalars from SUM products on LHS and
 //! adjust RHS/scalar accordingly; recurse through AND conjunctions.

@@ -89,6 +89,17 @@ public:
     };
     vector<BilinearLink> bilinear_links;
 
+    // Links for MAXIMIZE+ABS Big-M upper-bound constraints.
+    // Produced by RewriteAbs when sense==MAXIMIZE and ABS is in the objective.
+    // At execution time, the two lower-bound EvaluatedConstraints tagged with
+    // ABS_UB_POS_TAG_PREFIX / ABS_UB_NEG_TAG_PREFIX are used to derive and emit
+    // two upper-bound constraints that pin aux = |inner| exactly.
+    struct AbsMaximizeLink {
+        idx_t aux_idx;   // ABS auxiliary variable
+        idx_t y_idx;     // binary sign indicator variable
+    };
+    vector<AbsMaximizeLink> abs_maximize_links;
+
     //! Composed MIN/MAX constraint: additive LHS with one or more MIN/MAX terms alongside
     //! SUM/AVG terms. Each term becomes a global auxiliary at execution time (MIN/MAX) or
     //! is summed into the outer ILP row (SUM/AVG). See DecideOptimizer::RewriteComposedMinMax.

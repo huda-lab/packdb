@@ -59,4 +59,11 @@ static constexpr const char *NE_INDICATOR_TAG_PREFIX = "__ne_ind_tag_";
 //! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
+//! Tag prefix for ABS MAXIMIZE upper-bound constraint linking.
+//! Format: "__abs_ub_pos_<y_idx>__" on C1 (aux >= inner)
+//!         "__abs_ub_neg_<y_idx>__" on C2 (aux >= -inner)
+//! Set on BoundComparisonExpression.alias by RewriteAbs when sense==MAXIMIZE and ABS is in the objective.
+static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
+static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
+
 } // namespace duckdb

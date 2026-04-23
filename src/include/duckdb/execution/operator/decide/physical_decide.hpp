@@ -4,6 +4,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/column_binding_map.hpp"
 
 namespace duckdb {
 
@@ -45,6 +46,8 @@ struct DecideConstraint {
     idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
     string minmax_agg_type;              // "min" or "max" (empty if not minmax)
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
+    idx_t abs_y_idx = DConstants::INVALID_INDEX;  // sign indicator for ABS Big-M (MAXIMIZE only)
+    bool abs_is_pos_bound = false;                 // true=C1 (aux >= inner), false=C2 (aux >= -inner)
     unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
 
@@ -125,6 +128,9 @@ public:
     // The variables to be decided (e.g., x, y)
     vector<unique_ptr<Expression>> decide_variables;
 
+    // O(1) lookup: ColumnBinding → decide_variables index (built in constructor)
+    column_binding_map_t<idx_t> decide_variable_map;
+
     // The bound constraints expression
     unique_ptr<Expression> decide_constraints;
 
@@ -146,6 +152,7 @@ public:
     // Links from bilinear McCormick auxiliary variables: w = b * x
     // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation
     vector<LogicalDecide::BilinearLink> bilinear_links;
+    vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
 
     // Composed MIN/MAX constraints (additive LHS with MIN/MAX terms mixed in).
     // Each is emitted as a block of RawConstraints in global_constraints at sink finalize.

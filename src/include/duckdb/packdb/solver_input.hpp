@@ -33,6 +33,13 @@ struct EvaluatedConstraint {
     //! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
     //! inside the deferred NE expansion.
     bool ne_avg_rhs_scale = false;
+    //! ABS MAXIMIZE Big-M upper-bound tagging.
+    //! abs_y_idx != INVALID_INDEX marks a lower-bound ABS constraint (aux >= ±inner)
+    //! emitted by RewriteAbs for a MAXIMIZE objective. abs_is_pos_bound distinguishes
+    //! C1 (aux >= inner, true) from C2 (aux >= -inner, false). Used at finalization to
+    //! derive and emit the two upper-bound constraints that pin aux = |inner|.
+    idx_t abs_y_idx = DConstants::INVALID_INDEX;
+    bool abs_is_pos_bound = false;
 
     //! Bilinear terms in this constraint (var_a * var_b with per-row coefficients)
     struct BilinearTerm {

@@ -119,10 +119,17 @@ private:
 	bool ExtractMultiplicativeCoefficient(const Expression &expr, idx_t decide_index,
 	                                       idx_t var_idx, unique_ptr<Expression> &coef_out);
 
+	//! Carries per-ABS-node metadata through the two phases of RewriteAbs.
+	struct AbsPairInfo {
+		idx_t aux_idx;
+		unique_ptr<Expression> inner_expr;
+		bool in_objective; // true = ABS came from the objective, false = from a constraint
+	};
+
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
-	//! replace with auxiliary variable references, and collect (aux_idx, inner_expr) pairs.
+	//! replace with auxiliary variable references, and collect AbsPairInfo entries.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       vector<pair<idx_t, unique_ptr<Expression>>> &abs_pairs);
+	                       vector<AbsPairInfo> &abs_pairs, bool in_objective);
 
 	//! Helper: allocate a Boolean indicator variable for a hard MIN/MAX aggregate and
 	//! produce the corresponding SUM(inner) aggregate tagged with MINMAX_INDICATOR_TAG_PREFIX.

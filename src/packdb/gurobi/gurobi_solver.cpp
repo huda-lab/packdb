@@ -23,6 +23,8 @@ struct GurobiGuard {
 };
 
 bool GurobiSolver::IsAvailable() {
+    // Result is cached for the process lifetime. A Gurobi license that expires
+    // mid-session will not be detected until the next fresh process start.
     static bool available = []() {
         if (!GurobiLoader::Load()) {
             return false;

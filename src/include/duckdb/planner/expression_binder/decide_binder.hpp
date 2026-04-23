@@ -17,7 +17,7 @@ namespace duckdb {
 
 bool IsScalarValue(ParsedExpression &expr);
 
-bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
                          bool allow_quadratic = false, bool allow_bilinear = false);

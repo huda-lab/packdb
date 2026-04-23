@@ -134,30 +134,56 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 ## ABS() — Linearized Automatically
 
-`ABS(expr)` over decision variables is automatically linearized using the standard ILP technique. For each `ABS(expr)` that references a DECIDE variable, the system:
+`ABS(expr)` over decision variables is automatically linearized using standard ILP techniques. The formulation depends on whether ABS appears in a constraint or in the objective, and on the optimization sense.
+
+### ABS in constraints (always correct)
+
+For each `ABS(expr)` that references a DECIDE variable, the system:
 
 1. Introduces an auxiliary REAL variable `d` (hidden from query output)
-2. Adds two constraints: `d >= expr` and `d >= -expr`
+2. Adds two lower-bound constraints: `d >= expr` and `d >= -expr`
 3. Replaces `ABS(expr)` with `d`
 
-This works in both constraints and objectives:
+The lower-envelope formulation is always correct in constraints because the constraint itself provides the ceiling on `d`.
+
+### ABS in MINIMIZE objectives (lower-envelope)
+
+Same lower-envelope rewrite applies. When minimizing `d`, the solver naturally pushes `d` down to `|expr|` — the lower bounds suffice.
+
+### ABS in MAXIMIZE objectives (Big-M upper-bound)
+
+For `MAXIMIZE SUM(ABS(expr))`, the lower-envelope alone is unsound: `d` has no ceiling and the solver pushes it to +∞, producing a spurious "unbounded" error. The fix introduces a binary sign indicator `y ∈ {0,1}` and two Big-M upper-bound constraints that pin `d = |expr|` exactly:
+
+- `d <= expr  + 2M·(1−y)`  (upper-bound when `y=1` selects the positive branch)
+- `d <= −expr + 2M·y`      (upper-bound when `y=0` selects the negative branch)
+
+`M` is computed at execution time from the variable bounds involved in `expr`: `M = max_r(|rhs[r]| + Σ |coeff[t][r]| · max(|lb_t|, |ub_t|))` over all non-aux terms. **All DECIDE variables referenced inside `ABS(expr)` must have finite bounds** — if any variable lacks a bound (lb ≤ −1e20 or ub ≥ 1e20), an `InvalidInputException` is raised naming the unbounded variable.
 
 ```sql
--- In objectives: minimize total absolute deviation
+-- MINIMIZE: lower-envelope, no extra variables needed
 MINIMIZE SUM(ABS(new_hours - hours))
 
--- In per-row constraints: bound deviation per row
+-- MAXIMIZE: Big-M upper-bound, binary indicator y allocated per ABS term
+MAXIMIZE SUM(ABS(x - target))
+-- requires: x <= <upper_bound> (and optionally x >= <lower_bound>)
+
+-- In per-row constraints: bound deviation per row (lower-envelope, always correct)
 SUCH THAT ABS(new_qty - l_quantity) <= 5
 
--- In aggregate constraints: bound total deviation
+-- In aggregate constraints: bound total deviation (lower-envelope, always correct)
 SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 ```
 
 `ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
 
-**Code**: The rewrite is performed by `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. The binder binds ABS as a normal function; the optimizer detects it, creates auxiliary variables, and generates linearization constraints. Auxiliary variables are hidden from `SELECT *` by truncating the bind context.
+**Code**:
+- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. For MAXIMIZE + objective ABS, allocates the `y` binary variable, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` aliases, and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `AbsPairInfo` struct (nested in `DecideOptimizer`) tracks `in_objective` to distinguish the two paths.
+- Tag constants: `ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_"` and `ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_"` in `decide.hpp`.
+- Execution: `physical_decide.cpp` — tag parsing in `AnalyzeConstraint` sets `DecideConstraint::abs_y_idx`/`abs_is_pos_bound`; these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term.
+- Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.
+- Serialization: `serialize_logical_operator.cpp` fields 230/231 (`abs_maximize_link_aux`, `abs_maximize_link_y`).
 
-**Tests**: `test/decide/tests/test_abs_linearization.py` — 8 test cases covering objectives, constraints, WHEN, PER, multiple ABS terms, no-decide-var, and mixed variable types.
+**Tests**: `test/decide/tests/test_abs_linearization.py` — 10 test cases covering MINIMIZE objectives, MAXIMIZE objectives (basic + missing-bound error), constraints, WHEN, PER, multiple ABS terms, no-decide-var, and mixed variable types.
 
 ---
 

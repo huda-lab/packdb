@@ -42,27 +42,12 @@ bool IsScalarValue(ParsedExpression &expr) {
     return false;
 }
 
-bool IsVariableExpression(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-    if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-        auto &colref = expr.Cast<ColumnRefExpression>();
-        if (colref.IsQualified()) {
-            // Check qualified form: Table.var (for table-scoped variables)
-            string qualified = colref.GetTableName() + "." + colref.GetColumnName();
-            return variables.count(qualified) > 0;
-        }
-        return variables.count(colref.GetColumnName()) > 0;
-    }
-    return false;
-}
-
-
-static bool IsVariableExpressionConst(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
 		return false;
 	}
 	const auto &colref = expr.Cast<const ColumnRefExpression>();
 	if (colref.IsQualified()) {
-		// Check qualified form: Table.var (for table-scoped variables)
 		string qualified = colref.GetTableName() + "." + colref.GetColumnName();
 		return variables.count(qualified) > 0;
 	}
@@ -72,7 +57,7 @@ static bool IsVariableExpressionConst(const ParsedExpression &expr, const case_i
 static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr,
                                                     const case_insensitive_map_t<idx_t> &variables) {
 	idx_t count = 0;
-	if (IsVariableExpressionConst(expr, variables)) {
+	if (IsVariableExpression(expr, variables)) {
 		count++;
 	}
 	// Descend into subquery QueryNode bodies (SELECT, WHERE, HAVING, etc.)
@@ -291,7 +276,7 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 static void CollectDecideVariableIndices(const ParsedExpression &expr,
                                          const case_insensitive_map_t<idx_t> &variables,
                                          unordered_set<idx_t> &out) {
-	if (IsVariableExpressionConst(expr, variables)) {
+	if (IsVariableExpression(expr, variables)) {
 		const auto &colref = expr.Cast<const ColumnRefExpression>();
 		string key = colref.IsQualified()
 		    ? (colref.GetTableName() + "." + colref.GetColumnName())
@@ -569,7 +554,6 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<id
 		error_msg = "SUM expression must reference at least one DECIDE variable";
 		return false;
 	}
-	// DebugPrintParsed("ValidateSumArgument.ok", expr);
 	return true;
 }
 

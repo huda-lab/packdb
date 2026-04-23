@@ -390,6 +390,15 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	}
 	serializer.WritePropertyWithDefault<vector<bool>>(228, "is_boolean_var", is_boolean_var);
 	serializer.WritePropertyWithDefault<double>(229, "objective_constant_offset", objective_constant_offset);
+	{
+		vector<idx_t> am_aux, am_y;
+		for (auto &l : abs_maximize_links) {
+			am_aux.push_back(l.aux_idx);
+			am_y.push_back(l.y_idx);
+		}
+		serializer.WritePropertyWithDefault<vector<idx_t>>(230, "abs_maximize_link_aux", am_aux);
+		serializer.WritePropertyWithDefault<vector<idx_t>>(231, "abs_maximize_link_y", am_y);
+	}
 	serializer.WritePropertyWithDefault<uint8_t>(209, "flat_objective_agg", static_cast<uint8_t>(flat_objective_agg));
 	serializer.WritePropertyWithDefault<bool>(210, "flat_objective_is_easy", flat_objective_is_easy);
 	serializer.WritePropertyWithDefault<uint8_t>(211, "per_inner_agg", static_cast<uint8_t>(per_inner_agg));
@@ -457,6 +466,16 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	}
 	deserializer.ReadPropertyWithDefault<vector<bool>>(228, "is_boolean_var", result->is_boolean_var);
 	deserializer.ReadPropertyWithDefault<double>(229, "objective_constant_offset", result->objective_constant_offset);
+	// Deserialize abs_maximize_links from two parallel vectors
+	{
+		vector<idx_t> am_aux, am_y;
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(230, "abs_maximize_link_aux", am_aux);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(231, "abs_maximize_link_y", am_y);
+		D_ASSERT(am_aux.size() == am_y.size());
+		for (idx_t i = 0; i < am_aux.size(); i++) {
+			result->abs_maximize_links.push_back({am_aux[i], am_y[i]});
+		}
+	}
 	uint8_t flat_agg_val = 0;
 	deserializer.ReadPropertyWithDefault<uint8_t>(209, "flat_objective_agg", flat_agg_val);
 	result->flat_objective_agg = static_cast<ObjectiveAggregateType>(flat_agg_val);

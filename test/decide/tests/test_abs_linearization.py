@@ -10,6 +10,8 @@ Covers:
   - test_abs_multiple_terms: two ABS terms in one expression
   - test_abs_no_decide_var: ABS without decide variable (regular SQL)
   - test_abs_mixed_vars: BOOLEAN + REAL with ABS on REAL only
+  - test_abs_maximize_objective_basic: MAXIMIZE SUM(ABS(x - col)) with Big-M fix
+  - test_abs_maximize_no_bound_raises: MAXIMIZE SUM(ABS(x - col)) without upper bound raises
 """
 
 import time
@@ -779,3 +781,119 @@ def test_real_abs_fractional_target_oracle(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_abs_maximize_objective_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """MAXIMIZE SUM(ABS(x - l_quantity)): Big-M reformulation must return correct optimum.
+
+    Regression test for the unsound MAXIMIZE+ABS linearization bug. Previously
+    the optimizer emitted only aux >= inner and aux >= -inner (lower-envelope),
+    which left aux unbounded under MAXIMIZE, producing a spurious 'unbounded' error.
+    The fix adds two Big-M upper-bound constraints that pin aux = |inner| exactly.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem
+        WHERE l_orderkey <= 3
+        DECIDE x IS REAL
+        SUCH THAT SUM(x) = 100 AND x <= 50
+        MAXIMIZE SUM(ABS(x - l_quantity))
+    """
+    t0 = time.perf_counter()
+    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    packdb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 3
+    """).fetchall()
+
+    n = len(data)
+    max_qty = max(row[2] for row in data)
+    M = 50.0 + max_qty  # safe upper bound on |x_i - qty_i|: x in [0,50], qty in data
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("abs_maximize_basic")
+    xnames = [f"x_{i}" for i in range(n)]
+    dnames = [f"d_{i}" for i in range(n)]
+    ynames = [f"y_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=50.0)
+    for dn in dnames:
+        oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
+    for yn in ynames:
+        oracle_solver.add_variable(yn, VarType.BINARY)
+
+    # SUM(x) = 100
+    oracle_solver.add_constraint(
+        {xnames[i]: 1.0 for i in range(n)}, "=", 100.0, name="sum_eq",
+    )
+    # ABS Big-M formulation: all four constraints per row
+    for i in range(n):
+        qty = data[i][2]
+        two_M = 2.0 * M
+        # Lower bounds (same as MINIMIZE)
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+        )
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+        )
+        # Upper bounds (new for MAXIMIZE): pin d_i = |x_i - qty_i|
+        # d_i <= (x_i - qty_i) + 2M*(1-y_i)  =>  d_i - x_i + 2M*y_i <= -qty_i + 2M
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: -1.0, ynames[i]: two_M}, "<=",
+            -qty + two_M, name=f"abs_ub1_{i}",
+        )
+        # d_i <= -(x_i - qty_i) + 2M*y_i  =>  d_i + x_i - 2M*y_i <= qty_i
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: 1.0, ynames[i]: -two_M}, "<=",
+            qty, name=f"abs_ub2_{i}",
+        )
+    oracle_solver.set_objective(
+        {dnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    assert result.status == SolverStatus.OPTIMAL
+    packdb_obj = _compute_abs_objective(packdb_result, packdb_cols, "x", "l_quantity")
+    assert abs(packdb_obj - result.objective_value) <= 1e-3, (
+        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    )
+
+    perf_tracker.record(
+        "abs_maximize_basic", packdb_time, build_time,
+        result.solve_time_seconds, n, n * 3, 1 + n * 4,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_abs_maximize_no_bound_raises(packdb_cli):
+    """MAXIMIZE SUM(ABS(x - l_quantity)) without an upper bound on x must raise.
+
+    The Big-M computation requires a finite upper bound on the decision variable
+    to pin aux = |inner|. Without it, there is no valid M and PackDB must raise
+    an InvalidInputException naming the unbounded variable.
+    """
+    sql = """
+        SELECT l_quantity, x
+        FROM lineitem
+        WHERE l_orderkey <= 3
+        DECIDE x IS REAL
+        SUCH THAT SUM(x) = 100
+        MAXIMIZE SUM(ABS(x - l_quantity))
+    """
+    with pytest.raises(Exception, match="finite bound"):
+        packdb_cli.execute(sql)
