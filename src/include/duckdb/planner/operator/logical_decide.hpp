@@ -59,6 +59,13 @@ public:
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
 
+    // Additive constant peeled from the parsed objective body during
+    // NormalizeDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`).
+    // The solver ignores this — it doesn't change argmax/argmin — but it's
+    // preserved here so a future "report the objective value" feature can
+    // add it back without losing information. Zero when nothing was peeled.
+    double objective_constant_offset = 0.0;
+
     // Number of auxiliary variables at the end of decide_variables (created by binder and optimizer)
     idx_t num_auxiliary_vars = 0;
 
@@ -81,6 +88,30 @@ public:
         idx_t other_var_idx;  // Index of the non-Boolean variable x
     };
     vector<BilinearLink> bilinear_links;
+
+    //! Composed MIN/MAX constraint: additive LHS with one or more MIN/MAX terms alongside
+    //! SUM/AVG terms. Each term becomes a global auxiliary at execution time (MIN/MAX) or
+    //! is summed into the outer ILP row (SUM/AVG). See DecideOptimizer::RewriteComposedMinMax.
+    struct ComposedMinMaxTerm {
+        enum Kind { SUM_KIND, MINMAX_KIND };
+        Kind kind;
+        string agg_name;                      // "sum", "avg", "min", "max"
+        int sign;                             // +1 or -1 (from subtraction)
+        unique_ptr<Expression> inner_expr;    // The expression inside the aggregate
+        unique_ptr<Expression> filter;        // Aggregate-local WHEN filter (optional)
+        bool is_easy = true;                  // For MIN/MAX: easy (no Big-M) or hard (indicator).
+    };
+    struct ComposedMinMaxConstraint {
+        vector<ComposedMinMaxTerm> terms;
+        unique_ptr<Expression> rhs_expr;      // RHS expression (typically scalar constant)
+        ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >)
+    };
+    vector<ComposedMinMaxConstraint> composed_minmax_constraints;
+
+    //! Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms in the objective.
+    //! Populated by DecideOptimizer::RewriteComposedMinMaxObjective. Empty when the
+    //! objective is a single aggregate (handled by RewriteMinMaxObjective) or plain linear.
+    vector<ComposedMinMaxTerm> composed_minmax_objective_terms;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 

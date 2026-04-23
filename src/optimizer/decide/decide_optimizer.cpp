@@ -52,6 +52,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
+	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
 	RewriteNotEqual(decide);
 	RewriteAvgToSum(decide);
@@ -194,6 +195,259 @@ static bool BoundExprReferencesDecideVar(const Expression &expr, idx_t decide_in
 }
 
 // ---------------------------------------------------------------------------
+// Composed MIN/MAX constraints (additive LHS mixing SUM/AVG/MIN/MAX terms)
+// ---------------------------------------------------------------------------
+//
+// Single-term `MIN/MAX(expr) CMP K` is handled by RewriteMinMax below. When a
+// MIN/MAX appears *inside* an additive LHS (e.g. `SUM(a*x) + MAX(b*x) <= K`),
+// we extract the full constraint shape into decide.composed_minmax_constraints
+// and replace the comparison with a TRUE placeholder. The physical layer
+// allocates global auxiliaries (z_k per MIN/MAX term) and emits the pinning
+// constraints at sink-finalize time.
+
+void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
+	if (decide.decide_constraints) {
+		RewriteComposedMinMaxInConstraint(decide.decide_constraints, decide);
+	}
+	RewriteComposedMinMaxObjectiveTop(decide);
+}
+
+// Unwrap CAST wrappers to get at the payload expression.
+static const Expression &UnwrapCast(const Expression &e) {
+	const Expression *cur = &e;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<BoundCastExpression>().child.get();
+	}
+	return *cur;
+}
+
+// True if the expression is a BOUND_FUNCTION for `+` (after unwrapping cast).
+static bool IsAddNode(const Expression &e) {
+	auto &u = UnwrapCast(e);
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
+	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == "+";
+}
+
+// True if the expression is a `-` function (both binary and unary).
+static bool IsSubNode(const Expression &e) {
+	auto &u = UnwrapCast(e);
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
+	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == "-";
+}
+
+// True if any MIN/MAX aggregate over a decide var appears at or below the node.
+// Recurses through any function node's children (not just +/-), so shapes like
+// `2 * MIN(...)` are detected and can be rejected with a clean binder error.
+static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
+	auto &u = UnwrapCast(e);
+	if (u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		auto &agg = u.Cast<BoundAggregateExpression>();
+		auto name = StringUtil::Lower(agg.function.name);
+		if ((name == "min" || name == "max") && agg.children.size() == 1 &&
+		    BoundExprReferencesDecideVar(*agg.children[0], decide_index)) {
+			return true;
+		}
+	}
+	if (u.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &fn = u.Cast<BoundFunctionExpression>();
+		for (auto &child : fn.children) {
+			if (AdditiveContainsMinMax(*child, decide_index)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+// Walk the additive LHS, emitting a ComposedMinMaxTerm for each leaf aggregate.
+// Throws BinderException on v1-unsupported shapes (non-aggregate leaves,
+// nested subtraction/scaling, non-SUM/AVG/MIN/MAX aggregates).
+static void WalkComposedLhs(const Expression &e, int sign, idx_t decide_index, bool outer_push_down,
+                             vector<LogicalDecide::ComposedMinMaxTerm> &out_terms) {
+	auto &u = UnwrapCast(e);
+	if (IsAddNode(u)) {
+		auto &fn = u.Cast<BoundFunctionExpression>();
+		for (auto &child : fn.children) {
+			WalkComposedLhs(*child, sign, decide_index, outer_push_down, out_terms);
+		}
+		return;
+	}
+	if (IsSubNode(u)) {
+		// v1 rejects subtraction in composed MIN/MAX LHS — it flips the direction
+		// of each term, doubling the easy/hard classification surface.
+		throw BinderException(
+		    "Composed MIN/MAX in DECIDE v1 does not support subtraction in the LHS. "
+		    "Rewrite the constraint as an additive sum (e.g., move terms to the RHS).");
+	}
+	// Scalar * aggregate (e.g. `2 * MIN(...)`) is not supported in v1.
+	if (u.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &fn = u.Cast<BoundFunctionExpression>();
+		auto fname = StringUtil::Lower(fn.function.name);
+		if (fname == "*" || fname == "/") {
+			throw BinderException(
+			    "Composed MIN/MAX in DECIDE v1 does not support scalar multiplication "
+			    "or division of aggregate terms (e.g. `2 * MIN(...)`). Each term must "
+			    "be a bare SUM/AVG/MIN/MAX aggregate.");
+		}
+	}
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		throw BinderException(
+		    "Composed MIN/MAX in DECIDE v1 supports only additive sums of SUM/AVG/MIN/MAX aggregates. "
+		    "Got non-aggregate term: %s",
+		    e.ToString());
+	}
+	auto &agg = u.Cast<BoundAggregateExpression>();
+	auto name = StringUtil::Lower(agg.function.name);
+	if (name != "sum" && name != "avg" && name != "min" && name != "max") {
+		throw BinderException("Composed MIN/MAX in DECIDE v1 does not support aggregate '%s'; "
+		                      "only SUM/AVG/MIN/MAX are supported.", name);
+	}
+	if (agg.children.size() != 1) {
+		throw BinderException("Composed MIN/MAX: aggregate '%s' must have a single inner expression.", name);
+	}
+
+	LogicalDecide::ComposedMinMaxTerm term;
+	term.kind = (name == "min" || name == "max")
+	                ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
+	                : LogicalDecide::ComposedMinMaxTerm::SUM_KIND;
+	term.agg_name = name;
+	term.sign = sign;
+	term.inner_expr = agg.children[0]->Copy();
+	if (agg.filter) {
+		term.filter = agg.filter->Copy();
+	}
+	if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
+		bool is_max = (name == "max");
+		// z_k pushed down if the outer wants LHS small and this term's sign is +,
+		// or outer wants LHS large and this term's sign is -.
+		bool z_pushed_down = (sign > 0) ? outer_push_down : !outer_push_down;
+		// Easy: MAX pushed down, or MIN pushed up.
+		term.is_easy = (is_max && z_pushed_down) || (!is_max && !z_pushed_down);
+	}
+	out_terms.push_back(std::move(term));
+}
+
+void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide) {
+	if (!expr) {
+		return;
+	}
+
+	// Walk through AND conjunctions and WHEN/PER wrappers (no composed MIN/MAX inside WHEN/PER in v1).
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr->Cast<BoundConjunctionExpression>();
+		if (conj.alias == WHEN_CONSTRAINT_TAG || IsPerConstraintTag(conj.alias)) {
+			// If the wrapped constraint is composed MIN/MAX, reject in v1.
+			if (!conj.children.empty()) {
+				auto &inner = *conj.children[0];
+				if (inner.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+					auto &cmp = inner.Cast<BoundComparisonExpression>();
+					if (cmp.left && AdditiveContainsMinMax(*cmp.left, decide.decide_index) &&
+					    IsAddNode(*cmp.left)) {
+						throw BinderException(
+						    "Composed MIN/MAX in DECIDE v1 does not support outer WHEN/PER wrappers. "
+						    "Remove the WHEN/PER or restructure the constraint.");
+					}
+				}
+				RewriteComposedMinMaxInConstraint(conj.children[0], decide);
+			}
+			return;
+		}
+		// Regular AND conjunction — recurse into all children
+		for (auto &child : conj.children) {
+			RewriteComposedMinMaxInConstraint(child, decide);
+		}
+		return;
+	}
+
+	if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+		return;
+	}
+	auto &comp = expr->Cast<BoundComparisonExpression>();
+	if (!comp.left) {
+		return;
+	}
+
+	// Must be additive (+/-) AND contain a MIN/MAX leaf; otherwise leave to the
+	// single-term rewrite. The walker rejects subtraction with a clear binder error.
+	if (!IsAddNode(*comp.left) && !IsSubNode(*comp.left)) {
+		return;
+	}
+	if (!AdditiveContainsMinMax(*comp.left, decide.decide_index)) {
+		return;
+	}
+
+	auto cmp_type = comp.type;
+	if (cmp_type != ExpressionType::COMPARE_LESSTHAN &&
+	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
+	    cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
+	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+		throw BinderException(
+		    "Composed MIN/MAX in DECIDE v1 supports only <, <=, >, >= comparisons. "
+		    "Equality, IN, and BETWEEN are not supported.");
+	}
+
+	bool outer_push_down = (cmp_type == ExpressionType::COMPARE_LESSTHAN ||
+	                         cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+
+	LogicalDecide::ComposedMinMaxConstraint spec;
+	spec.outer_cmp = cmp_type;
+	spec.rhs_expr = comp.right->Copy();
+
+	WalkComposedLhs(*comp.left, /*sign=*/1, decide.decide_index, outer_push_down, spec.terms);
+
+	decide.composed_minmax_constraints.push_back(std::move(spec));
+
+	// Replace the comparison with a TRUE placeholder so the normal constraint path is a no-op.
+	expr = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+}
+
+void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
+	if (!decide.decide_objective) {
+		return;
+	}
+	auto &obj = *decide.decide_objective;
+
+	// Reject composed MIN/MAX in objectives with outer PER or WHEN (v1 scope).
+	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = obj.Cast<BoundConjunctionExpression>();
+		if (IsPerConstraintTag(conj.alias) || conj.alias == WHEN_CONSTRAINT_TAG) {
+			// If the wrapped objective is composed, reject.
+			if (!conj.children.empty()) {
+				auto &inner = *conj.children[0];
+				if (AdditiveContainsMinMax(inner, decide.decide_index) &&
+				    (IsAddNode(inner) || IsSubNode(inner))) {
+					throw BinderException(
+					    "Composed MIN/MAX in DECIDE v1 does not support outer WHEN/PER "
+					    "wrappers on the objective. Restructure the objective.");
+				}
+			}
+			return;
+		}
+	}
+
+	// LHS must be additive (+/-) AND contain a MIN/MAX leaf; otherwise leave to
+	// the flat-single-aggregate rewrite.
+	if (!IsAddNode(obj) && !IsSubNode(obj)) {
+		return;
+	}
+	if (!AdditiveContainsMinMax(obj, decide.decide_index)) {
+		return;
+	}
+
+	// Direction: MAXIMIZE pushes each term UP; MINIMIZE pushes each term DOWN.
+	bool outer_push_down = (decide.decide_sense == DecideSense::MINIMIZE);
+
+	vector<LogicalDecide::ComposedMinMaxTerm> terms;
+	WalkComposedLhs(obj, /*sign=*/1, decide.decide_index, outer_push_down, terms);
+
+	decide.composed_minmax_objective_terms = std::move(terms);
+
+	// Replace the objective with a zero placeholder. The physical layer fills in
+	// objective coefficients from the spec.
+	decide.decide_objective = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+}
+
+// ---------------------------------------------------------------------------
 // MIN/MAX linearization
 // ---------------------------------------------------------------------------
 
@@ -238,8 +492,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			if (!conj.children.empty()) {
 				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
 				// Easy MIN/MAX (e.g., MAX(e) <= C, MIN(e) >= C) are vacuously true over
-				// empty sets. Strip PER — the per-row form skips WHEN-excluded rows, which
-				// is correct for both PER and PER STRICT (vacuously true = no constraint).
+				// empty sets. Strip PER — the per-row form skips WHEN-excluded rows.
 				if (out_was_easy) {
 					expr = std::move(conj.children[0]);
 				}
@@ -331,30 +584,11 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		}
 		new_constraints.push_back(std::move(easy));
 
-		// Hard part: create indicator
+		// Hard part: allocate indicator + tagged SUM
 		auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
 		                            : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-		idx_t ind_idx = decide.decide_variables.size();
-		string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
-		auto ind_var = make_uniq<BoundColumnRefExpression>(
-		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
-		decide.decide_variables.push_back(std::move(ind_var));
-		decide.num_auxiliary_vars++;
-		decide.is_boolean_var.push_back(true);
-		if (!decide.variable_entity_scope.empty()) {
-			decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
-		}
-		decide.minmax_indicator_links.emplace_back(fname, ind_idx);
-
-		// Replace MIN/MAX with SUM for the hard part, tagged with indicator index
-		vector<unique_ptr<Expression>> sum_children;
-		sum_children.push_back(agg.children[0]->Copy());
-		auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-		if (agg.filter) {
-			new_sum->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
-		}
-		new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "_" + fname + "__";
-		comp.left = std::move(new_sum);
+		idx_t ind_idx;
+		comp.left = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
 		comp.type = hard_cmp_type;
 		return;
 	}
@@ -382,30 +616,41 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	}
 
 	if (is_hard) {
-		// Hard case: create indicator variable for Big-M linearization
-		idx_t ind_idx = decide.decide_variables.size();
-		string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
-		auto ind_var = make_uniq<BoundColumnRefExpression>(
-		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
-		decide.decide_variables.push_back(std::move(ind_var));
-		decide.num_auxiliary_vars++;
-		decide.is_boolean_var.push_back(true);
-		if (!decide.variable_entity_scope.empty()) {
-			decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
-		}
-		decide.minmax_indicator_links.emplace_back(fname, ind_idx);
-
-		// Rewrite: replace MIN/MAX with SUM, tagged with indicator index
-		vector<unique_ptr<Expression>> sum_children;
-		sum_children.push_back(agg.children[0]->Copy());
-		auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-		if (agg.filter) {
-			new_sum->Cast<BoundAggregateExpression>().filter = agg.filter->Copy();
-		}
-		new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "_" + fname + "__";
-		comp.left = std::move(new_sum);
+		// Hard case: allocate indicator + tagged SUM via shared helper
+		idx_t ind_idx;
+		comp.left = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
 		return;
 	}
+}
+
+unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxIndicator(LogicalDecide &decide,
+                                                                 const string &agg_name,
+                                                                 const Expression &inner,
+                                                                 const Expression *filter,
+                                                                 idx_t &out_ind_idx) {
+	// Allocate Boolean indicator decide variable
+	idx_t ind_idx = decide.decide_variables.size();
+	string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
+	auto ind_var = make_uniq<BoundColumnRefExpression>(
+	    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
+	decide.decide_variables.push_back(std::move(ind_var));
+	decide.num_auxiliary_vars++;
+	decide.is_boolean_var.push_back(true);
+	if (!decide.variable_entity_scope.empty()) {
+		decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+	}
+	decide.minmax_indicator_links.emplace_back(agg_name, ind_idx);
+
+	// Build a SUM(inner) aggregate tagged with the indicator index
+	vector<unique_ptr<Expression>> sum_children;
+	sum_children.push_back(inner.Copy());
+	auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
+	if (filter) {
+		new_sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
+	}
+	new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "_" + agg_name + "__";
+	out_ind_idx = ind_idx;
+	return new_sum;
 }
 
 void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {

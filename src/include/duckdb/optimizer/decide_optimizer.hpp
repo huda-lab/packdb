@@ -61,6 +61,21 @@ private:
 	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
 	void RewriteAvgInExpression(unique_ptr<Expression> &expr);
 
+	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
+	//! Extracts each term's metadata into decide.composed_minmax_constraints and replaces
+	//! the comparison with a no-op placeholder so the physical layer owns emission.
+	//! Must run before RewriteMinMax (which handles single top-level MIN/MAX).
+	void RewriteComposedMinMax(LogicalDecide &decide);
+
+	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons.
+	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide);
+
+	//! Detect a composed MIN/MAX objective (additive sum of SUM/AVG/MIN/MAX terms).
+	//! Extracts term metadata into decide.composed_minmax_objective_terms and replaces
+	//! the objective with a zero placeholder. Must run before RewriteMinMax (which
+	//! handles single top-level MIN/MAX objectives).
+	void RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide);
+
 	//! Rewrite MIN/MAX aggregates in constraints and objectives.
 	//! Constraints: easy cases (MAX<=K, MIN>=K) strip aggregate; hard cases create indicators.
 	//! Objectives: detect flat and nested PER patterns, set metadata, rewrite to SUM.
@@ -108,6 +123,14 @@ private:
 	//! replace with auxiliary variable references, and collect (aux_idx, inner_expr) pairs.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                       vector<pair<idx_t, unique_ptr<Expression>>> &abs_pairs);
+
+	//! Helper: allocate a Boolean indicator variable for a hard MIN/MAX aggregate and
+	//! produce the corresponding SUM(inner) aggregate tagged with MINMAX_INDICATOR_TAG_PREFIX.
+	//! Appends to decide.decide_variables, decide.minmax_indicator_links, and related metadata.
+	//! Returns the tagged SUM expression; the indicator variable index is written to out_ind_idx.
+	unique_ptr<Expression> EmitHardMinMaxIndicator(LogicalDecide &decide, const string &agg_name,
+	                                               const Expression &inner, const Expression *filter,
+	                                               idx_t &out_ind_idx);
 
 	//! Helper: append a constraint to the decide constraint tree via AND conjunction
 	static void AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint);
