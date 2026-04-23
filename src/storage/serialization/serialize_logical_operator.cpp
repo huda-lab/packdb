@@ -389,6 +389,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 		serializer.WritePropertyWithDefault<vector<idx_t>>(227, "bilinear_link_other", bl_other);
 	}
 	serializer.WritePropertyWithDefault<vector<bool>>(228, "is_boolean_var", is_boolean_var);
+	serializer.WritePropertyWithDefault<double>(229, "objective_constant_offset", objective_constant_offset);
 	serializer.WritePropertyWithDefault<uint8_t>(209, "flat_objective_agg", static_cast<uint8_t>(flat_objective_agg));
 	serializer.WritePropertyWithDefault<bool>(210, "flat_objective_is_easy", flat_objective_is_easy);
 	serializer.WritePropertyWithDefault<uint8_t>(211, "per_inner_agg", static_cast<uint8_t>(per_inner_agg));
@@ -455,6 +456,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 		}
 	}
 	deserializer.ReadPropertyWithDefault<vector<bool>>(228, "is_boolean_var", result->is_boolean_var);
+	deserializer.ReadPropertyWithDefault<double>(229, "objective_constant_offset", result->objective_constant_offset);
 	uint8_t flat_agg_val = 0;
 	deserializer.ReadPropertyWithDefault<uint8_t>(209, "flat_objective_agg", flat_agg_val);
 	result->flat_objective_agg = static_cast<ObjectiveAggregateType>(flat_agg_val);

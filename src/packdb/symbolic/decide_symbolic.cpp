@@ -6,9 +6,85 @@
 // Symbolic Translation Layer for DECIDE Expressions
 //
 //===----------------------------------------------------------------------===//
+//
+// ARCHITECTURE: Constraint LHS / objective body normalization
+// -----------------------------------------------------------
+// `NormalizeComparisonExpr` (constraints) and `NormalizeDecideObjective`
+// (objectives) are the entry points that DuckDB's bind path calls before
+// the DECIDE-specific binders run. Their job is to put the LHS / body into
+// a canonical shape that the per-row aggregate-LHS extractor in
+// `physical_decide.cpp` can walk: a tree of `+`/`-`/CAST/aggregate, with
+// constants moved to the RHS, like-terms combined, and pure-data scalars
+// hoisted out of SUM bodies as their own additive terms.
+//
+// The default normalizer uses SymEngine (`expand().simplify()`) for the
+// arithmetic, which is correct for plain linear LHSes but DESTRUCTIVE for
+// any expression carrying DECIDE-specific structural tags that SymEngine
+// doesn't understand. SymEngine treats unknown nodes as opaque and freely
+// reorders / flattens around them, scrambling structure the downstream
+// pipeline needs.
+//
+// Result: the constraint normalizer has FOUR mutually-exclusive paths,
+// guarded by `if (...) return cmp.Copy()` early returns at the top of
+// `NormalizeComparisonExpr`. They run in this order — first match wins:
+//
+//   1. Quadratic LHS bypass (`POWER(linear, 2)`, `(expr)*(expr)`)
+//      Why: SymEngine `.expand()` would distribute the square and lose
+//      the recognizable `POWER(linear, 2)` pattern that the QP extractor
+//      pattern-matches on to populate the Q matrix.
+//      Detector: `ComparisonLhsHasQuadraticOrBilinear`.
+//      Downstream: QP path in `physical_decide.cpp::DetectQuadraticPattern`.
+//
+//   2. Bilinear LHS bypass (`x * y`, decide vars in both factors)
+//      Why: SymEngine would distribute and reorder factors; the McCormick
+//      linearization extractor matches on specific tree shapes.
+//      Detector: `ComparisonLhsHasQuadraticOrBilinear` (shared with #1).
+//      Downstream: bilinear path in `physical_decide.cpp`.
+//
+//   3. Composed MIN/MAX LHS bypass (`SUM(...) + MIN(...)` etc.)
+//      Why: SymEngine doesn't know MIN/MAX semantics and would treat
+//      MAX(x*v) as just another opaque function symbol, combining it
+//      incorrectly with surrounding additive terms. The composed walker
+//      needs the additive structure intact to emit per-aggregate
+//      auxiliaries.
+//      Detector: `ContainsTopLevelMinOrMax`.
+//      Downstream: `RewriteComposedMinMaxInConstraint` in the optimizer.
+//
+//   4. Aggregate-local WHEN LHS path (`SUM(x) WHEN c`)
+//      NOT a true bypass — does its own parsed-level rewrite.
+//      Why: SymEngine doesn't know WHEN semantics and would absorb the
+//      WHEN tag as opaque, then expand around it, scrambling which terms
+//      the per-aggregate filter applies to.
+//      What it does: (a) folds `K * (SUM(x) WHEN c)` and
+//      `(SUM(x) WHEN c) / K` into `WHEN(SUM(K*x), c)` so the extractor
+//      sees a bare WHEN-tagged aggregate; (b) decomposes the LHS
+//      additively (recursing through `+`, binary `-`, unary `-`, CAST),
+//      peels pure-numeric leaves into a single offset; (c) rebuilds the
+//      LHS from the structural terms; (d) returns `LHS_struct OP (RHS - offset)`.
+//      Helpers: `CopyAndFoldConstantsIntoWhenAggregates`,
+//      `DecomposeAdditiveAtParsed`, `BuildAdditiveExpressionFromTerms`.
+//
+//   5. Default path: SymEngine `expand().simplify()` + term collection +
+//      LHS/RHS partition by decide-var presence + rebuild.
+//
+// SAFETY INVARIANT (informal): each bypass is conservative — it preserves
+// arbitrary leaf subtrees as opaque units when it doesn't recognize them.
+// Cross-class shapes (e.g. quadratic + WHEN + additive offset) match the
+// FIRST bypass in declaration order; the others would also have left them
+// alone. Cross-product integration tests in
+// `test/decide/tests/test_normalizer_path_interactions.py` pin this down
+// for the practical combinations.
+//
+// REFACTOR TRIPWIRE: if a fifth bypass is needed, the right move is a
+// dedicated refactor to a single classification-driven normalizer (see
+// the prior-conversation discussion in branch "issue 3"). Five paths is
+// too many to keep coherent by inspection.
+//
+//===----------------------------------------------------------------------===//
 
 #include "duckdb/packdb/symbolic/decide_symbolic.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/expression_binder/decide_binder.hpp"
 #include "symbolicc++.h"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -774,7 +850,20 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
         const auto &base = power_node->parameters.front();
         const auto &exponent = power_node->parameters.back();
         int64_t exponent_int;
-        if (!TryGetNonNegativeInteger(exponent, exponent_int)) {
+        bool is_non_negative = TryGetNonNegativeInteger(exponent, exponent_int);
+        // Negative integer exponent → reciprocal form (e.g. `x / w` → `x * w^-1`
+        // symbolically). Emit `1.0 / base^|k|` so the downstream evaluator
+        // sees a regular division. The binder has already rejected decide
+        // variables in the denominator, so `base` here is pure data.
+        if (!is_non_negative) {
+            int64_t neg_exp;
+            if (TryGetNonNegativeInteger(-exponent, neg_exp) && neg_exp > 0) {
+                auto denom = FromSymbolic(base, ctx);
+                for (int64_t i = 1; i < neg_exp; i++) {
+                    denom = MakeOp("*", std::move(denom), FromSymbolic(base, ctx));
+                }
+                return MakeOp("/", FromSymbolicNumber(1.0), std::move(denom));
+            }
             throw InternalException("FromSymbolic: Non-integer exponents are not supported in DECIDE normalization");
         }
         if (exponent_int == 0) {
@@ -882,6 +971,39 @@ static bool ContainsAggregateLocalWhen(const ParsedExpression &expr) {
     return false;
 }
 
+// Does the top-level additive tree of `expr` contain a raw MIN() or MAX()
+// aggregate as a sibling? This is the "composed MIN/MAX LHS" shape
+// (e.g. `SUM(x*v) + MAX(x*v)`). We walk only through `+` / `-` / `CAST` — a
+// MIN/MAX nested inside another function's argument (e.g. `SUM(x * MAX(v))`
+// where `MAX(v)` is a scalar coefficient) is NOT a composed sibling.
+static bool ContainsTopLevelMinOrMax(const ParsedExpression &expr) {
+    if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = expr.Cast<const FunctionExpression>();
+        if (!func.is_operator) {
+            auto fname = StringUtil::Lower(func.function_name);
+            return fname == "min" || fname == "max";
+        }
+        if (func.function_name == "+" || func.function_name == "-") {
+            for (auto &child : func.children) {
+                if (ContainsTopLevelMinOrMax(*child)) return true;
+            }
+        }
+        return false;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::OPERATOR) {
+        auto &op = expr.Cast<const OperatorExpression>();
+        for (auto &child : op.children) {
+            if (ContainsTopLevelMinOrMax(*child)) return true;
+        }
+        return false;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+        auto &cast = expr.Cast<const CastExpression>();
+        return ContainsTopLevelMinOrMax(*cast.child);
+    }
+    return false;
+}
+
 // Normalize comparator between LHS and numeric RHS by isolating SUM terms containing DECIDE variables
 // Forward declarations for quadratic/bilinear detection (defined later in file).
 static bool SumInnerIsQuadratic(const ParsedExpression &inner,
@@ -927,6 +1049,225 @@ static bool ComparisonLhsHasQuadraticOrBilinear(const ParsedExpression &lhs,
     return false;
 }
 
+// Walk a parsed expression as an additive tree (`+`, binary `-`, unary `-`,
+// CAST). Sign-tracks through subtraction. Stops at non-additive leaves.
+//
+// Each leaf is classified:
+//   - pure numeric constant: contributes (sign * value) to `out_constant`,
+//     does NOT appear in `out_terms`.
+//   - everything else (aggregates, WHEN-tagged aggregates, columns,
+//     multiplicative sub-expressions, etc.): pushed to `out_terms` as
+//     (sign, leaf*) for the caller to reconstruct.
+//
+// Used to peel constant offsets from a constraint LHS or objective body
+// without flattening WHEN-tagged aggregates (which the SymEngine-style
+// symbolic library would do, losing the per-aggregate filter boundary).
+static void DecomposeAdditiveAtParsed(
+    const ParsedExpression &expr, int sign,
+    vector<std::pair<int, const ParsedExpression *>> &out_terms,
+    double &out_constant) {
+    if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+        DecomposeAdditiveAtParsed(*expr.Cast<const CastExpression>().child,
+                                  sign, out_terms, out_constant);
+        return;
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = expr.Cast<const FunctionExpression>();
+        if (func.is_operator && func.function_name == "+") {
+            for (auto &child : func.children) {
+                DecomposeAdditiveAtParsed(*child, sign, out_terms, out_constant);
+            }
+            return;
+        }
+        if (func.is_operator && func.function_name == "-" && func.children.size() == 2) {
+            DecomposeAdditiveAtParsed(*func.children[0], sign, out_terms, out_constant);
+            DecomposeAdditiveAtParsed(*func.children[1], -sign, out_terms, out_constant);
+            return;
+        }
+        if (func.is_operator && func.function_name == "-" && func.children.size() == 1) {
+            DecomposeAdditiveAtParsed(*func.children[0], -sign, out_terms, out_constant);
+            return;
+        }
+    }
+    double cval;
+    if (IsNumericConstant(expr, cval)) {
+        out_constant += sign * cval;
+        return;
+    }
+    out_terms.push_back({sign, &expr});
+}
+
+// Recursively rewrite `K * AGG(inner)` (and `AGG(inner) * K`,
+// `AGG(inner) / K`) into `AGG(K * inner)`, where `AGG` is a PackDB aggregate
+// (SUM/AVG/MIN/MAX) and optionally wrapped in WHEN_CONSTRAINT_TAG. Without
+// this, constant scaling of an aggregate reaches the per-row extractor as
+// `*(K, BoundAggregate)`, which it can't walk.
+//
+// Linearity invariant: K must be decide-var-free so distributing it into
+// the aggregate's body preserves equivalence. A data column like `weight`
+// satisfies this (the fold turns `weight * SUM(x)` into `SUM(weight * x)`,
+// a standard per-row coefficient).
+static unique_ptr<ParsedExpression> CopyAndFoldConstantsIntoAggregates(
+    const ParsedExpression &expr,
+    const case_insensitive_map_t<idx_t> &decide_variables);
+
+// Return the inner aggregate FunctionExpression if `expr` is either a
+// direct aggregate call (SUM/AVG/MIN/MAX) or a WHEN-tagged aggregate, and
+// set `out_when` to the WHEN tag node if present (else nullptr). Unwraps
+// CASTs.
+static const FunctionExpression *AsFoldableAggregate(
+    const ParsedExpression &expr, const FunctionExpression *&out_when) {
+    out_when = nullptr;
+    const ParsedExpression *cur = &expr;
+    while (cur->GetExpressionClass() == ExpressionClass::CAST) {
+        cur = cur->Cast<const CastExpression>().child.get();
+    }
+    if (cur->GetExpressionClass() != ExpressionClass::FUNCTION) return nullptr;
+    auto &f = cur->Cast<const FunctionExpression>();
+    if (f.is_operator && f.function_name == WHEN_CONSTRAINT_TAG) {
+        if (f.children.size() != 2) return nullptr;
+        const ParsedExpression *child = f.children[0].get();
+        while (child->GetExpressionClass() == ExpressionClass::CAST) {
+            child = child->Cast<const CastExpression>().child.get();
+        }
+        if (child->GetExpressionClass() != ExpressionClass::FUNCTION) return nullptr;
+        auto &cf = child->Cast<const FunctionExpression>();
+        if (cf.is_operator) return nullptr;
+        auto name = StringUtil::Lower(cf.function_name);
+        if (name != "sum" && name != "avg" && name != "min" && name != "max") return nullptr;
+        out_when = &f;
+        return &cf;
+    }
+    if (!f.is_operator) {
+        auto name = StringUtil::Lower(f.function_name);
+        if (name == "sum" || name == "avg" || name == "min" || name == "max") {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+// Build a new aggregate (and optional WHEN wrapper) whose inner body is
+// `K * inner` or `inner / K`. `factor` is moved into the new body.
+static unique_ptr<ParsedExpression> MakeAggregateWithScaledInner(
+    const FunctionExpression &agg,
+    const FunctionExpression *when_tag,
+    unique_ptr<ParsedExpression> factor,
+    bool is_division,
+    const case_insensitive_map_t<idx_t> &decide_variables) {
+    if (agg.children.size() != 1) {
+        return when_tag ? when_tag->Copy() : agg.Copy();
+    }
+    auto inner_copy = CopyAndFoldConstantsIntoAggregates(*agg.children[0], decide_variables);
+    unique_ptr<ParsedExpression> new_inner;
+    if (is_division) {
+        new_inner = MakeOp("/", std::move(inner_copy), std::move(factor));
+    } else {
+        new_inner = MakeOp("*", std::move(factor), std::move(inner_copy));
+    }
+    vector<unique_ptr<ParsedExpression>> agg_args;
+    agg_args.push_back(std::move(new_inner));
+    auto new_agg = make_uniq<FunctionExpression>(agg.function_name, std::move(agg_args));
+    if (!when_tag) {
+        return std::move(new_agg);
+    }
+    vector<unique_ptr<ParsedExpression>> when_args;
+    when_args.push_back(std::move(new_agg));
+    when_args.push_back(when_tag->children[1]->Copy());
+    auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(when_args));
+    result->is_operator = true;
+    return std::move(result);
+}
+
+static unique_ptr<ParsedExpression> CopyAndFoldConstantsIntoAggregates(
+    const ParsedExpression &expr,
+    const case_insensitive_map_t<idx_t> &decide_variables) {
+    if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &func = expr.Cast<const FunctionExpression>();
+        if (func.is_operator && (func.function_name == "*" || func.function_name == "/") &&
+            func.children.size() == 2) {
+            const FunctionExpression *when_left = nullptr;
+            const FunctionExpression *when_right = nullptr;
+            const FunctionExpression *agg_left = AsFoldableAggregate(*func.children[0], when_left);
+            const FunctionExpression *agg_right = AsFoldableAggregate(*func.children[1], when_right);
+            if (func.function_name == "*") {
+                // Either side may be the aggregate; the other side is the
+                // scale factor. Reject only if both sides are aggregates
+                // (that product is quadratic / bilinear — a separate concern
+                // handled by its own pipeline).
+                if (agg_left && !agg_right &&
+                    !ExpressionContainsDecideVariable(*func.children[1], decide_variables)) {
+                    auto factor = CopyAndFoldConstantsIntoAggregates(*func.children[1], decide_variables);
+                    return MakeAggregateWithScaledInner(*agg_left, when_left, std::move(factor),
+                                                       /*is_division=*/false, decide_variables);
+                }
+                if (agg_right && !agg_left &&
+                    !ExpressionContainsDecideVariable(*func.children[0], decide_variables)) {
+                    auto factor = CopyAndFoldConstantsIntoAggregates(*func.children[0], decide_variables);
+                    return MakeAggregateWithScaledInner(*agg_right, when_right, std::move(factor),
+                                                       /*is_division=*/false, decide_variables);
+                }
+            } else { // "/"
+                // Only `AGG / K` is foldable (numerator must be the
+                // aggregate; division by a decide variable was already
+                // rejected upstream by the binder).
+                if (agg_left &&
+                    !ExpressionContainsDecideVariable(*func.children[1], decide_variables)) {
+                    auto divisor = CopyAndFoldConstantsIntoAggregates(*func.children[1], decide_variables);
+                    return MakeAggregateWithScaledInner(*agg_left, when_left, std::move(divisor),
+                                                       /*is_division=*/true, decide_variables);
+                }
+            }
+        }
+        // Default: copy the function, recursively folding inside children.
+        vector<unique_ptr<ParsedExpression>> new_children;
+        new_children.reserve(func.children.size());
+        for (auto &child : func.children) {
+            new_children.push_back(CopyAndFoldConstantsIntoAggregates(*child, decide_variables));
+        }
+        auto result = make_uniq<FunctionExpression>(func.function_name, std::move(new_children));
+        result->is_operator = func.is_operator;
+        result->catalog = func.catalog;
+        result->schema = func.schema;
+        result->distinct = func.distinct;
+        result->export_state = func.export_state;
+        if (func.filter) {
+            result->filter = func.filter->Copy();
+        }
+        return std::move(result);
+    }
+    // Non-function expressions: just copy.
+    return expr.Copy();
+}
+
+// Reconstruct an additive expression from sign-tagged terms. Each entry is
+// (sign, leaf*). The result is `term0 (+/-) term1 (+/-) ...`. Returns
+// nullptr if `terms` is empty.
+static unique_ptr<ParsedExpression> BuildAdditiveExpressionFromTerms(
+    const vector<std::pair<int, const ParsedExpression *>> &terms) {
+    if (terms.empty()) return nullptr;
+    unique_ptr<ParsedExpression> acc;
+    for (auto &entry : terms) {
+        int sign = entry.first;
+        auto term_copy = entry.second->Copy();
+        if (!acc) {
+            // First term: apply unary `-` if sign is negative.
+            if (sign < 0) {
+                vector<unique_ptr<ParsedExpression>> args;
+                args.push_back(std::move(term_copy));
+                auto neg = make_uniq<FunctionExpression>("-", std::move(args));
+                neg->is_operator = true;
+                acc = std::move(neg);
+            } else {
+                acc = std::move(term_copy);
+            }
+        } else {
+            acc = MakeOp(sign >= 0 ? "+" : "-", std::move(acc), std::move(term_copy));
+        }
+    }
+    return acc;
+}
+
 static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpression &cmp,
                                                             const case_insensitive_map_t<idx_t> &decide_variables) {
     // Only handle <=, <, >=, > with numeric RHS
@@ -946,15 +1287,49 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     }
 
     // Aggregate-local WHEN needs to survive into binding/execution as a
-    // per-aggregate filter. Symbolic normalization would flatten the aggregate
-    // tree and lose the filter boundary.
+    // per-aggregate filter. The full SymEngine-style normalization below
+    // would flatten the aggregate tree and lose the filter boundary, so we
+    // can't use it. Instead we do a smaller parsed-level rewrite that does
+    // exactly what the user expects without touching the WHEN tag:
+    //   1. Fold constant scalars into the WHEN-tagged aggregates' bodies
+    //      (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`,
+    //      `(SUM(x) WHEN c) / K` → `WHEN(SUM(x/K), c)`). This makes the
+    //      downstream extractor see a bare WHEN-tagged aggregate it can walk.
+    //   2. Decompose the LHS additively, peel pure-numeric terms into a
+    //      single offset, and rebuild the LHS from the structural terms.
+    //   3. Move the offset to the RHS as `RHS - offset`, exactly mirroring
+    //      what the symbolic library would do for the non-WHEN case.
     if (ContainsAggregateLocalWhen(*cmp.left)) {
-        return cmp.Copy();
+        auto folded_lhs = CopyAndFoldConstantsIntoAggregates(*cmp.left, decide_variables);
+        vector<std::pair<int, const ParsedExpression *>> structural;
+        double lhs_offset = 0.0;
+        DecomposeAdditiveAtParsed(*folded_lhs, +1, structural, lhs_offset);
+        if (structural.empty()) {
+            // LHS was entirely constants — pathological; let the caller see
+            // the original (the SUM-presence guard above means this branch
+            // should be unreachable, but be defensive).
+            return cmp.Copy();
+        }
+        auto new_lhs = BuildAdditiveExpressionFromTerms(structural);
+        auto new_rhs = MakeDoubleConstant(rhs_num - lhs_offset);
+        return make_uniq_base<ParsedExpression, ComparisonExpression>(
+            cmp.type, std::move(new_lhs), std::move(new_rhs));
     }
 
     // Skip normalization for quadratic/bilinear constraints — symbolic expansion
     // would destroy the POWER(expr, 2) or x*y structure that the solver pipeline needs.
     if (ComparisonLhsHasQuadraticOrBilinear(*cmp.left, decide_variables)) {
+        return cmp.Copy();
+    }
+
+    // Skip normalization when the LHS contains composed MIN/MAX (a MIN() or
+    // MAX() aggregate appearing as an additive sibling to SUM, e.g.
+    // `SUM(x*v) + MAX(x*v) <= K`). Symbolic normalization would wrap all
+    // decide-variable-bearing terms in a single sum(), conflating the MIN/MAX
+    // aggregate boundary with SUM-additive semantics and producing garbage
+    // like `sum(x * (v + max(v)))`. The composed-MIN/MAX optimizer pass
+    // handles this shape directly.
+    if (ContainsTopLevelMinOrMax(*cmp.left)) {
         return cmp.Copy();
     }
 
@@ -1107,7 +1482,7 @@ static unique_ptr<ParsedExpression> NormalizeConstraintsRecursive(const ParsedEx
                 if (normalized_constraint->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
                     auto &conj = normalized_constraint->Cast<ConjunctionExpression>();
                     if (conj.children.size() >= 2) {
-                        // Wrap only the last child with PER (preserve original tag for STRICT)
+                        // Wrap only the last child with PER
                         vector<unique_ptr<ParsedExpression>> per_args;
                         per_args.push_back(std::move(conj.children.back()));
                         for (idx_t i = 1; i < func.children.size(); i++) {
@@ -1338,14 +1713,21 @@ static unique_ptr<ParsedExpression> ReassociateObjectiveWhenComparison(const Com
     return std::move(result);
 }
 
-unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
-                                                      const case_insensitive_map_t<idx_t> &decide_variables) {
+// Recursive worker for objective normalization. Handles the WHEN/PER/SUM
+// dispatch and symbolic normalization of a single aggregate body. The top
+// level (public NormalizeDecideObjective) peels additive constants and
+// K*WHEN scalar factors before delegating into this worker, so `expr` here
+// is guaranteed to be either a bare aggregate/WHEN/PER shape or a sum of
+// such shapes — no constant offsets, no K*(WHEN-aggregate) products.
+static unique_ptr<ParsedExpression> NormalizeObjectiveRecursive(
+    const ParsedExpression &expr,
+    const case_insensitive_map_t<idx_t> &decide_variables) {
     // Expect SUM(inner), possibly wrapped in WHEN or PER
     if (expr.GetExpressionClass() == ExpressionClass::COMPARISON) {
         auto &cmp = expr.Cast<const ComparisonExpression>();
         auto reassociated = ReassociateObjectiveWhenComparison(cmp);
         if (reassociated) {
-            return NormalizeDecideObjective(*reassociated, decide_variables);
+            return NormalizeObjectiveRecursive(*reassociated, decide_variables);
         }
         return expr.Copy();
     }
@@ -1353,9 +1735,24 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
         return expr.Copy();
     }
     auto &f = expr.Cast<FunctionExpression>();
+    // Multi-aggregate additive body (`SUM(x) + SUM(y)`,
+    // `SUM(x) WHEN c1 + SUM(y) WHEN c2`, etc.): normalize each term
+    // independently and rebuild. The per-term normalizations preserve the
+    // aggregate boundaries; the downstream extractor handles sum-of-aggregates
+    // bodies natively.
+    if (f.is_operator && (f.function_name == "+" || f.function_name == "-")) {
+        vector<unique_ptr<ParsedExpression>> new_children;
+        new_children.reserve(f.children.size());
+        for (auto &child : f.children) {
+            new_children.push_back(NormalizeObjectiveRecursive(*child, decide_variables));
+        }
+        auto result = make_uniq<FunctionExpression>(f.function_name, std::move(new_children));
+        result->is_operator = true;
+        return std::move(result);
+    }
     // PackDB: Handle WHEN wrapper — normalize inner objective, pass through condition
     if (f.is_operator && f.function_name == WHEN_CONSTRAINT_TAG) {
-        auto normalized = NormalizeDecideObjective(*f.children[0], decide_variables);
+        auto normalized = NormalizeObjectiveRecursive(*f.children[0], decide_variables);
         auto cond = f.children[1]->Copy();
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(normalized));
@@ -1366,7 +1763,7 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
     }
     // PackDB: Handle PER wrapper — normalize inner objective, pass through PER columns
     if (f.is_operator && IsPerConstraintTag(f.function_name)) {
-        auto normalized = NormalizeDecideObjective(*f.children[0], decide_variables);
+        auto normalized = NormalizeObjectiveRecursive(*f.children[0], decide_variables);
         vector<unique_ptr<ParsedExpression>> args;
         args.push_back(std::move(normalized));
         for (idx_t i = 1; i < f.children.size(); i++) {
@@ -1431,6 +1828,49 @@ unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &ex
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(std::move(new_inner));
     return make_uniq_base<ParsedExpression, FunctionExpression>("sum", std::move(args));
+}
+
+unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
+                                                      const case_insensitive_map_t<idx_t> &decide_variables,
+                                                      double &out_constant_offset) {
+    out_constant_offset = 0.0;
+
+    // Step 1: fold K * (SUM WHEN c) and (SUM WHEN c) / K so the downstream
+    // extractor sees bare WHEN-tagged aggregates even when the user scaled
+    // them with a constant factor. Mirrors the constraint-side treatment in
+    // NormalizeComparisonExpr. No-op for non-WHEN bodies and for bodies
+    // where WHEN-tagged aggregates aren't wrapped in */÷.
+    auto folded_body = CopyAndFoldConstantsIntoAggregates(expr, decide_variables);
+
+    // Step 2: peel additive constants. Walks `+`, binary/unary `-`, CAST.
+    // Pure-numeric leaves go into the offset; structural terms are preserved
+    // with their signs for rebuild. The offset doesn't affect argmax/argmin,
+    // so dropping it from the objective body is mathematically free.
+    vector<std::pair<int, const ParsedExpression *>> structural;
+    double offset = 0.0;
+    DecomposeAdditiveAtParsed(*folded_body, +1, structural, offset);
+
+    unique_ptr<ParsedExpression> peeled_body;
+    if (structural.empty()) {
+        // Pure-constant objective (`MAXIMIZE 7`). Degenerate — argmax is any
+        // feasible point. Hand the original expression to the downstream
+        // binder so it produces whatever error/behavior is appropriate.
+        peeled_body = folded_body->Copy();
+    } else if (fabs(offset) < 1e-12 && structural.size() == 1 && structural[0].first > 0) {
+        // Nothing peeled and no rebuild needed (single structural term with
+        // positive sign): skip the rebuild to keep the expression shape
+        // identical for the common case where no offset was present.
+        peeled_body = folded_body->Copy();
+    } else {
+        peeled_body = BuildAdditiveExpressionFromTerms(structural);
+        out_constant_offset = offset;
+    }
+
+    // Step 3: run the recursive normalizer on the cleaned-up body. After
+    // peel + fold, the body is a bare aggregate, a WHEN/PER-wrapped
+    // aggregate, or an additive sum of such terms — all shapes the
+    // recursive worker and downstream extractor handle natively.
+    return NormalizeObjectiveRecursive(*peeled_body, decide_variables);
 }
 
 //===--------------------------------------------------------------------===//

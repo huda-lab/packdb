@@ -63,8 +63,17 @@ unique_ptr<ParsedExpression> NormalizeDecideConstraints(const ParsedExpression &
 
 //! Normalize objective: rewrite SUM inner as x * (row_expr) and combine numeric
 //! constants inside the inner product; does not change overall scaling.
+//!
+//! Additive constant offsets on the objective body (`MAXIMIZE SUM(x) + 3`,
+//! `MAXIMIZE (SUM(x) WHEN c) + 3`, `MAXIMIZE 2 * SUM(x) + SUM(y) - 5`) are
+//! peeled from the body because they don't affect `argmax`/`argmin`. The
+//! peeled offset is returned via `out_constant_offset` so the caller can
+//! stash it on `LogicalDecide` for later retrieval (e.g. if/when PackDB
+//! surfaces the objective *value* to users, the offset must be added back).
+//! If no offset is peeled, the out parameter is left at 0.0.
 unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
-                                                      const case_insensitive_map_t<idx_t> &decide_variables);
+                                                      const case_insensitive_map_t<idx_t> &decide_variables,
+                                                      double &out_constant_offset);
 
 //! Produce a Graphviz DOT representation of a ParsedExpression tree
 string ExpressionToDot(const ParsedExpression &expr);

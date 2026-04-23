@@ -57,6 +57,13 @@ public:
     unique_ptr<Expression> decide_constraints;
     DecideSense decide_sense;
     unique_ptr<Expression> decide_objective;
+    //! Additive constant peeled from the parsed objective body during
+    //! NormalizeDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`). The
+    //! solver doesn't need this to compute `argmax`/`argmin`, but it's kept
+    //! here so callers that ever want to report the actual objective value
+    //! can add it back. Zero when nothing was peeled. Transferred to
+    //! LogicalDecide at plan time.
+    double objective_constant_offset = 0.0;
     //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
     //! Per-variable boolean flag (true if declared IS BOOLEAN)

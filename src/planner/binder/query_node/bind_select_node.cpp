@@ -762,7 +762,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         // NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
         // (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
 
-        // COUNT/MIN/MAX indicator bounds are handled automatically by BOOLEAN type
+        // MIN/MAX indicator bounds are handled automatically by BOOLEAN type
         // in physical_decide.cpp. NE indicator bounds are handled by DecideOptimizer.
         // IN indicators use INTEGER (needed for arithmetic in parsed constraints),
         // so they need explicit bounds (0 <= z <= 1).
@@ -792,12 +792,22 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
         if (statement.decide_constraints) {
             // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
+            // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
+            // DECIDE variable. Must run before NormalizeDecideConstraints — the
+            // symbolic layer throws InternalException on unknown functions, and
+            // the per-row path would silently strip them.
+            ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
             statement.decide_constraints = NormalizeDecideConstraints(*statement.decide_constraints, decide_variable_names);
             // deb("-- Normalized SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
         }
         if (statement.decide_objective) {
             // deb("-- Parsed OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
-            statement.decide_objective = NormalizeDecideObjective(*statement.decide_objective, decide_variable_names);
+            ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
+            double peeled_offset = 0.0;
+            statement.decide_objective = NormalizeDecideObjective(*statement.decide_objective,
+                                                                   decide_variable_names,
+                                                                   peeled_offset);
+            result->objective_constant_offset = peeled_offset;
             // deb("-- Normalized OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
         }
 
@@ -805,14 +815,12 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         // Isolate with brackets to avoid multiple active binders.
         {
             DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
-            decide_constraints_binder.var_types = var_types;
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {
             DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
-            decide_objective_binder.var_types = var_types;
             decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
