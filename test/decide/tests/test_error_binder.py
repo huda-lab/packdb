@@ -180,14 +180,20 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"not a scalar")
 
-    def test_objective_with_addition(self, packdb_cli):
-        """MAXIMIZE SUM(...)+3 is not supported."""
-        packdb_cli.assert_error("""
+    def test_objective_with_addition_succeeds(self, packdb_cli):
+        """`MAXIMIZE SUM(...) + 3` is now supported: the constant offset is
+        peeled from the objective body (it doesn't affect argmax) and
+        preserved on LogicalDecide.objective_constant_offset for any caller
+        that later reports the objective value. Previously rejected as a
+        "non-aggregate term" by the extractor."""
+        rows, cols = packdb_cli.execute("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE SUM(x*l_quantity)+3 LIMIT 1
-            """, match=r"non-aggregate term")
+            """)
+        # Query runs; row count reflects the LIMIT clause.
+        assert len(rows) > 0
 
     def test_objective_bare_column(self, packdb_cli):
         """MAXIMIZE with a bare column (not SUM) is not allowed."""
@@ -261,6 +267,146 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * val)
             """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
 
+    # --- Unsupported aggregates rejected at DecideBinder::BindAggregate ---
+
+    def test_unsupported_aggregate_rejected(self, packdb_cli):
+        """Non-whitelisted aggregates (BIT_AND, STRING_AGG, MEDIAN, ...) are rejected in DECIDE clauses."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x
+                SUCH THAT BIT_AND(x) >= 0
+                MAXIMIZE SUM(x * l_quantity) LIMIT 1
+            """, match=r"only SUM, AVG, MIN, MAX, or COUNT is allowed")
+
+    def test_count_over_decide_variable_rejected(self, packdb_cli):
+        """COUNT(x) where x is a DECIDE variable is degenerate (always = row count)."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x
+                SUCH THAT COUNT(x) >= 5
+                MAXIMIZE SUM(x * l_quantity) LIMIT 1
+            """, match=r"COUNT over a DECIDE variable is degenerate")
+
+    # --- Non-linear scalar functions wrapping a DECIDE variable ---
+
+    @pytest.mark.parametrize("fn", ["sqrt", "exp", "ln", "log", "floor", "ceil", "round", "sin", "cos"])
+    def test_nonlinear_scalar_per_row_lhs(self, packdb_cli, fn):
+        """f(x) op K as per-row constraint — silently produced wrong answers before
+        the bind-time whitelist check. Each non-linear scalar wrapping a DECIDE
+        variable should now be rejected with a uniform error."""
+        packdb_cli.assert_error(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT {fn}(x) <= 2
+                MAXIMIZE SUM(x * l_quantity) LIMIT 1
+            """, match=r"over a DECIDE variable is not supported")
+
+    @pytest.mark.parametrize("fn", ["sqrt", "exp", "log", "floor"])
+    def test_nonlinear_scalar_inside_sum(self, packdb_cli, fn):
+        """SUM(f(x)) — crashed the symbolic layer with InternalException before.
+        Now a clean BinderException."""
+        packdb_cli.assert_error(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT x <= 5
+                MAXIMIZE SUM({fn}(x)) LIMIT 1
+            """, match=r"over a DECIDE variable is not supported")
+
+    def test_nonlinear_scalar_inside_abs(self, packdb_cli):
+        """ABS(f(x)) — ABS passes its child through opaquely, so sqrt inside
+        ABS used to FATAL the session. The recursive walk catches it."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT x <= 5
+                MAXIMIZE SUM(ABS(sqrt(x) - 1)) LIMIT 1
+            """, match=r"'sqrt' over a DECIDE variable is not supported")
+
+    # --- POWER with exponent != 2 ---
+    # Catches cases that used to crash the symbolic layer with InternalException
+    # or silently produce identity/vacuous constraints (POWER(x,1), POWER(x,0)).
+
+    @pytest.mark.parametrize("exp", ["0", "1", "3", "4", "0.5", "2.5", "-1"])
+    def test_power_bad_constant_exponent_in_sum(self, packdb_cli, exp):
+        """SUM(POWER(x, <non-2>)) — only POWER(expr, 2) is supported."""
+        packdb_cli.assert_error(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT x <= 5
+                MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
+            """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
+
+    def test_power_variable_exponent_rejected(self, packdb_cli):
+        """POWER(x, x) — exponent is itself a decide var; must be a constant."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT x <= 5
+                MINIMIZE SUM(POWER(x, x)) LIMIT 1
+            """, match=r"POWER exponent.*must be a constant integer")
+
+    def test_power_column_exponent_rejected(self, packdb_cli):
+        """POWER(x, col) — exponent is a table column, not a constant."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT x <= 5
+                MINIMIZE SUM(POWER(x, l_quantity)) LIMIT 1
+            """, match=r"POWER exponent.*must be a constant integer")
+
+    def test_power_bad_exponent_per_row_constraint(self, packdb_cli):
+        """POWER(x, 0.5) <= K as per-row (no SUM) — same clean rejection as inside SUM."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT POWER(x, 0.5) <= 3
+                MAXIMIZE SUM(x) LIMIT 1
+            """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
+
+    def test_power_over_data_column_allowed(self, packdb_cli):
+        """POWER(col, 3) where col is a table column is fine — folds to a
+        per-row constant. Only POWER wrapping a DECIDE variable is gated."""
+        # Just ensure no BinderException; correctness of POWER-of-data is a
+        # separate pre-existing question.
+        packdb_cli.execute("""
+                SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 10
+                DECIDE x IS BOOLEAN
+                SUCH THAT SUM(x * POWER(l_quantity, 2)) <= 1000
+                MAXIMIZE SUM(x * l_quantity) LIMIT 1
+            """)
+
+    def test_power_cast_exponent_rejected(self, packdb_cli):
+        """POWER(x, CAST(2 AS INTEGER)) — exponent wrapped in a cast is not a
+        bare CONSTANT; rejected with the same 'must be a constant integer'
+        message as POWER(x, col). Could be loosened later; defensive for now."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL SUCH THAT x <= 5
+                MINIMIZE SUM(POWER(x, CAST(2 AS INTEGER))) LIMIT 1
+            """, match=r"POWER exponent.*must be a constant integer")
+
+    def test_power_wrapping_bilinear_rejected(self, packdb_cli):
+        """POWER(x * y, 2) — base is bilinear, so total degree is 4. The
+        existing quadratic validator catches it; this test pins that it does
+        not slip past the new pre-pass."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL, y IS REAL
+                SUCH THAT x <= 5 AND y <= 5
+                MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
+            """, match=r"products of different DECIDE variables|linear in DECIDE variables")
+
+    def test_perrow_null_rhs_rejected(self, packdb_cli):
+        """NULL on the RHS of a per-row constraint reaches the binder as a
+        CAST expression (DuckDB types NULL as unresolved). The binder rejects
+        before we'd subtract an INVALID_INDEX coefficient from NULL."""
+        packdb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS REAL
+                SUCH THAT x + 3 <= CAST(NULL AS DOUBLE)
+                MAXIMIZE SUM(x) LIMIT 1
+            """, match=r"does not support|clause")
+
     # --- WHEN error cases ---
 
     @pytest.mark.when_constraint
@@ -272,17 +418,6 @@ class TestBinderErrors:
                 SUCH THAT SUM(x * l_quantity) <= 50 WHEN x = 1
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
-
-    # --- COUNT rejected as unsupported DECIDE aggregate ---
-
-    def test_count_rejected(self, packdb_cli):
-        """COUNT(x) is not a supported DECIDE aggregate (removed from PackDB)."""
-        packdb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
-                DECIDE x
-                SUCH THAT COUNT(x) >= 5
-                MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"only SUM, AVG, MIN, or MAX is allowed")
 
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, packdb_cli):
@@ -334,3 +469,44 @@ class TestBinderErrors:
                           PER ps_suppkey
                 MAXIMIZE SUM(x)
             """, match=r"scalar right-hand side")
+
+    # --- Division with a DECIDE variable in the divisor ---
+    # `x / 2` and `x / data_col` are linear (coefficient scaling); `x / y`
+    # where both are DECIDE variables is non-linear and rejected. Before the
+    # whitelist tightening, per-row `x / y` was silently accepted with
+    # nonsensical results (y=0 in the optimal solution).
+
+    def test_perrow_division_by_decide_var_rejected(self, packdb_cli):
+        """`x / y <= K` where both are DECIDE variables — must reject."""
+        packdb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
+                SELECT id, x, y FROM t
+                DECIDE x IS REAL, y IS REAL
+                SUCH THAT x / y <= 5
+                    AND x <= 10
+                    AND y <= 10
+                MAXIMIZE SUM(x)
+            """, match=r"Division by a DECIDE variable is not supported")
+
+    def test_sum_division_by_decide_var_rejected(self, packdb_cli):
+        """`SUM(x / y) <= K` with both DECIDE variables — must reject cleanly
+        instead of crashing in symbolic normalization."""
+        packdb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
+                SELECT id, x, y FROM t
+                DECIDE x IS REAL, y IS REAL
+                SUCH THAT SUM(x / y) <= 5
+                    AND x <= 10
+                    AND y <= 10
+                MAXIMIZE SUM(x)
+            """, match=r"Division by a DECIDE variable is not supported")
+
+    def test_objective_division_by_decide_var_rejected(self, packdb_cli):
+        """Same rejection from the objective path."""
+        packdb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
+                SELECT id, x, y FROM t
+                DECIDE x IS REAL, y IS REAL
+                SUCH THAT x <= 10 AND y <= 10
+                MAXIMIZE SUM(x / y)
+            """, match=r"Division by a DECIDE variable is not supported")

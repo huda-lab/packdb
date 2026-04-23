@@ -18,7 +18,6 @@ namespace duckdb {
 class DecideConstraintsBinder : public DecideBinder {
 public:
     DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
-    vector<LogicalType> var_types;
     bool binding_when_condition = false;
 
 protected:

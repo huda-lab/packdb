@@ -84,7 +84,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	        for (idx_t i = 1; i < func.children.size(); i++) {
 	            result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
 	        }
-	        result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG or PER_STRICT_CONSTRAINT_TAG
+	        result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG
 	        return BindResult(std::move(result));
 	    }
 	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.

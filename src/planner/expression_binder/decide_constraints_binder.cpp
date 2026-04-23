@@ -18,7 +18,7 @@
 namespace duckdb {
 
 DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables)
-    : DecideBinder(binder, context, variables), var_types(variables.size(), LogicalType::INTEGER){
+    : DecideBinder(binder, context, variables) {
 }
 
 static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -388,7 +388,7 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
     for (idx_t i = 1; i < func.children.size(); i++) {
         result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
     }
-    result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG or PER_STRICT_CONSTRAINT_TAG
+    result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG
     return BindResult(std::move(result));
 }
 
@@ -460,10 +460,6 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "count") {
-            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
-            return DecideExpression::INVALID;
-		}
 		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
             if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
                 error_msg += ", found '" + expr.ToString() + "'";

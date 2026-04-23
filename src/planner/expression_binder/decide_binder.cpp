@@ -11,6 +11,7 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/catalog/catalog.hpp"
 #include <unordered_set>
 
 #include "duckdb/packdb/utility/debug.hpp"
@@ -168,6 +169,124 @@ bool ContainsWhenOperator(const ParsedExpression &expr) {
 	return false;
 }
 
+// Names that can legally wrap a DECIDE variable at bind time. ABS is
+// linearized by the optimizer; POWER/POW(expr, 2) feeds the QP objective path;
+// SUM/AVG/MIN/MAX/COUNT are aggregates handled in BindAggregate; +, -, *, /,
+// **, and unary tags fall through to the normal linear-extraction path.
+// Including aggregate names prevents false-flagging the IN-rewrite's "+"
+// nodes (synthesized as non-operator FunctionExpression) or nested aggregates.
+static bool IsAllowedNameOverDecideVar(const string &name) {
+	auto lname = StringUtil::Lower(name);
+	if (lname == "abs" || lname == "power" || lname == "pow") return true;
+	if (lname == "sum" || lname == "avg" || lname == "min" || lname == "max") return true;
+	if (lname == "count" || lname == "count_star") return true;
+	if (lname == "+" || lname == "-" || lname == "*" || lname == "/" || lname == "**") return true;
+	// PackDB-internal tag operators (__when_constraint__, __per_constraint__, ...)
+	// are synthesized as FunctionExpression and handled by dedicated binders.
+	if (name.size() >= 4 && name.substr(0, 2) == "__" && name.substr(name.size() - 2) == "__") return true;
+	return false;
+}
+
+// True when the function name resolves to an AGGREGATE in the catalog. These
+// are rejected (with an aggregate-specific error) in BindAggregate, so we must
+// not also false-flag them here as "non-linear scalars".
+static bool IsAggregateFunctionName(ClientContext &context, const FunctionExpression &func) {
+	auto entry = Catalog::GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY,
+	                                func.catalog, func.schema, func.function_name,
+	                                OnEntryNotFound::RETURN_NULL);
+	return entry && entry->type == CatalogType::AGGREGATE_FUNCTION_ENTRY;
+}
+
+// Reject any non-linear scalar function that wraps a DECIDE variable. Mirrors
+// the COUNT(decide_var) guard in BindAggregate: catch the mis-use at bind time
+// with a semantic-specific message instead of letting it slip through to
+// symbolic normalization (which throws InternalException on unknown functions)
+// or per-row execution (which would silently strip the scalar, producing
+// wrong answers). Functions that only wrap table columns are fine — the
+// wrapper folds to a per-row constant before the solver sees it.
+// True if this function is POWER / POW / **. These share the same validation:
+// exponent must be a constant numeric 2. All other exponents are non-linear
+// (fractional → radicals, negative → reciprocal, variable → exponential),
+// or unsupported higher-degree integer powers (3+ → cubic and above).
+static bool IsPowerFunction(const FunctionExpression &func) {
+	auto lname = StringUtil::Lower(func.function_name);
+	return lname == "power" || lname == "pow" || lname == "**";
+}
+
+// Reject POWER(base, exp) when base contains a decide variable and exp is not
+// a constant numeric 2. Mirrors ValidateQuadraticPower's error messages so
+// test matchers and user-facing wording are consistent across SUM and non-SUM
+// contexts. Must run before symbolic normalization — FromSymbolic would
+// otherwise throw InternalException on non-integer exponents, exposing a C++
+// stack trace to users.
+static void ValidatePowerExponent(const FunctionExpression &func,
+                                  const case_insensitive_map_t<idx_t> &variables) {
+	if (func.children.size() != 2) {
+		return; // Arity errors are surfaced elsewhere with clearer messages.
+	}
+	// Only gate POWER whose base transitively references a DECIDE variable.
+	// POWER over pure data columns folds to a per-row constant and is fine.
+	if (!ExpressionContainsDecideVariable(*func.children[0], variables)) {
+		return;
+	}
+	auto &exponent = *func.children[1];
+	if (exponent.GetExpressionClass() != ExpressionClass::CONSTANT) {
+		throw BinderException(
+		    "POWER exponent in DECIDE expression must be a constant integer "
+		    "(only 2 is supported)");
+	}
+	auto &exp_const = exponent.Cast<const ConstantExpression>();
+	double exp_val;
+	try {
+		exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	} catch (...) {
+		throw BinderException("POWER exponent must be numeric");
+	}
+	if (exp_val != 2.0) {
+		throw BinderException(
+		    "Only POWER(expr, 2) is supported for quadratic expressions. "
+		    "Found exponent %g. Higher powers are not allowed.", exp_val);
+	}
+}
+
+void ValidateDecideNoNonLinearScalar(ClientContext &context,
+                                     const ParsedExpression &expr,
+                                     const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (IsPowerFunction(func)) {
+			ValidatePowerExponent(func, variables);
+		} else if (func.is_operator && func.function_name == "/") {
+			// Division is only linear when the divisor contains no decide
+			// variable. x / y (decide vars in divisor) is non-linear; catch
+			// it here so it doesn't fall through to per-row extraction
+			// (which would silently produce wrong results) or symbolic
+			// normalization (which would throw InternalException).
+			if (func.children.size() == 2 &&
+			    ExpressionContainsDecideVariable(*func.children[1], variables)) {
+				throw BinderException(
+				    "Division by a DECIDE variable is not supported: "
+				    "it would make the model non-linear. The divisor must "
+				    "not reference a decision variable.");
+			}
+		} else if (!IsAllowedNameOverDecideVar(func.function_name) &&
+		           !IsAggregateFunctionName(context, func)) {
+			for (auto &child : func.children) {
+				if (ExpressionContainsDecideVariable(*child, variables)) {
+					throw BinderException(
+					    "Scalar function '%s' over a DECIDE variable is not supported: "
+					    "it would make the model non-linear. Only ABS() and POWER(..., 2) "
+					    "can wrap a decision variable.",
+					    func.function_name);
+				}
+			}
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		ValidateDecideNoNonLinearScalar(context, child, variables);
+	});
+}
+
 //! Collect the set of DECIDE variable indices referenced by an expression.
 static void CollectDecideVariableIndices(const ParsedExpression &expr,
                                          const case_insensitive_map_t<idx_t> &variables,
@@ -300,6 +419,24 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				}
 			}
 			return true;
+		}
+		if (func_name_lower == "/") {
+			// Division is linear iff the divisor contains no decide variable
+			// (numerator can reference decide vars; dividing by a data
+			// expression is just a coefficient scale). x / y where both
+			// sides are decide vars is non-linear and rejected here.
+			if (func.children.size() != 2) {
+				error_msg = "Division requires exactly two arguments";
+				return false;
+			}
+			if (ExpressionContainsDecideVariable(*func.children[1], variables)) {
+				error_msg = "Division by a DECIDE variable is not supported "
+				            "(would make the model non-linear)";
+				return false;
+			}
+			return ValidateSumArgumentInternal(*func.children[0], variables,
+			                                   has_decide_variable, error_msg,
+			                                   allow_quadratic, allow_bilinear);
 		}
 		if (func_name_lower == "*" || func_name_lower == "+") {
 			for (auto &child : func.children) {
@@ -441,6 +578,29 @@ DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_in
 
 BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) {
 	ErrorData error;
+
+	// DECIDE clauses only accept SUM, AVG, MIN, MAX, and COUNT as aggregates. Reject anything
+	// else (STRING_AGG, BIT_AND, MEDIAN, HISTOGRAM, etc.) at the canonical DuckDB hook,
+	// mirroring WhereBinder::UnsupportedAggregateMessage. `count_star` is permitted because
+	// the symbolic phase synthesizes `count_star()` internally when rewriting SUM(constant).
+	if (!IsDecideAggregateName(func.name) && func.name != "count" && func.name != "count_star") {
+		return BindResult(BinderException::Unsupported(
+		    aggr, StringUtil::Format("DECIDE clause does not support aggregate '%s', only SUM, AVG, MIN, MAX, or COUNT is allowed.",
+		                             func.name)));
+	}
+
+	// COUNT over a DECIDE variable is degenerate: decision variables are never null, so
+	// COUNT(x) is identically the row count and does not constrain x. Reject it with a
+	// semantic-specific message rather than silently letting it bind to a no-op constraint.
+	if (func.name == "count") {
+		for (auto &child : aggr.children) {
+			if (ExpressionContainsDecideVariable(*child, variables)) {
+				return BindResult(BinderException::Unsupported(
+				    aggr, "COUNT over a DECIDE variable is degenerate: decision variables are never null, "
+				          "so COUNT(x) always equals the row count. Did you mean SUM(x)?"));
+			}
+		}
+	}
 
 	// No Filter/Distinc allowed for Aggregate
 	if (aggr.filter || aggr.distinct) {

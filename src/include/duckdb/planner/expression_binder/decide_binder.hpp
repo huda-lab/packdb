@@ -30,6 +30,17 @@ bool IsDecideAggregateName(const string &name);
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 bool ContainsWhenOperator(const ParsedExpression &expr);
 
+//! Reject non-linear scalar functions (SQRT, EXP, LOG, FLOOR, ...) that wrap a
+//! DECIDE variable. Throws BinderException on violation. Safe to call before
+//! symbolic normalization — catches cases that would otherwise silently strip
+//! the scalar in per-row constraints or crash in the symbolic layer. Uses the
+//! catalog to distinguish scalar from aggregate functions so aggregate-shaped
+//! mis-uses (e.g., BIT_AND(x), STDDEV(x)) fall through to BindAggregate's
+//! aggregate-specific error instead.
+void ValidateDecideNoNonLinearScalar(ClientContext &context,
+                                     const ParsedExpression &expr,
+                                     const case_insensitive_map_t<idx_t> &variables);
+
 
 // inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
 // 	deb("[BINDER] ", tag, ": ", expr.ToString());

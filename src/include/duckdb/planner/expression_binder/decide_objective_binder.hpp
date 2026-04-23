@@ -18,7 +18,6 @@ namespace duckdb {
 class DecideObjectiveBinder : public DecideBinder {
 public:
     DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
-    vector<LogicalType> var_types;
     DecideSense decide_sense = DecideSense::MINIMIZE;
 
 protected:
