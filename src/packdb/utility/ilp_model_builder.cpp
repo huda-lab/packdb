@@ -457,13 +457,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) {
-                        if (!eval_const.per_strict) {
-                            continue;
-                        }
-                        // PER STRICT: emit constraint with zero LHS (AGG(∅) = 0)
-                        ModelConstraint empty_constr;
-                        ApplyComparisonSense(empty_constr, eval_const.comparison_type, rhs, lhs_is_integer);
-                        model.constraints.push_back(std::move(empty_constr));
                         continue;
                     }
                     ModelConstraint constr;
@@ -501,19 +494,28 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     continue;
                 }
                 ModelConstraint constr;
+                // LHS terms that don't reference a DECIDE variable (row-varying
+                // data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
+                // in `x - col <= K`) must move to RHS, not be dropped. The
+                // symbolic normalizer only canonicalizes aggregate constraints;
+                // per-row LHS arrives here with constant/data terms still attached.
+                double rhs_adjustment = 0.0;
 
                 for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                     idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+                    double coeff = eval_const.row_coefficients[term_idx][row];
 
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
-                        double coeff = eval_const.row_coefficients[term_idx][row];
                         idx_t var_idx = indexer.Get(decide_var_idx, row);
                         constr.indices.push_back((int)var_idx);
                         constr.coefficients.push_back(coeff);
+                    } else {
+                        // Constant / row-data LHS term: subtract from RHS.
+                        rhs_adjustment += coeff;
                     }
                 }
 
-                double rhs = eval_const.rhs_values[row];
+                double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 model.constraints.push_back(std::move(constr));
             }
@@ -693,11 +695,6 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 }
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) {
-                        if (!eval_const.per_strict) continue;
-                        // PER STRICT: emit quadratic constraint with zero LHS
-                        vector<idx_t> empty_rows;
-                        model.quadratic_constraints.push_back(
-                            BuildQuadraticConstraint(eval_const, empty_rows, rhs, lhs_is_integer));
                         continue;
                     }
                     model.quadratic_constraints.push_back(
