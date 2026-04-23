@@ -86,6 +86,33 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 	}
 }
 
+static bool IsConstantOne(const Expression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+	       expr.Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0;
+}
+
+static unique_ptr<Expression> CombineBilinearCoefficients(unique_ptr<Expression> coef_a,
+                                                          unique_ptr<Expression> coef_b,
+                                                          const BoundFunctionExpression &mul_func) {
+	bool a_is_one = IsConstantOne(*coef_a);
+	bool b_is_one = IsConstantOne(*coef_b);
+	if (a_is_one && b_is_one) {
+		return nullptr;
+	}
+	if (a_is_one) {
+		return std::move(coef_b);
+	}
+	if (b_is_one) {
+		return std::move(coef_a);
+	}
+
+	vector<unique_ptr<Expression>> mul_children;
+	mul_children.push_back(std::move(coef_a));
+	mul_children.push_back(std::move(coef_b));
+	return make_uniq_base<Expression, BoundFunctionExpression>(
+	    mul_func.return_type, mul_func.function, std::move(mul_children), nullptr);
+}
+
 //===--------------------------------------------------------------------===//
 // Expression Analysis Helper Functions
 //===--------------------------------------------------------------------===//
@@ -1026,25 +1053,9 @@ public:
                         unique_ptr<Expression> coef_a = op.ExtractCoefficientWithoutVariable(*func.children[0], var_a);
                         unique_ptr<Expression> coef_b = op.ExtractCoefficientWithoutVariable(*func.children[1], var_b);
 
-                        // Multiply the two data coefficients together
-                        unique_ptr<Expression> combined_coef;
-                        bool a_is_one = (coef_a->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-                                         coef_a->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
-                        bool b_is_one = (coef_b->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-                                         coef_b->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
-                        if (a_is_one && b_is_one) {
-                            combined_coef = nullptr; // coefficient is 1.0
-                        } else if (a_is_one) {
-                            combined_coef = std::move(coef_b);
-                        } else if (b_is_one) {
-                            combined_coef = std::move(coef_a);
-                        } else {
-                            vector<unique_ptr<Expression>> mul_children;
-                            mul_children.push_back(std::move(coef_a));
-                            mul_children.push_back(std::move(coef_b));
-                            combined_coef = make_uniq_base<Expression, BoundFunctionExpression>(
-                                func.return_type, func.function, std::move(mul_children), nullptr);
-                        }
+                        // Multiply the two data coefficients together.
+                        unique_ptr<Expression> combined_coef =
+                            CombineBilinearCoefficients(std::move(coef_a), std::move(coef_b), func);
 
                         Objective::BilinearTerm bt;
                         bt.var_a = var_a;
@@ -1228,15 +1239,7 @@ public:
                     bt.var_b = right_var;
                     auto coef_a = op.ExtractCoefficientWithoutVariable(*func.children[0], left_var);
                     auto coef_b = op.ExtractCoefficientWithoutVariable(*func.children[1], right_var);
-                    bool a_one = (coef_a->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-                                  coef_a->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
-                    bool b_one = (coef_b->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-                                  coef_b->Cast<BoundConstantExpression>().value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0);
-                    if (!a_one) {
-                        bt.coefficient = std::move(coef_a);
-                    } else if (!b_one) {
-                        bt.coefficient = std::move(coef_b);
-                    }
+                    bt.coefficient = CombineBilinearCoefficients(std::move(coef_a), std::move(coef_b), func);
                     bt.sign = sign;
                     if (filter) {
                         bt.filter = filter->Copy();

@@ -41,6 +41,11 @@ categories:
 | Int × Int objective | `test_bilinear.py` | ✓ (gurobi-gated) |
 | Int × Real objective | `test_bilinear.py` | ✓ (gurobi-gated) |
 | Mixed linear + bilinear objective | `test_bilinear.py` | ✓ |
+| Objective coefficients from both factor sides | `test_bilinear.py::test_bilinear_objective_multiplies_both_side_coeffs` | ✓ (gurobi-gated) |
+| Shape-equivalent objective coefficients | `test_bilinear.py::test_bilinear_objective_split_shape_matches_flat_product` | ✓ (gurobi-gated) |
+| Bilinear constraint coefficients from both factor sides | `test_bilinear.py::TestBilinearConstraints::test_bilinear_constraint_coeff_multiplies_both_sides` | ✓ |
+| Shape-equivalent bilinear constraint coefficients | `test_bilinear.py::TestBilinearConstraints::test_bilinear_constraint_coeff_split_shape_matches_flat_product` | ✓ |
+| Data-column coefficients in bilinear constraints | `test_bilinear.py::TestBilinearConstraints::test_bilinear_constraint_coeff_multiplies_data_columns` | ✓ |
 
 ### Error cases
 
@@ -68,6 +73,6 @@ categories:
 | Bilinear | Entity-scoped Boolean factor | ✓ |
 | Bilinear | MAXIMIZE objective | ✓ |
 | Bilinear | MINIMIZE objective (with data coefficient) | ✓ |
-| Bilinear | constraint | ✓ (Bool × Bool and Bool × Real) |
+| Bilinear | constraint | ✓ (Bool × Bool, Bool × Real, and Gurobi coefficient regression cases) |
 | Bilinear | linear terms (mixed) | ✓ |
 | Bilinear | QP self-product (mixed) | ✓ |

@@ -130,6 +130,8 @@ All methods on `PhysicalDecide`:
 
 Static helper functions (not on `PhysicalDecide`):
 
+- **`CombineBilinearCoefficients(coef_a, coef_b, mul_func)`**: Combines coefficient expressions extracted from both sides of a bilinear product. Returns no coefficient for `1 * 1`, returns the non-`1` side for one-sided coefficients, and creates a `BoundFunctionExpression("*", ...)` for two non-`1` coefficients. This keeps objective and constraint bilinear extraction consistent for shapes like `(coef_a * x) * (coef_b * y)`.
+
 - **`CollectDecideVarRefs(expr, sign, refs, op)`**: Walks the expression tree tracking sign through `+` and `-` operators, collecting all DECIDE variable references with their accumulated sign (+1 or -1).
 
 - **`StripDecideVars(expr, op)`**: Returns a copy of the expression with all DECIDE variable references replaced by constant `0.0`. Produces a data-only expression suitable for evaluation via `ExpressionExecutor`.

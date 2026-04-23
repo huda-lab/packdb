@@ -41,6 +41,12 @@ MAXIMIZE SUM(profit * b * x)
 -- Boolean x Boolean constraint (AND-linearization, both solvers)
 SUCH THAT SUM(b1 * b2) <= 5
 
+-- Bilinear objective with coefficients on both factors
+MAXIMIZE SUM((a * x) * (b * y))
+
+-- Bilinear constraint with coefficients on both factors
+SUCH THAT (a * x) * (b * y) >= 10
+
 -- Non-convex objective (Gurobi only)
 MINIMIZE SUM(x * y)
 
@@ -52,7 +58,7 @@ MAXIMIZE SUM(cost + b * x)
 
 Bilinear terms compose with existing features:
 - **WHEN**: `MAXIMIZE SUM(b * x) WHEN category = 'A'`
-- **PER**: Not yet tested but should work via the standard PER machinery
+- **PER**: `MAXIMIZE SUM(b * x) PER grp` (covered by `test_bilinear_per_group`)
 - **Mixed with POWER**: `MINIMIZE SUM(POWER(x - target, 2) + b * x)` (bilinear + quadratic in same objective)
 
 ### Degree Guard (Total Degree ≤ 2)
@@ -87,6 +93,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 4. **Physical Operator** (`physical_decide.cpp`):
    - `ExtractLinearAndBilinearTerms()`: separates linear and bilinear terms in objectives
    - `ExtractConstraintTerms()`: same for constraints
+   - `CombineBilinearCoefficients()`: combines coefficient expressions extracted from both factor subtrees, so `(coef_a * x) * (coef_b * y)` becomes `(coef_a * coef_b) * x * y` in both objectives and constraints
    - McCormick Big-M generation: uses `BilinearLink` metadata + `ExtractVariableBounds` to generate `w <= U*b` and `w >= x - U*(1-b)` constraints
    - Evaluates bilinear coefficients per-row, applies WHEN mask
 
@@ -142,13 +149,16 @@ Inside `FindAndReplaceBilinear` (`src/optimizer/decide/decide_optimizer.cpp:964`
 
 ## Tests
 
-`test/decide/tests/test_bilinear.py` — 17 tests covering:
+`test/decide/tests/test_bilinear.py` covers:
 - Bool x Bool objectives (AND-linearization)
 - Bool x Real, Bool x Int objectives (McCormick)
 - Data coefficient scaling (`profit * b * x`)
+- Objective coefficients from both factor sides (`(a*x)*(b*y)`)
+- Shape-equivalent objective coefficients (`(a*x)*(b*y)` vs `a*b*x*y`)
 - Non-convex objectives (Real*Real, Int*Int, Int*Real — Gurobi only)
 - Mixed linear + bilinear objectives
 - Bilinear with WHEN filter
 - Bool bilinear constraints
+- Bilinear constraint coefficients from both factor sides (`(2*x)*(3*y)`, `(a*x)*(b*y)`)
 - Error cases (triple product, missing bounds, HiGHS rejection)
 - Backward compatibility (POWER, linear, identical multiplication)

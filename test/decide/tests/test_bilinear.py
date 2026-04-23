@@ -595,6 +595,86 @@ class TestBilinearFeatureInteractions:
 class TestBilinearConstraints:
     """Bilinear terms in SUCH THAT constraints."""
 
+    @staticmethod
+    def _assert_single_xy_one(result, cols):
+        assert len(result) == 1
+        row = result[0]
+        assert int(row[cols.index("x")]) == 1
+        assert int(row[cols.index("y")]) == 1
+
+    @staticmethod
+    def _run_coeff_constraint(packdb_cli_gurobi, constraint_expr, data_sql="SELECT 1 AS id", select_cols="id"):
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT {select_cols}, x, y
+            FROM data
+            DECIDE x IS INTEGER, y IS INTEGER
+            SUCH THAT x <= 1 AND y <= 1 AND {constraint_expr}
+        """
+        return packdb_cli_gurobi.execute(sql)
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_perrow
+    def test_bilinear_constraint_coeff_multiplies_both_sides(self, packdb_cli_gurobi):
+        """Regression: (2*x)*(3*y) must use coefficient 6, not just one side."""
+        result, cols = self._run_coeff_constraint(
+            packdb_cli_gurobi, "(2 * x) * (3 * y) >= 4",
+        )
+
+        self._assert_single_xy_one(result, cols)
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_perrow
+    def test_bilinear_constraint_coeff_split_shape_matches_flat_product(self, packdb_cli_gurobi):
+        split_result, split_cols = self._run_coeff_constraint(
+            packdb_cli_gurobi, "(2 * x) * (3 * y) >= 4",
+        )
+        flat_result, flat_cols = self._run_coeff_constraint(
+            packdb_cli_gurobi, "6 * x * y >= 4",
+        )
+
+        self._assert_single_xy_one(split_result, split_cols)
+        self._assert_single_xy_one(flat_result, flat_cols)
+        assert split_result[0][split_cols.index("x")] == flat_result[0][flat_cols.index("x")]
+        assert split_result[0][split_cols.index("y")] == flat_result[0][flat_cols.index("y")]
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_perrow
+    @pytest.mark.parametrize("constraint_expr", [
+        "(2 * x) * y >= 2",
+        "x * (3 * y) >= 3",
+    ])
+    def test_bilinear_constraint_coeff_one_sided(self, packdb_cli_gurobi, constraint_expr):
+        result, cols = self._run_coeff_constraint(packdb_cli_gurobi, constraint_expr)
+
+        self._assert_single_xy_one(result, cols)
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_perrow
+    def test_bilinear_constraint_coeff_multiplies_data_columns(self, packdb_cli_gurobi):
+        result, cols = self._run_coeff_constraint(
+            packdb_cli_gurobi,
+            "(a * x) * (b * y) >= 10",
+            data_sql="SELECT 1 AS id, 2 AS a, 5 AS b",
+            select_cols="id, a, b",
+        )
+
+        self._assert_single_xy_one(result, cols)
+
+    @pytest.mark.bilinear
+    @pytest.mark.var_integer
+    @pytest.mark.cons_perrow
+    def test_bilinear_constraint_coeff_preserves_negative_sign(self, packdb_cli_gurobi):
+        result, cols = self._run_coeff_constraint(
+            packdb_cli_gurobi, "-((2 * x) * (3 * y)) <= -4",
+        )
+
+        self._assert_single_xy_one(result, cols)
+
     def test_bool_bilinear_constraint(self, packdb_cli, oracle_solver, perf_tracker):
         """SUCH THAT SUM(b1 * b2) <= 1 — bilinear constraint, linear objective.
 
