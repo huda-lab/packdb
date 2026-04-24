@@ -2,7 +2,6 @@
 #include "duckdb/common/exception.hpp"
 
 #include <cmath>
-#include <map>
 #include <numeric>
 #include <unordered_map>
 
@@ -197,9 +196,13 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     bool has_power_quadratic = input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty();
     bool has_bilinear = !input.bilinear_objective_terms.empty();
 
+    auto pack_q_key = [](int r, int c) -> uint64_t {
+        return (static_cast<uint64_t>(r) << 32) | static_cast<uint32_t>(c);
+    };
+
     if (has_power_quadratic || has_bilinear) {
         // Accumulate Q in a map: (var_i, var_j) -> value (lower triangle only, var_i >= var_j)
-        std::map<std::pair<int,int>, double> q_map;
+        std::unordered_map<uint64_t, double> q_map;
 
         // POWER(expr, 2) contributions: outer product A^T A
         if (has_power_quadratic) {
@@ -213,10 +216,10 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
             idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
 
+            struct VarCoeff { int flat_idx; double coeff; };
+            vector<VarCoeff> row_terms;
             for (idx_t row = 0; row < num_rows; row++) {
-                // Collect per-row coefficients for variable terms
-                struct VarCoeff { int flat_idx; double coeff; };
-                vector<VarCoeff> row_terms;
+                row_terms.clear();
 
                 for (idx_t t = 0; t < num_q_terms; t++) {
                     if (t >= input.quadratic_inner_coefficients.size() ||
@@ -246,7 +249,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         // (symmetry — we store lower triangle only).
                         double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
                         if (i != j) val *= 2.0;
-                        q_map[{q_row, q_col}] += val;
+                        q_map[pack_q_key(q_row, q_col)] += val;
                     }
                 }
 
@@ -283,7 +286,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
                     int q_row = std::max(flat_a, flat_b);
                     int q_col = std::min(flat_a, flat_b);
-                    q_map[{q_row, q_col}] += coeff;
+                    q_map[pack_q_key(q_row, q_col)] += coeff;
                 }
             }
         }
@@ -294,8 +297,8 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         model.q_vals.reserve(q_map.size());
         for (auto &entry : q_map) {
             if (entry.second == 0.0) continue;
-            model.q_rows.push_back(entry.first.first);
-            model.q_cols.push_back(entry.first.second);
+            model.q_rows.push_back(static_cast<int>(entry.first >> 32));
+            model.q_cols.push_back(static_cast<int>(entry.first & 0xFFFFFFFF));
             model.q_vals.push_back(entry.second);
         }
     }
@@ -506,9 +509,11 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     double coeff = eval_const.row_coefficients[term_idx][row];
 
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
-                        idx_t var_idx = indexer.Get(decide_var_idx, row);
-                        constr.indices.push_back((int)var_idx);
-                        constr.coefficients.push_back(coeff);
+                        if (coeff != 0.0) {
+                            idx_t var_idx = indexer.Get(decide_var_idx, row);
+                            constr.indices.push_back((int)var_idx);
+                            constr.coefficients.push_back(coeff);
+                        }
                     } else {
                         // Constant / row-data LHS term: subtract from RHS.
                         rhs_adjustment += coeff;
@@ -537,7 +542,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                                         bool lhs_is_integer) -> SolverModel::QuadraticConstraint {
         SolverModel::QuadraticConstraint qc;
         std::unordered_map<int, double> linear_accum;
-        std::map<std::pair<int,int>, double> q_accum;
+        std::unordered_map<uint64_t, double> q_accum;
         double rhs_adjustment = 0.0;
 
         // Linear terms from the constraint LHS
@@ -561,7 +566,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                 int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
                 int q_row = std::max(flat_a, flat_b);
                 int q_col = std::min(flat_a, flat_b);
-                q_accum[{q_row, q_col}] += coeff;
+                q_accum[pack_q_key(q_row, q_col)] += coeff;
             }
         }
 
@@ -572,9 +577,10 @@ SolverModel SolverModel::Build(const SolverInput &input) {
             double q_sign = qg.sign;
             idx_t num_q_terms = qg.variable_indices.size();
 
+            struct VarCoeff { int flat_idx; double coeff; };
+            vector<VarCoeff> row_terms;
             for (idx_t row : row_set) {
-                struct VarCoeff { int flat_idx; double coeff; };
-                vector<VarCoeff> row_terms;
+                row_terms.clear();
                 double c_row = 0.0;  // Constant term contribution for this row
 
                 for (idx_t t = 0; t < num_q_terms; t++) {
@@ -601,7 +607,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                         int q_c = std::min(ri, rj);
                         double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
                         if (i != j) val *= 2.0;  // Off-diagonal: 2*a_i*a_j
-                        q_accum[{q_r, q_c}] += val;
+                        q_accum[pack_q_key(q_r, q_c)] += val;
                     }
                 }
 
@@ -627,8 +633,8 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         // Flush Q terms
         for (auto &entry : q_accum) {
             if (entry.second != 0.0) {
-                qc.q_rows.push_back(entry.first.first);
-                qc.q_cols.push_back(entry.first.second);
+                qc.q_rows.push_back(static_cast<int>(entry.first >> 32));
+                qc.q_cols.push_back(static_cast<int>(entry.first & 0xFFFFFFFF));
                 qc.q_coefficients.push_back(entry.second);
             }
         }
