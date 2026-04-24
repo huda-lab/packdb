@@ -135,29 +135,41 @@ def find_previous_result(current_commit: str) -> Path | None:
     return None
 
 
+IS_MACOS = platform.system() == "Darwin"
+
+
 def parse_time_output(stderr: str) -> dict:
-    """Parse /usr/bin/time -v output from stderr.
+    """Parse /usr/bin/time output from stderr (handles both GNU -v and BSD -l formats).
 
     Returns dict with wall_time_s and peak_rss_kb.
     """
     result: dict = {}
 
-    # Wall clock time - format: h:mm:ss or m:ss.ss
-    m = re.search(
-        r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*"
-        r"(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)",
-        stderr,
-    )
-    if m:
-        hours = int(m.group(1) or 0)
-        minutes = int(m.group(2))
-        seconds = float(m.group(3))
-        result["wall_time_s"] = round(hours * 3600 + minutes * 60 + seconds, 4)
-
-    # Peak RSS
-    m = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", stderr)
-    if m:
-        result["peak_rss_kb"] = int(m.group(1))
+    if IS_MACOS:
+        # BSD format: "        0.45 real         0.00 user         0.00 sys"
+        m = re.search(r"^\s*([\d.]+)\s+real", stderr, re.MULTILINE)
+        if m:
+            result["wall_time_s"] = round(float(m.group(1)), 4)
+        # BSD format: "             1212416  maximum resident set size" (bytes)
+        m = re.search(r"(\d+)\s+maximum resident set size", stderr)
+        if m:
+            result["peak_rss_kb"] = int(m.group(1)) // 1024
+    else:
+        # GNU format: "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.45"
+        m = re.search(
+            r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*"
+            r"(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)",
+            stderr,
+        )
+        if m:
+            hours = int(m.group(1) or 0)
+            minutes = int(m.group(2))
+            seconds = float(m.group(3))
+            result["wall_time_s"] = round(hours * 3600 + minutes * 60 + seconds, 4)
+        # GNU format: "Maximum resident set size (kbytes): 12345"
+        m = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", stderr)
+        if m:
+            result["peak_rss_kb"] = int(m.group(1))
 
     return result
 
@@ -186,8 +198,9 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
 
     try:
         env = os.environ.copy()
+        time_flag = "-l" if IS_MACOS else "-v"
         cmd = [
-            "/usr/bin/time", "-v",
+            "/usr/bin/time", time_flag,
             str(PACKDB_EXE), str(db_path), "-readonly",
         ]
 
@@ -214,14 +227,25 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
 
         # Capture any errors
         if result.returncode != 0:
-            error_lines = [
-                line for line in result.stderr.splitlines()
-                if not line.strip().startswith(("Command", "Elapsed", "Maximum",
-                    "Average", "Major", "Minor", "Voluntary", "Involuntary",
-                    "Swaps", "File", "Socket", "Signals", "Page", "Exit",
-                    "Percent", "System", "User"))
-                and line.strip()
-            ]
+            if IS_MACOS:
+                # BSD time output: lines with leading whitespace + number + label
+                time_line_re = re.compile(r"^\s+[\d.]+\s+(real|user|sys)")
+                resource_line_re = re.compile(r"^\s+\d+\s+\w")
+                error_lines = [
+                    line for line in result.stderr.splitlines()
+                    if line.strip()
+                    and not time_line_re.match(line)
+                    and not resource_line_re.match(line)
+                ]
+            else:
+                error_lines = [
+                    line for line in result.stderr.splitlines()
+                    if not line.strip().startswith(("Command", "Elapsed", "Maximum",
+                        "Average", "Major", "Minor", "Voluntary", "Involuntary",
+                        "Swaps", "File", "Socket", "Signals", "Page", "Exit",
+                        "Percent", "System", "User"))
+                    and line.strip()
+                ]
             if error_lines:
                 metrics["error"] = "\n".join(error_lines[:5])
 
