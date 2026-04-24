@@ -74,7 +74,7 @@ SUCH THAT constraint [AND constraint ...]
 - **Bilinear terms (`x * y`)**: Product of two different DECIDE variables supported in objectives and constraints. Each factor must be linear in decision variables — shapes like `x * POWER(y, 2)` (degree 3), `POWER(x, 2) * POWER(y, 2)` (degree 4), or `POWER(POWER(x, 2), 2)` are rejected with `InvalidInputException`; only total degree ≤ 2 is supported. Two categories:
   - **Boolean × anything** (linearizable): When one factor is Boolean, McCormick envelopes produce exact MILP reformulation. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable. Bool×Bool uses simpler AND-linearization (no Big-M).
   - **General (non-convex)**: Real×Real, Int×Int, Int×Real produce indefinite Q matrix (off-diagonal entries). Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via `GRBaddqconstr`). HiGHS rejects with clear error.
-- Constraints support both linear and bilinear terms. Objectives can be linear, quadratic (POWER), bilinear, or mixed.
+- Constraints support both linear and bilinear terms, plus quadratic self-product terms (e.g. `SUM(POWER(x, 2)) <= K`, Gurobi-only via `GRBaddqconstr`). Objectives can be linear, quadratic (POWER), bilinear, or mixed.
 
 For full syntax details: `context/descriptions/00_project_overview/syntax_reference.md`
 For keyword-by-keyword reference: `context/descriptions/03_expressivity/`

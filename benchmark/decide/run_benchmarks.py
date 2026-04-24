@@ -2,13 +2,13 @@
 """PackDB DECIDE performance benchmark runner.
 
 Runs a set of DECIDE queries against pre-generated TPC-H databases of different
-sizes (small/medium/large), measuring wall-clock time, peak memory (RSS), and
+sizes (medium/large), measuring wall-clock time, peak memory (RSS), and
 per-stage breakdowns.
 
 Usage:
     python3 benchmark/decide/run_benchmarks.py                    # run all
     python3 benchmark/decide/run_benchmarks.py --queries Q1,Q3    # subset
-    python3 benchmark/decide/run_benchmarks.py --sizes small      # single size
+    python3 benchmark/decide/run_benchmarks.py --sizes medium     # single size
     python3 benchmark/decide/run_benchmarks.py --manual           # manual query
     python3 benchmark/decide/run_benchmarks.py --compare          # auto compare
 
@@ -42,8 +42,47 @@ DATABASES_DIR = SCRIPT_DIR / "databases"
 
 PACKDB_EXE = REPO_ROOT / "build" / "release" / "packdb"
 
-DB_SIZES = ["small", "medium", "large"]
+DB_SIZES = ["medium", "large"]
 DEFAULT_ITERATIONS = 3
+
+COEFFICIENTS: dict[str, dict[str, int]] = {
+    "medium": {
+        "Q1_QTY_CAP": 833,
+        "Q2_ABS_CAP": 333,
+        "Q3_R_QTY_CAP": 333,
+        "Q5_QTY_CAP": 8333,
+        "Q5_COUNT_CAP": 833,
+        "Q5_DISCOUNT_CAP": 83333,
+        "Q6_PRICE_CAP": 90691505,
+        "Q6_NE_SUM": 255,
+        "Q7_QTY_CAP": 5000,
+        "Q7_PRIORITY_CAP": 100,
+        "Q8_CHOOSE_CAP": 128,
+        "Q8_EXPEDITE_CAP": 64,
+        "Q8_PAIR_PRICE_CAP": 13603726,
+        "Q8_ROW_LIMIT": 2048,
+        "Q9_SSE_CAP": 752545,
+    },
+    "large": {
+        "Q1_QTY_CAP": 1667,
+        "Q2_ABS_CAP": 667,
+        "Q3_R_QTY_CAP": 667,
+        "Q5_QTY_CAP": 16667,
+        "Q5_COUNT_CAP": 1667,
+        "Q5_DISCOUNT_CAP": 166667,
+        "Q6_PRICE_CAP": 182337938,
+        "Q6_NE_SUM": 510,
+        "Q7_QTY_CAP": 10000,
+        "Q7_PRIORITY_CAP": 200,
+        "Q8_CHOOSE_CAP": 255,
+        "Q8_EXPEDITE_CAP": 128,
+        "Q8_PAIR_PRICE_CAP": 27350691,
+        "Q8_ROW_LIMIT": 4096,
+        "Q9_SSE_CAP": 1504661,
+    },
+}
+
+PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,11 +146,41 @@ def discover_queries() -> dict[str, Path]:
 def get_query_description(filename: str) -> str:
     """Extract description from query filename.
 
-    q1_knapsack_baseline.sql -> knapsack_baseline
+    q1_linear_knapsack.sql -> linear_knapsack
     """
     stem = Path(filename).stem
     m = re.match(r"q\d+_(.*)", stem)
     return m.group(1) if m else stem
+
+
+def resolve_query_sql(sql: str, size: str) -> tuple[str, dict[str, int]]:
+    """Resolve ${NAME} placeholders for a benchmark size.
+
+    Returns the resolved SQL and a dict containing only the coefficients
+    actually referenced by this query.
+    """
+    coefficients = COEFFICIENTS.get(size)
+    if coefficients is None:
+        raise ValueError(
+            f"no coefficient map configured for size '{size}'. "
+            f"Available sizes: {', '.join(DB_SIZES)}"
+        )
+
+    used: dict[str, int] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in coefficients:
+            used[name] = coefficients[name]
+            return str(coefficients[name])
+        return match.group(0)
+
+    resolved_sql = PLACEHOLDER_RE.sub(replace, sql)
+    unresolved = sorted(set(PLACEHOLDER_RE.findall(resolved_sql)))
+    if unresolved:
+        tokens = ", ".join(f"${{{name}}}" for name in unresolved)
+        raise ValueError(f"unresolved placeholder(s) for size '{size}': {tokens}")
+    return resolved_sql, used
 
 
 def find_previous_result(current_commit: str) -> Path | None:
@@ -136,6 +205,32 @@ def find_previous_result(current_commit: str) -> Path | None:
 
 
 IS_MACOS = platform.system() == "Darwin"
+_TIME_FLAG: str | None = None
+
+
+def get_time_flag() -> str:
+    """Return the best supported /usr/bin/time flag for this host."""
+    global _TIME_FLAG
+    if _TIME_FLAG is not None:
+        return _TIME_FLAG
+
+    if IS_MACOS:
+        # `time -l` reports peak RSS on macOS, but sandboxed environments may
+        # deny the sysctl it uses and make successful child commands exit as
+        # failures. Probe once and fall back to POSIX timing when needed.
+        try:
+            result = subprocess.run(
+                ["/usr/bin/time", "-l", "true"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            _TIME_FLAG = "-l" if result.returncode == 0 else "-p"
+        except (OSError, subprocess.TimeoutExpired):
+            _TIME_FLAG = "-p"
+    else:
+        _TIME_FLAG = "-v"
+    return _TIME_FLAG
 
 
 def parse_time_output(stderr: str) -> dict:
@@ -144,6 +239,12 @@ def parse_time_output(stderr: str) -> dict:
     Returns dict with wall_time_s and peak_rss_kb.
     """
     result: dict = {}
+
+    # POSIX format: "real 0.45" (used as the macOS fallback when `time -l`
+    # cannot report resource usage in restricted environments).
+    m = re.search(r"^real\s+([\d.]+)", stderr, re.MULTILINE)
+    if m:
+        result["wall_time_s"] = round(float(m.group(1)), 4)
 
     if IS_MACOS:
         # BSD format: "        0.45 real         0.00 user         0.00 sys"
@@ -198,7 +299,7 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
 
     try:
         env = os.environ.copy()
-        time_flag = "-l" if IS_MACOS else "-v"
+        time_flag = get_time_flag()
         cmd = [
             "/usr/bin/time", time_flag,
             str(PACKDB_EXE), str(db_path), "-readonly",
@@ -230,11 +331,13 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
             if IS_MACOS:
                 # BSD time output: lines with leading whitespace + number + label
                 time_line_re = re.compile(r"^\s+[\d.]+\s+(real|user|sys)")
+                posix_time_line_re = re.compile(r"^(real|user|sys)\s+[\d.]+")
                 resource_line_re = re.compile(r"^\s+\d+\s+\w")
                 error_lines = [
                     line for line in result.stderr.splitlines()
                     if line.strip()
                     and not time_line_re.match(line)
+                    and not posix_time_line_re.match(line.strip())
                     and not resource_line_re.match(line)
                 ]
             else:
@@ -366,7 +469,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--sizes", type=str, default=None,
-        help="Comma-separated DB sizes (e.g., small,medium). Default: all",
+        help="Comma-separated DB sizes (e.g., medium,large). Default: all",
     )
     parser.add_argument(
         "--iterations", type=int, default=DEFAULT_ITERATIONS,
@@ -395,6 +498,10 @@ def main() -> None:
     # Determine sizes
     sizes = [s.strip() for s in args.sizes.split(",")] if args.sizes else DB_SIZES
     for s in sizes:
+        if s not in DB_SIZES:
+            print(f"ERROR: Unknown size '{s}'. Available: {', '.join(DB_SIZES)}",
+                  file=sys.stderr)
+            sys.exit(1)
         db_path = DATABASES_DIR / f"{s}.db"
         if not db_path.exists():
             print(f"ERROR: Database not found: {db_path}", file=sys.stderr)
@@ -501,13 +608,19 @@ def main() -> None:
 
         for size in sizes:
             combo_idx += 1
+            try:
+                resolved_sql, coefficients = resolve_query_sql(sql, size)
+            except ValueError as e:
+                print(f"ERROR: {query_path.name}: {e}", file=sys.stderr)
+                sys.exit(1)
+
             db_path = DATABASES_DIR / f"{size}.db"
             print(f"[{combo_idx}/{total_combos}] {query_name}_{desc} (size={size})",
                   end="", flush=True)
 
             runs: list[dict] = []
             for i in range(args.iterations):
-                metrics = run_single(sql, db_path, timeout=args.timeout)
+                metrics = run_single(resolved_sql, db_path, timeout=args.timeout)
                 runs.append(metrics)
                 print("." if metrics.get("exit_code") == 0 else "X", end="", flush=True)
 
@@ -516,7 +629,8 @@ def main() -> None:
                 "query": query_name,
                 "description": desc,
                 "size": size,
-                "sql": sql.strip(),
+                "sql": resolved_sql.strip(),
+                "coefficients": coefficients,
                 "runs": runs,
                 "stats": stats,
             }

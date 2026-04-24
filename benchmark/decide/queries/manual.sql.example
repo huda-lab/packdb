@@ -1,6 +1,6 @@
 -- Manual benchmark query. Copy this file to manual.sql and edit.
 -- Run with: make decide-bench-manual
--- The query runs against all database sizes (small/medium/large).
+-- The query runs against all default database sizes (medium/large).
 -- Results are saved to results/manual.json (always overwritten).
 
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, x
