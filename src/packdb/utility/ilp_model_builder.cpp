@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numeric>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -384,6 +385,51 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
     };
 
+    // Drop constraints whose LHS reduced to 0 (all coefficients cancelled or
+    // all variables absorbed into column bounds). A tautology is skipped; a
+    // violated constant constraint is rejected early so the solver doesn't
+    // have to diagnose it.
+    auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
+        if (!constr.indices.empty()) {
+            model.constraints.push_back(std::move(constr));
+            return;
+        }
+        constexpr double EPS = 1e-9;
+        bool violated = false;
+        if (constr.sense == '<') {
+            violated = constr.rhs < -EPS;
+        } else if (constr.sense == '>') {
+            violated = constr.rhs > EPS;
+        } else { // '='
+            violated = std::abs(constr.rhs) > EPS;
+        }
+        if (violated) {
+            throw InvalidInputException(
+                "DECIDE optimization is infeasible: a constraint reduces to "
+                "0 %c %g after absorbing variable bounds and cancelling terms.",
+                constr.sense, constr.rhs);
+        }
+        // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
+    };
+
+    // Rough upper-bound on total model.constraints rows to avoid repeated
+    // vector reallocation — aggregate w/o groups contributes 1, aggregate w/
+    // groups contributes num_groups, per-row contributes num_rows. Plus any
+    // raw global constraints appended after the main loop.
+    {
+        idx_t est_rows = input.global_constraints.size();
+        for (auto &ec : input.constraints) {
+            if (ec.has_quadratic || !ec.bilinear_terms.empty()) continue;
+            if (ec.lhs_is_aggregate) {
+                bool ec_has_groups = !ec.row_group_ids.empty();
+                est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
+            } else {
+                est_rows += num_rows;
+            }
+        }
+        model.constraints.reserve(model.constraints.size() + est_rows);
+    }
+
     for (auto &eval_const : input.constraints) {
         // Skip constraints with quadratic/bilinear terms — handled in quadratic section below
         if (!eval_const.bilinear_terms.empty() || eval_const.has_quadratic) {
@@ -394,31 +440,69 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         bool has_groups = !eval_const.row_group_ids.empty();
         bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
 
+        // Detect whether this constraint can bypass the hash-map accumulator:
+        // * every term must reference a row-scoped decide variable (entity-scoped
+        //   vars collapse many rows to the same solver index — need dedup), AND
+        // * no decide variable appears in more than one term (otherwise distinct
+        //   terms at the same row collide on the same flat index).
+        auto CanUseRowScopedFastPath = [&](const EvaluatedConstraint &ec) -> bool {
+            std::unordered_set<idx_t> seen_vars;
+            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+                idx_t v = ec.variable_indices[term_idx];
+                if (v == DConstants::INVALID_INDEX) continue;
+                if (indexer.is_entity_scoped[v]) return false;
+                if (!seen_vars.insert(v).second) return false;
+            }
+            return true;
+        };
+
         if (is_aggregate) {
             if (!has_groups) {
-                // FAST PATH: no WHEN, no PER — one constraint summing all rows
-                // Use a map to accumulate coefficients for entity-scoped vars
-                // (multiple rows may map to the same solver variable)
+                // FAST PATH: no WHEN, no PER — one constraint summing all rows.
                 ModelConstraint constr;
-                std::unordered_map<int, double> coeff_accum;
+                bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
 
-                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                    if (decide_var_idx != DConstants::INVALID_INDEX) {
+                if (row_scoped_fast) {
+                    idx_t active_terms = 0;
+                    for (auto v : eval_const.variable_indices) {
+                        if (v != DConstants::INVALID_INDEX) active_terms++;
+                    }
+                    constr.indices.reserve(active_terms * num_rows);
+                    constr.coefficients.reserve(active_terms * num_rows);
+                    for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                        idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+                        if (decide_var_idx == DConstants::INVALID_INDEX) continue;
+                        auto &col = eval_const.row_coefficients[term_idx];
                         for (idx_t row = 0; row < num_rows; row++) {
-                            double coeff = eval_const.row_coefficients[term_idx][row];
+                            double coeff = col[row];
+                            if (coeff == 0.0) continue;
                             int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                            coeff_accum[var_idx] += coeff;
+                            constr.indices.push_back(var_idx);
+                            constr.coefficients.push_back(coeff);
                         }
                     }
-                }
+                } else {
+                    // Entity-scoped vars or repeated decide vars — need to
+                    // accumulate because multiple (term, row) pairs can map
+                    // to the same flat solver index.
+                    std::unordered_map<int, double> coeff_accum;
+                    for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                        idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
-                // Flush accumulated coefficients to sparse constraint
-                for (auto &pair : coeff_accum) {
-                    if (pair.second != 0.0) {
-                        constr.indices.push_back(pair.first);
-                        constr.coefficients.push_back(pair.second);
+                        if (decide_var_idx != DConstants::INVALID_INDEX) {
+                            for (idx_t row = 0; row < num_rows; row++) {
+                                double coeff = eval_const.row_coefficients[term_idx][row];
+                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                coeff_accum[var_idx] += coeff;
+                            }
+                        }
+                    }
+
+                    for (auto &pair : coeff_accum) {
+                        if (pair.second != 0.0) {
+                            constr.indices.push_back(pair.first);
+                            constr.coefficients.push_back(pair.second);
+                        }
                     }
                 }
 
@@ -434,7 +518,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     }
                 }
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
-                model.constraints.push_back(std::move(constr));
+                PushNormalizedConstraint(std::move(constr));
 
             } else {
                 // UNIFIED PATH: WHEN and/or PER — build group→rows index, emit one constraint per group
@@ -458,45 +542,75 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                     }
                 }
 
+                bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
+
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) {
                         continue;
                     }
                     ModelConstraint constr;
-                    std::unordered_map<int, double> coeff_accum;
 
-                    for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                        idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                        if (decide_var_idx != DConstants::INVALID_INDEX) {
+                    if (row_scoped_fast) {
+                        idx_t active_terms = 0;
+                        for (auto v : eval_const.variable_indices) {
+                            if (v != DConstants::INVALID_INDEX) active_terms++;
+                        }
+                        constr.indices.reserve(active_terms * group_rows[g].size());
+                        constr.coefficients.reserve(active_terms * group_rows[g].size());
+                        for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                            idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+                            if (decide_var_idx == DConstants::INVALID_INDEX) continue;
+                            auto &col = eval_const.row_coefficients[term_idx];
                             for (idx_t row : group_rows[g]) {
-                                double coeff = eval_const.row_coefficients[term_idx][row];
+                                double coeff = col[row];
+                                if (coeff == 0.0) continue;
                                 int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                coeff_accum[var_idx] += coeff;
+                                constr.indices.push_back(var_idx);
+                                constr.coefficients.push_back(coeff);
+                            }
+                        }
+                    } else {
+                        std::unordered_map<int, double> coeff_accum;
+
+                        for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                            idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+
+                            if (decide_var_idx != DConstants::INVALID_INDEX) {
+                                for (idx_t row : group_rows[g]) {
+                                    double coeff = eval_const.row_coefficients[term_idx][row];
+                                    int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                    coeff_accum[var_idx] += coeff;
+                                }
+                            }
+                        }
+
+                        for (auto &pair : coeff_accum) {
+                            if (pair.second != 0.0) {
+                                constr.indices.push_back(pair.first);
+                                constr.coefficients.push_back(pair.second);
                             }
                         }
                     }
 
-                    for (auto &pair : coeff_accum) {
-                        if (pair.second != 0.0) {
-                            constr.indices.push_back(pair.first);
-                            constr.coefficients.push_back(pair.second);
-                        }
-                    }
-
                     ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
-                    model.constraints.push_back(std::move(constr));
+                    PushNormalizedConstraint(std::move(constr));
                 }
             }
 
         } else {
             // PER-ROW CONSTRAINT: one constraint per row
+            idx_t per_row_active_terms = 0;
+            for (auto v : eval_const.variable_indices) {
+                if (v != DConstants::INVALID_INDEX) per_row_active_terms++;
+            }
             for (idx_t row = 0; row < num_rows; row++) {
                 // Skip rows excluded by WHEN (row_group_ids with INVALID_INDEX)
                 if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
                     continue;
                 }
                 ModelConstraint constr;
+                constr.indices.reserve(per_row_active_terms);
+                constr.coefficients.reserve(per_row_active_terms);
                 // LHS terms that don't reference a DECIDE variable (row-varying
                 // data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
                 // in `x - col <= K`) must move to RHS, not be dropped. The
@@ -522,7 +636,7 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
-                model.constraints.push_back(std::move(constr));
+                PushNormalizedConstraint(std::move(constr));
             }
         }
     }

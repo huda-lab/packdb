@@ -51,16 +51,16 @@ Extracts terms from the objective's aggregate expression. Handles linear, biline
 
 ## Variable Bounds Extraction
 
-`ExtractVariableBounds()` and `TraverseBoundsConstraints()` perform a separate pass over the constraint tree to identify simple per-variable bounds (e.g., `x >= 5`, `x <= 10`). These are constraints where:
+`TraverseBoundsConstraints()` runs in the `DecideGlobalSinkState` constructor (before `AnalyzeConstraint`) to identify simple per-variable bounds (e.g., `x >= 5`, `x <= 10`, `x BETWEEN 0 AND 100`). These are constraints where:
 
 - The LHS is a bare DECIDE variable (not inside a SUM aggregate)
 - The RHS is a constant value
 
-Detected bounds are recorded separately and later applied directly as variable bounds in the solver, which is more efficient than encoding them as general constraints. The traversal:
+When a bound is absorbed, the source `BOUND_COMPARISON` expression pointer is inserted into `gstate.absorbed_bound_exprs`. `AnalyzeConstraint()` checks that set and skips emitting a `DecideConstraint` for absorbed comparisons — otherwise every such bound would also produce `num_rows` redundant per-row model rows in the linear path. Finalize copies `gstate.absorbed_lower_bounds` / `absorbed_upper_bounds` directly into `solver_input`. The traversal:
 
-- Recurses through AND conjunctions, PER wrappers, and WHEN wrappers (examining only `child[0]` for PER/WHEN)
+- Recurses through AND conjunctions, PER wrappers, and WHEN wrappers (examining only `child[0]` for PER/WHEN); WHEN-guarded comparisons are NOT absorbed because they are conditional per-row
 - For comparison expressions: checks that the LHS is not an aggregate, finds the DECIDE variable, extracts the constant RHS value
-- Applies the bound: `<=` updates upper_bounds (min), `>=` updates lower_bounds (max), `=` sets both
+- Applies the bound: `<=` updates upper_bounds (min), `>=` updates lower_bounds (max), `=` sets both; strict `<` / `>` on integer vars tighten by ±1; strict `<` / `>` on REAL vars are deliberately NOT absorbed so `ApplyComparisonSense` in the model builder can reject them with its clear error message
 
 ## Key Data Structures
 

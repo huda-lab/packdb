@@ -3,6 +3,7 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <cmath>
 #include <cstdlib>
+#include <unordered_set>
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -826,6 +827,23 @@ class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
         : data(context, op.children[0]->GetTypes()), op(op) {
+        // Pre-absorb simple variable bounds (x OP const / BETWEEN) into column-bound
+        // arrays so AnalyzeConstraint can skip emitting one DecideConstraint per row
+        // for constraints that are fully captured by column bounds.
+        idx_t num_decide_vars = op.decide_variables.size();
+        absorbed_lower_bounds.assign(num_decide_vars, 0.0);
+        absorbed_upper_bounds.assign(num_decide_vars, 1e30);
+        for (idx_t var = 0; var < num_decide_vars; var++) {
+            auto &decide_var = op.decide_variables[var]->Cast<BoundColumnRefExpression>();
+            if (decide_var.return_type == LogicalType::BOOLEAN) {
+                absorbed_upper_bounds[var] = 1.0;
+            }
+        }
+        if (op.decide_constraints) {
+            TraverseBoundsConstraints(*op.decide_constraints, absorbed_lower_bounds,
+                                      absorbed_upper_bounds);
+        }
+
         // Analyze constraints and objective using new visitor-based approach
         AnalyzeConstraint(op.decide_constraints);
         if (op.decide_objective) {
@@ -945,6 +963,16 @@ public:
 
             case ExpressionClass::BOUND_COMPARISON: {
                 auto &comp = expr.Cast<BoundComparisonExpression>();
+
+                // Skip comparisons whose entire semantics are already captured in
+                // column bounds by the constructor's absorption pass. Emitting a
+                // DecideConstraint here would add num_rows redundant model rows.
+                // WHEN-wrapped comparisons are never absorbed (see
+                // TraverseBoundsConstraints WHEN_CONSTRAINT_TAG branch), so
+                // skipping here is safe.
+                if (absorbed_bound_exprs.count(&expr)) {
+                    break;
+                }
 
                 auto constraint = make_uniq<DecideConstraint>();
                 constraint->comparison_type = comp.type;
@@ -1527,6 +1555,7 @@ public:
                             bool is_integer_var =
                                 (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
                                  op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
+                            bool absorbed = true;
                             // Apply bound based on comparison type
                             if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
@@ -1535,14 +1564,19 @@ public:
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
                                 lower_bounds[var_idx] = bound_value;
                                 upper_bounds[var_idx] = bound_value;
-                            } else if (comp.type == ExpressionType::COMPARE_LESSTHAN) {
-                                // x < bound → x <= bound-1 for integers
-                                double ub = is_integer_var ? bound_value - 1.0 : bound_value;
-                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], ub);
-                            } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN) {
-                                // x > bound → x >= bound+1 for integers
-                                double lb = is_integer_var ? bound_value + 1.0 : bound_value;
-                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lb);
+                            } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
+                                // x < bound → x <= bound-1 for integers. REAL strict
+                                // inequality has no valid absorption — leave it for
+                                // the constraint path which rejects with a clear error.
+                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
+                            } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
+                                // x > bound → x >= bound+1 for integers.
+                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
+                            } else {
+                                absorbed = false;
+                            }
+                            if (absorbed) {
+                                absorbed_bound_exprs.insert(&expr);
                             }
                         }
                     }
@@ -1623,6 +1657,16 @@ public:
 
     vector<unique_ptr<DecideConstraint>> constraints;
     unique_ptr<Objective> objective;
+
+    //! Variable bounds populated once in the constructor from simple
+    //! `x OP const` / `x BETWEEN a AND b` constraints. Finalize copies these
+    //! into solver_input instead of re-walking the expression tree.
+    vector<double> absorbed_lower_bounds;
+    vector<double> absorbed_upper_bounds;
+    //! BOUND_COMPARISON expression pointers that were fully absorbed into
+    //! column bounds — AnalyzeConstraint skips these to avoid emitting
+    //! `num_rows` redundant per-row model rows per absorbed bound.
+    std::unordered_set<const Expression *> absorbed_bound_exprs;
 
     //===--------------------------------------------------------------------===//
     // Evaluated Coefficients (Phase 2)
@@ -2761,21 +2805,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     
     // Variable types and bounds
     solver_input.variable_types.resize(num_decide_vars);
-    solver_input.lower_bounds.assign(num_decide_vars, 0.0); // Default lower
-    solver_input.upper_bounds.assign(num_decide_vars, 1e30); // Default upper
-    
     for (idx_t var = 0; var < num_decide_vars; var++) {
         auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
         solver_input.variable_types[var] = decide_var.return_type;
-        
-        // Set default bounds based on type (same logic as in solver, but good to be explicit)
-        if (decide_var.return_type == LogicalType::BOOLEAN) {
-            solver_input.upper_bounds[var] = 1.0;
-        }
     }
-    
-    // Extract bounds from constraints
-    gstate.ExtractVariableBounds(solver_input.lower_bounds, solver_input.upper_bounds);
+
+    // Bounds were absorbed in the gstate constructor from simple
+    // `x OP const` / BETWEEN constraints; those comparisons were skipped in
+    // AnalyzeConstraint so we don't re-emit them as per-row model rows.
+    solver_input.lower_bounds = gstate.absorbed_lower_bounds;
+    solver_input.upper_bounds = gstate.absorbed_upper_bounds;
 
     // Generate Big-M constraints for MIN/MAX indicator variables
     // For hard cases where MIN/MAX was rewritten to SUM by the optimizer:
@@ -3468,9 +3507,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     }
 
-    // Save objective data (needed for constraint generation in both paths)
-    auto saved_obj_coefficients = solver_input.objective_coefficients;
+    // Save objective data (needed for constraint generation in the PER MIN/MAX
+    // and flat aggregate paths). Defer the deep copy of objective_coefficients
+    // — which is a vector<vector<double>> sized num_terms * num_rows — until
+    // we know we'll take one of those paths.
     auto saved_obj_var_indices = solver_input.objective_variable_indices;
+    bool need_saved_obj =
+        !saved_obj_var_indices.empty() &&
+        ((per_inner_agg != ObjectiveAggregateType::NONE && solver_input.objective_num_groups > 0) ||
+         flat_objective_agg != ObjectiveAggregateType::NONE);
+    vector<vector<double>> saved_obj_coefficients;
+    if (need_saved_obj) {
+        saved_obj_coefficients = solver_input.objective_coefficients;
+    }
 
     // Compute Big-M from variable bounds (shared by both paths)
     auto compute_big_m = [&]() -> double {

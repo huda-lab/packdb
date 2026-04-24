@@ -34,6 +34,17 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
     vector<double> row_lower;
     vector<double> row_upper;
 
+    // Precompute total nnz to avoid repeated vector reallocation
+    idx_t total_nnz = 0;
+    for (auto &constr : model.constraints) {
+        total_nnz += constr.indices.size();
+    }
+    a_rows.reserve(total_nnz);
+    a_cols.reserve(total_nnz);
+    a_vals.reserve(total_nnz);
+    row_lower.reserve(model.constraints.size());
+    row_upper.reserve(model.constraints.size());
+
     idx_t constraint_idx = 0;
     for (auto &constr : model.constraints) {
         for (idx_t j = 0; j < constr.indices.size(); j++) {

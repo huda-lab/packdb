@@ -72,18 +72,24 @@ The `maximize` flag is set from `input.sense`.
 
 Each `EvaluatedConstraint` is converted to one or more `ModelConstraint` structs. The path depends on whether the constraint is aggregate (SUM-level) and whether it has groups (WHEN/PER).
 
+### Row-Scoped Fast Path (Path 1 and Path 2)
+
+`CanUseRowScopedFastPath()` inspects the constraint's `variable_indices` once up front and returns true only when (a) every term references a row-scoped decide variable and (b) no decide variable appears in more than one term. Under those conditions each `(term, row)` pair produces a unique flat solver index, so coefficients can be pushed directly into `constr.indices` / `constr.coefficients` without `unordered_map` accumulation. Entity-scoped vars or duplicated decide vars fall back to the hash-map path, which is what the aggregate paths need to handle `(entity, row)` collisions correctly.
+
+Both the ungrouped and grouped aggregate branches use this same fast-path selector.
+
 ### Path 1: Aggregate, Ungrouped (No WHEN, No PER)
 
-Fast path when `row_group_ids` is empty. A single `ModelConstraint` is produced that sums over all rows:
+A single `ModelConstraint` is produced that sums over all rows:
 
-- For each term with a valid variable index, all rows contribute: solver variable index from `var_indexer.Get(decide_var_idx, row)`, coefficient from `row_coefficients[term_idx][row]`.
-- For entity-scoped variables, multiple rows may map to the same solver variable index. Coefficients for the same variable are accumulated using an `unordered_map<int, double>` keyed by solver variable index, then flattened to COO format. This correctly handles the case where an entity appears in multiple rows.
+- **Fast path (all-row-scoped, no duplicate vars)**: reserve `active_terms * num_rows` capacity and push each `(term, row)` contribution directly, skipping zeros.
+- **Accumulation path**: `unordered_map<int, double>` keyed by solver variable index, then flattened to COO format. Needed when entity-scoped variables or repeated decide vars can collide on the same flat index.
 - RHS comes from `rhs_values[0]`.
 - AVG terms have already been coefficient-scaled in Phase 2. The model builder consumes the evaluated coefficients directly.
 
 ### Path 2: Aggregate, Grouped (WHEN and/or PER)
 
-A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one `ModelConstraint` is emitted per non-empty group:
+A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one `ModelConstraint` is emitted per non-empty group, using the same fast-path vs. accumulation split as Path 1 (reserves `active_terms * group_rows[g].size()` on the fast path).
 
 - Only rows in the group contribute coefficients.
 - RHS comes from `rhs_values[0]`.
@@ -91,7 +97,15 @@ A `group_to_rows` index is built: for each group ID, collect which rows belong t
 
 ### Path 3: Per-Row
 
-One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint contains only the terms for that single row, with RHS from `rhs_values[row]`. Variable indices are obtained via `var_indexer.Get(decide_var_idx, row)`.
+One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint pre-reserves `per_row_active_terms` and contains only the terms for that single row, with RHS from `rhs_values[row]`. Variable indices are obtained via `var_indexer.Get(decide_var_idx, row)`.
+
+### Normalization on Emission
+
+All three paths push through `PushNormalizedConstraint()` rather than `model.constraints.push_back()` directly. It drops empty-LHS tautologies (`0 <= k>=0`, `0 >= k<=0`, `0 = 0`) and throws `InvalidInputException` for violated empty-LHS rows (e.g., `0 <= -1` after absorbing variable bounds and cancelling terms) — surfacing infeasibility here yields a clearer error than a solver status code.
+
+### Size Estimation and Reservation
+
+Before the constraint loop, the builder sums an upper bound on `model.constraints.size()` (aggregates contribute 1 or `num_groups`, per-row contributes `num_rows`) and reserves once. `deterministic_naive.cpp` precomputes total nnz across `model.constraints` and reserves `a_rows` / `a_cols` / `a_vals` / `row_lower` / `row_upper` in one shot, avoiding repeated reallocation when flattening to HiGHS COO.
 
 ## `ApplyComparisonSense()`
 
