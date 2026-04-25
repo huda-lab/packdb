@@ -3,6 +3,8 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <cmath>
 #include <cstdlib>
+#include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -86,6 +88,188 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 	} else {
 		return expr.Copy();
 	}
+}
+
+//! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
+//! Throws InvalidInputException on NULL or non-finite values, citing `err_context`.
+//! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
+static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
+                                vector<double> &out, const char *err_context) {
+	if (count == 0) {
+		return;
+	}
+	UnifiedVectorFormat format;
+	Vector cast_tmp(LogicalType::DOUBLE);
+	Vector *src;
+	if (result_vec.GetType().id() == LogicalTypeId::DOUBLE) {
+		src = &result_vec;
+	} else {
+		VectorOperations::DefaultCast(result_vec, cast_tmp, count, false);
+		src = &cast_tmp;
+	}
+	src->ToUnifiedFormat(count, format);
+	auto data = UnifiedVectorFormat::GetData<double>(format);
+	for (idx_t i = 0; i < count; i++) {
+		idx_t idx = format.sel->get_index(i);
+		if (!format.validity.RowIsValid(idx)) {
+			throw InvalidInputException(
+				"DECIDE %s returned NULL at row %llu. "
+				"NULL values are not allowed in optimization expressions. "
+				"Use COALESCE() to handle NULLs or filter them with WHERE clause.",
+				err_context, out.size());
+		}
+		double dv = data[idx];
+		if (!std::isfinite(dv)) {
+			throw InvalidInputException(
+				"DECIDE %s contains invalid value (NaN or Infinity) at row %llu. "
+				"Common causes:\n"
+				"  • Division by zero in the expression\n"
+				"  • Arithmetic overflow in calculations\n"
+				"  • NULL values that propagated through math operations\n"
+				"Check your expressions and input data.",
+				err_context, out.size());
+		}
+		out.push_back(dv * sign);
+	}
+}
+
+//! Compare two key tuples for grouping equality. Two NULLs in the same column
+//! are treated as identical (entity grouping convention). PER call sites screen
+//! NULLs out before reaching equality, so the choice does not affect them.
+static bool KeyTuplesEqual(const vector<vector<Value>> &cols, idx_t row_a, idx_t row_b) {
+	for (idx_t c = 0; c < cols.size(); c++) {
+		auto &av = cols[c][row_a];
+		auto &bv = cols[c][row_b];
+		if (av.IsNull() != bv.IsNull()) {
+			return false;
+		}
+		if (av.IsNull()) {
+			continue;
+		}
+		if (!(av == bv)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Vectorized typed-hash grouping. Replaces the prior Value::ToString()-based
+//! composite-string keying in entity mapping and PER grouping. Hashes are
+//! computed per chunk via VectorOperations::Hash / CombineHash; collision
+//! fallback uses per-row Values stored as `key_columns`.
+//!
+//!   key_exprs       — pre-transformed expressions for chunk evaluation, one per key column
+//!   row_filter      — return true to include row in grouping (empty function = include all)
+//!   null_excludes   — true = any NULL in a key column maps the row to INVALID_INDEX (PER semantics);
+//!                     false = NULL is part of the composite key (entity semantics)
+//!   out_row_to_group — sized num_rows; INVALID_INDEX for excluded rows, [0..K) otherwise
+//!   out_num_groups   — K, count of distinct groups in input order
+static void BuildGroupIds(const vector<unique_ptr<Expression>> &key_exprs,
+                          ClientContext &context,
+                          ColumnDataCollection &data,
+                          idx_t num_rows,
+                          const std::function<bool(idx_t)> &row_filter,
+                          bool null_excludes,
+                          vector<idx_t> &out_row_to_group,
+                          idx_t &out_num_groups) {
+	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
+	out_num_groups = 0;
+	if (num_rows == 0 || key_exprs.empty()) {
+		return;
+	}
+
+	const idx_t num_key_cols = key_exprs.size();
+
+	// Build one executor for all key columns; produces a multi-column result chunk per scan.
+	ExpressionExecutor key_executor(context);
+	vector<LogicalType> key_types;
+	key_types.reserve(num_key_cols);
+	for (auto &e : key_exprs) {
+		key_executor.AddExpression(*e);
+		key_types.push_back(e->return_type);
+	}
+
+	vector<hash_t> row_hashes;
+	row_hashes.reserve(num_rows);
+	vector<vector<Value>> key_columns(num_key_cols);
+	for (idx_t c = 0; c < num_key_cols; c++) {
+		key_columns[c].reserve(num_rows);
+	}
+
+	ColumnDataScanState scan;
+	data.InitializeScan(scan);
+	DataChunk chunk;
+	chunk.Initialize(context, data.Types());
+	DataChunk key_results;
+	key_results.Initialize(context, key_types);
+	Vector chunk_hashes(LogicalType::HASH);
+	while (data.Scan(scan, chunk)) {
+		idx_t count = chunk.size();
+		if (count == 0) {
+			continue;
+		}
+		key_results.Reset();
+		key_executor.Execute(chunk, key_results);
+
+		VectorOperations::Hash(key_results.data[0], chunk_hashes, count);
+		for (idx_t c = 1; c < num_key_cols; c++) {
+			VectorOperations::CombineHash(chunk_hashes, key_results.data[c], count);
+		}
+		auto hashes_data = FlatVector::GetData<hash_t>(chunk_hashes);
+		for (idx_t i = 0; i < count; i++) {
+			row_hashes.push_back(hashes_data[i]);
+		}
+
+		// Capture Values for equality fallback. (Skips Value::ToString() entirely.)
+		for (idx_t c = 0; c < num_key_cols; c++) {
+			auto &vec = key_results.data[c];
+			for (idx_t i = 0; i < count; i++) {
+				key_columns[c].push_back(vec.GetValue(i));
+			}
+		}
+	}
+
+	if (row_hashes.size() != num_rows) {
+		throw InternalException(
+			"DECIDE BuildGroupIds: chunk scan produced %llu rows, expected %llu",
+			row_hashes.size(), num_rows);
+	}
+
+	std::unordered_multimap<hash_t, idx_t> hash_to_rep_row;
+	hash_to_rep_row.reserve(num_rows);
+	idx_t next_group = 0;
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (row_filter && !row_filter(row)) {
+			continue;
+		}
+		if (null_excludes) {
+			bool has_null = false;
+			for (idx_t c = 0; c < num_key_cols; c++) {
+				if (key_columns[c][row].IsNull()) {
+					has_null = true;
+					break;
+				}
+			}
+			if (has_null) {
+				continue;
+			}
+		}
+		hash_t h = row_hashes[row];
+		auto range = hash_to_rep_row.equal_range(h);
+		bool matched = false;
+		for (auto it = range.first; it != range.second; ++it) {
+			if (KeyTuplesEqual(key_columns, row, it->second)) {
+				out_row_to_group[row] = out_row_to_group[it->second];
+				matched = true;
+				break;
+			}
+		}
+		if (!matched) {
+			out_row_to_group[row] = next_group++;
+			hash_to_rep_row.emplace(h, row);
+		}
+	}
+	out_num_groups = next_group;
 }
 
 struct NormalizedProductTerm {
@@ -1762,66 +1946,24 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     vector<EntityMapping> entity_mappings;
+    auto data_types = gstate.data.Types();
     for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
         auto &scope = entity_scopes[scope_idx];
         EntityMapping mapping;
-        mapping.row_to_entity.resize(num_rows);
 
-        // Read entity key column values directly from the data chunk
-        // using the pre-resolved physical column indices
-        idx_t num_key_cols = scope.entity_key_physical_indices.size();
-        vector<vector<Value>> key_columns(num_key_cols);
-
-        for (idx_t col_idx = 0; col_idx < num_key_cols; col_idx++) {
-            key_columns[col_idx].reserve(num_rows);
+        // Build BoundReferenceExpression for each entity-key physical column index
+        // so BuildGroupIds can run them through one ExpressionExecutor.
+        vector<unique_ptr<Expression>> key_exprs;
+        key_exprs.reserve(scope.entity_key_physical_indices.size());
+        for (idx_t col_idx = 0; col_idx < scope.entity_key_physical_indices.size(); col_idx++) {
+            idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
+            key_exprs.push_back(make_uniq_base<Expression, BoundReferenceExpression>(
+                data_types[phys_idx], phys_idx));
         }
 
-        {
-            ColumnDataScanState key_scan_state;
-            gstate.data.InitializeScan(key_scan_state);
-            DataChunk key_chunk;
-            key_chunk.Initialize(context, gstate.data.Types());
-
-            while (gstate.data.Scan(key_scan_state, key_chunk)) {
-                for (idx_t row_in_chunk = 0; row_in_chunk < key_chunk.size(); row_in_chunk++) {
-                    for (idx_t col_idx = 0; col_idx < num_key_cols; col_idx++) {
-                        idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
-                        key_columns[col_idx].push_back(key_chunk.data[phys_idx].GetValue(row_in_chunk));
-                    }
-                }
-            }
-        }
-
-        // Build composite key → entity_id map (same approach as PER grouping)
-        unordered_map<string, idx_t> key_to_entity;
-        idx_t next_entity = 0;
-
-        for (idx_t row = 0; row < num_rows; row++) {
-            string key;
-            for (idx_t col_idx = 0; col_idx < num_key_cols; col_idx++) {
-                if (col_idx > 0) {
-                    key.push_back('\0');
-                }
-                // Prefix each value with a NULL/non-NULL tag to avoid collisions
-                // between SQL NULL and the literal string "NULL"
-                auto &val = key_columns[col_idx][row];
-                if (val.IsNull()) {
-                    key.push_back('\x00');
-                } else {
-                    key.push_back('\x01');
-                    key += val.ToString();
-                }
-            }
-            auto it = key_to_entity.find(key);
-            if (it == key_to_entity.end()) {
-                key_to_entity[key] = next_entity;
-                mapping.row_to_entity[row] = next_entity;
-                next_entity++;
-            } else {
-                mapping.row_to_entity[row] = it->second;
-            }
-        }
-        mapping.num_entities = next_entity;
+        BuildGroupIds(key_exprs, context, gstate.data, num_rows,
+                      std::function<bool(idx_t)>{}, /*null_excludes=*/false,
+                      mapping.row_to_entity, mapping.num_entities);
         entity_mappings.push_back(std::move(mapping));
     }
 
@@ -1980,60 +2122,42 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
+        // Batch all linear coefficient expressions into one ExpressionExecutor and
+        // produce a multi-column result chunk per scan iteration.
+        vector<unique_ptr<Expression>> transformed_coefs;
+        transformed_coefs.reserve(constraint->lhs_terms.size());
+        vector<LogicalType> coef_result_types;
+        coef_result_types.reserve(constraint->lhs_terms.size());
+        ExpressionExecutor coef_executor(context);
+        for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+            auto &term = constraint->lhs_terms[term_idx];
+            transformed_coefs.push_back(TransformToChunkExpression(*term.coefficient, context));
+            coef_result_types.push_back(transformed_coefs.back()->return_type);
+            try {
+                coef_executor.AddExpression(*transformed_coefs.back());
+            } catch (const std::exception &e) {
+                throw InternalException("Failed to add expression for term %llu: %s\nOriginal: %s\nTransformed: %s",
+                    term_idx, e.what(), term.coefficient->ToString(), transformed_coefs.back()->ToString());
+            }
+            eval_const.row_coefficients[term_idx].reserve(num_rows);
+        }
+
+        DataChunk coef_results;
+        if (!constraint->lhs_terms.empty()) {
+            coef_results.Initialize(context, coef_result_types);
+        }
+
         while (gstate.data.Scan(scan_state, chunk)) {
-            // Evaluate each term separately for this chunk
+            if (constraint->lhs_terms.empty()) {
+                continue;
+            }
+            coef_results.Reset();
+            coef_executor.Execute(chunk, coef_results);
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-                auto &term = constraint->lhs_terms[term_idx];
-
-                auto transformed_coef = TransformToChunkExpression(*term.coefficient, context);
-
-                // Create executor and evaluate this term
-                ExpressionExecutor term_executor(context);
-                try {
-                    term_executor.AddExpression(*transformed_coef);
-                } catch (const std::exception &e) {
-                    throw InternalException("Failed to add expression for term %llu: %s\nOriginal: %s\nTransformed: %s",
-                        term_idx, e.what(), term.coefficient->ToString(), transformed_coef->ToString());
-                }
-
-                // Execute on chunk
-                // Use the expression's actual return type, then cast to double when extracting
-                DataChunk term_result;
-                vector<LogicalType> result_types = {transformed_coef->return_type};
-                term_result.Initialize(context, result_types);
-                term_executor.Execute(chunk, term_result);
-
-                // Extract values and cast to double
-                auto &vec = term_result.data[0];
-                for (idx_t row_in_chunk = 0; row_in_chunk < chunk.size(); row_in_chunk++) {
-                    // Cast to double regardless of the actual type (could be INTEGER, DOUBLE, etc.)
-                    Value val = vec.GetValue(row_in_chunk);
-
-                    // Check for NULL values
-                    if (val.IsNull()) {
-                        throw InvalidInputException(
-                            "DECIDE constraint coefficient returned NULL at row %llu. "
-                            "NULL values are not allowed in optimization coefficients. "
-                            "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
-                            eval_const.row_coefficients[term_idx].size());
-                    }
-
-                    double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-
-                    // Check for NaN or Infinity
-                    if (!std::isfinite(double_val)) {
-                        throw InvalidInputException(
-                            "DECIDE constraint coefficient contains invalid value (NaN or Infinity) at row %llu. "
-                            "Common causes:\n"
-                            "  • Division by zero in coefficient expression\n"
-                            "  • Arithmetic overflow in calculations\n"
-                            "  • NULL values that propagated through math operations\n"
-                            "Check your coefficient expressions and input data.",
-                            eval_const.row_coefficients[term_idx].size());
-                    }
-
-                    eval_const.row_coefficients[term_idx].push_back(double_val * term.sign);
-                }
+                ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(),
+                                    constraint->lhs_terms[term_idx].sign,
+                                    eval_const.row_coefficients[term_idx],
+                                    "constraint coefficient");
             }
         }
 
@@ -2076,41 +2200,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             DataChunk rhs_chunk;
             rhs_chunk.Initialize(context, gstate.data.Types());
 
+            DataChunk rhs_result;
+            vector<LogicalType> result_types = {transformed_rhs->return_type};
+            rhs_result.Initialize(context, result_types);
             while (gstate.data.Scan(rhs_scan_state, rhs_chunk)) {
-                DataChunk rhs_result;
-                vector<LogicalType> result_types = {transformed_rhs->return_type};
-                rhs_result.Initialize(context, result_types);
+                rhs_result.Reset();
                 rhs_executor.Execute(rhs_chunk, rhs_result);
-
-                auto &vec = rhs_result.data[0];
-                for (idx_t row_in_chunk = 0; row_in_chunk < rhs_chunk.size(); row_in_chunk++) {
-                    Value val = vec.GetValue(row_in_chunk);
-
-                    // Check for NULL values
-                    if (val.IsNull()) {
-                        throw InvalidInputException(
-                            "DECIDE constraint right-hand side returned NULL at row %llu. "
-                            "NULL values are not allowed in optimization constraints. "
-                            "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
-                            eval_const.rhs_values.size());
-                    }
-
-                    double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-
-                    // Check for NaN or Infinity
-                    if (!std::isfinite(double_val)) {
-                        throw InvalidInputException(
-                            "DECIDE constraint right-hand side contains invalid value (NaN or Infinity) at row %llu. "
-                            "Common causes:\n"
-                            "  • Division by zero in RHS expression\n"
-                            "  • Arithmetic overflow in calculations\n"
-                            "  • NULL values that propagated through math operations\n"
-                            "Check your RHS expressions and input data.",
-                            eval_const.rhs_values.size());
-                    }
-
-                    eval_const.rhs_values.push_back(double_val);
-                }
+                ExtractDoubleColumn(rhs_result.data[0], rhs_chunk.size(), 1.0,
+                                    eval_const.rhs_values,
+                                    "constraint right-hand side");
             }
         }
 
@@ -2124,44 +2222,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool has_per = (!constraint->per_columns.empty());
 
         if (has_when || has_per || has_local_filters) {
-            // Step 1: Evaluate WHEN condition (if present) to get per-row booleans
             vector<bool> when_mask;
             if (has_when) {
                 when_mask = EvaluateBooleanMask(*constraint->when_condition);
             }
-
-            // Step 2: Evaluate PER columns (if present) to get per-row values
-            // For multi-column PER, we evaluate each column separately and build composite keys
-            vector<vector<Value>> all_per_values;  // [col_idx][row_idx]
-            if (has_per) {
-                all_per_values.resize(constraint->per_columns.size());
-                for (idx_t col_idx = 0; col_idx < constraint->per_columns.size(); col_idx++) {
-                    auto transformed_col = TransformToChunkExpression(*constraint->per_columns[col_idx], context);
-                    ExpressionExecutor per_executor(context);
-                    per_executor.AddExpression(*transformed_col);
-
-                    all_per_values[col_idx].reserve(num_rows);
-
-                    ColumnDataScanState per_scan_state;
-                    gstate.data.InitializeScan(per_scan_state);
-                    DataChunk per_chunk;
-                    per_chunk.Initialize(context, gstate.data.Types());
-
-                    while (gstate.data.Scan(per_scan_state, per_chunk)) {
-                        DataChunk per_result;
-                        per_result.Initialize(context, {transformed_col->return_type});
-                        per_executor.Execute(per_chunk, per_result);
-
-                        auto &vec = per_result.data[0];
-                        for (idx_t row_in_chunk = 0; row_in_chunk < per_chunk.size(); row_in_chunk++) {
-                            all_per_values[col_idx].push_back(vec.GetValue(row_in_chunk));
-                        }
-                    }
-                }
-            }
-
-            // Step 3: Build unified row_group_ids
-            eval_const.row_group_ids.resize(num_rows);
 
             auto row_is_included = [&](idx_t row) {
                 if (has_when && !when_mask[row]) {
@@ -2173,53 +2237,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 return true;
             };
 
-            // Helper: build composite PER key for a row
-            auto build_per_key = [&](idx_t row, bool &has_null_out) -> string {
-                has_null_out = false;
-                for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
-                    if (all_per_values[col_idx][row].IsNull()) {
-                        has_null_out = true;
-                        return {};
-                    }
-                }
-                string key;
-                for (idx_t col_idx = 0; col_idx < all_per_values.size(); col_idx++) {
-                    if (col_idx > 0) {
-                        key.push_back('\0');
-                    }
-                    key += all_per_values[col_idx][row].ToString();
-                }
-                return key;
-            };
-
             if (has_per) {
-                // PER (with or without WHEN)
-                // Map distinct composite PER keys to group IDs (first-seen order).
-                // WHEN→PER: discover groups only from WHEN-qualifying rows.
-                unordered_map<string, idx_t> value_to_group;
-                idx_t next_group = 0;
-
-                for (idx_t row = 0; row < num_rows; row++) {
-                    if (!row_is_included(row)) {
-                        eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                        continue;
-                    }
-                    bool has_null = false;
-                    string key = build_per_key(row, has_null);
-                    if (has_null) {
-                        eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
-                        continue;
-                    }
-                    auto it = value_to_group.find(key);
-                    if (it == value_to_group.end()) {
-                        value_to_group[key] = next_group;
-                        eval_const.row_group_ids[row] = next_group;
-                        next_group++;
-                    } else {
-                        eval_const.row_group_ids[row] = it->second;
-                    }
+                vector<unique_ptr<Expression>> key_exprs;
+                key_exprs.reserve(constraint->per_columns.size());
+                for (auto &col : constraint->per_columns) {
+                    key_exprs.push_back(TransformToChunkExpression(*col, context));
                 }
-                eval_const.num_groups = next_group;
+                BuildGroupIds(key_exprs, context, gstate.data, num_rows,
+                              row_is_included, /*null_excludes=*/true,
+                              eval_const.row_group_ids, eval_const.num_groups);
                 // PER: individual empty groups are skipped downstream (preserved),
                 // but reject when *every* group is empty (the aggregate as a whole
                 // sees no rows after WHEN filtering). Per-row constraints are
@@ -2231,6 +2257,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
                 }
             } else {
+                eval_const.row_group_ids.resize(num_rows);
                 // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
                 idx_t included_rows = 0;
                 for (idx_t row = 0; row < num_rows; row++) {
@@ -2391,41 +2418,56 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        // Evaluate bilinear terms in constraint (if any)
+        // Evaluate bilinear terms in constraint (if any).
+        // Batch terms with coefficient expressions into a single ExpressionExecutor.
         if (constraint->has_bilinear) {
-            for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
+            const idx_t num_bl = constraint->bilinear_terms.size();
+            vector<EvaluatedConstraint::BilinearTerm> ebts(num_bl);
+            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
                 auto &bt = constraint->bilinear_terms[term_idx];
-                EvaluatedConstraint::BilinearTerm ebt;
-                ebt.var_a = bt.var_a;
-                ebt.var_b = bt.var_b;
+                ebts[term_idx].var_a = bt.var_a;
+                ebts[term_idx].var_b = bt.var_b;
+            }
 
-                if (bt.coefficient) {
-                    auto transformed = TransformToChunkExpression(*bt.coefficient, context);
-                    ExpressionExecutor coef_executor(context);
-                    coef_executor.AddExpression(*transformed);
-                    ColumnDataScanState bl_scan;
-                    gstate.data.InitializeScan(bl_scan);
-                    DataChunk bl_chunk;
-                    bl_chunk.Initialize(context, gstate.data.Types());
-                    while (gstate.data.Scan(bl_scan, bl_chunk)) {
-                        DataChunk coef_result;
-                        coef_result.Initialize(context, {transformed->return_type});
-                        coef_executor.Execute(bl_chunk, coef_result);
-                        auto &vec = coef_result.data[0];
-                        for (idx_t r = 0; r < bl_chunk.size(); r++) {
-                            Value val = vec.GetValue(r);
-                            if (val.IsNull()) {
-                                throw InvalidInputException(
-                                    "DECIDE bilinear constraint coefficient returned NULL at row %llu.",
-                                    ebt.row_coefficients.size());
-                            }
-                            double dval = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                            ebt.row_coefficients.push_back(dval * bt.sign);
-                        }
-                    }
-                } else {
-                    ebt.row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+            vector<unique_ptr<Expression>> bl_transformed;
+            vector<idx_t> bl_route;       // result column index → bilinear_terms index
+            vector<LogicalType> bl_types;
+            ExpressionExecutor bl_executor(context);
+            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+                auto &bt = constraint->bilinear_terms[term_idx];
+                if (!bt.coefficient) {
+                    ebts[term_idx].row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+                    continue;
                 }
+                bl_transformed.push_back(TransformToChunkExpression(*bt.coefficient, context));
+                bl_types.push_back(bl_transformed.back()->return_type);
+                bl_executor.AddExpression(*bl_transformed.back());
+                bl_route.push_back(term_idx);
+                ebts[term_idx].row_coefficients.reserve(num_rows);
+            }
+
+            if (!bl_transformed.empty()) {
+                ColumnDataScanState bl_scan;
+                gstate.data.InitializeScan(bl_scan);
+                DataChunk bl_chunk;
+                bl_chunk.Initialize(context, gstate.data.Types());
+                DataChunk bl_results;
+                bl_results.Initialize(context, bl_types);
+                while (gstate.data.Scan(bl_scan, bl_chunk)) {
+                    bl_results.Reset();
+                    bl_executor.Execute(bl_chunk, bl_results);
+                    for (idx_t j = 0; j < bl_route.size(); j++) {
+                        idx_t term_idx = bl_route[j];
+                        ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(),
+                                            constraint->bilinear_terms[term_idx].sign,
+                                            ebts[term_idx].row_coefficients,
+                                            "bilinear constraint coefficient");
+                    }
+                }
+            }
+
+            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+                auto &ebt = ebts[term_idx];
                 if (bilinear_filters[term_idx].has_filter) {
                     auto &mask = bilinear_filters[term_idx].mask;
                     for (idx_t row = 0; row < ebt.row_coefficients.size(); row++) {
@@ -2442,7 +2484,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        // Evaluate quadratic groups in constraint (POWER(expr, 2) / self-products)
+        // Evaluate quadratic groups in constraint (POWER(expr, 2) / self-products).
+        // Per group, batch all inner_terms into a single ExpressionExecutor.
         if (constraint->has_quadratic) {
             eval_const.has_quadratic = true;
             for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
@@ -2450,37 +2493,36 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 EvaluatedConstraint::QuadraticGroup eqg;
                 eqg.sign = qg.sign;
 
-                for (auto &term : qg.inner_terms) {
+                vector<unique_ptr<Expression>> q_transformed;
+                vector<LogicalType> q_types;
+                ExpressionExecutor q_executor(context);
+                eqg.row_coefficients.resize(qg.inner_terms.size());
+                for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
+                    auto &term = qg.inner_terms[inner_idx];
                     eqg.variable_indices.push_back(term.variable_index);
+                    q_transformed.push_back(TransformToChunkExpression(*term.coefficient, context));
+                    q_types.push_back(q_transformed.back()->return_type);
+                    q_executor.AddExpression(*q_transformed.back());
+                    eqg.row_coefficients[inner_idx].reserve(num_rows);
+                }
 
-                    auto transformed = TransformToChunkExpression(*term.coefficient, context);
-                    ExpressionExecutor coef_executor(context);
-                    coef_executor.AddExpression(*transformed);
-
-                    vector<double> row_coeffs;
+                if (!qg.inner_terms.empty()) {
                     ColumnDataScanState qscan;
                     gstate.data.InitializeScan(qscan);
                     DataChunk qchunk;
                     qchunk.Initialize(context, gstate.data.Types());
-
+                    DataChunk q_results;
+                    q_results.Initialize(context, q_types);
                     while (gstate.data.Scan(qscan, qchunk)) {
-                        DataChunk coef_result;
-                        coef_result.Initialize(context, {transformed->return_type});
-                        coef_executor.Execute(qchunk, coef_result);
-                        auto &vec = coef_result.data[0];
-                        for (idx_t r = 0; r < qchunk.size(); r++) {
-                            Value val = vec.GetValue(r);
-                            if (val.IsNull()) {
-                                throw InvalidInputException(
-                                    "DECIDE quadratic constraint coefficient returned NULL at row %llu. "
-                                    "Use COALESCE() or WHERE to handle NULLs.",
-                                    row_coeffs.size());
-                            }
-                            double dval = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                            row_coeffs.push_back(dval * term.sign);
+                        q_results.Reset();
+                        q_executor.Execute(qchunk, q_results);
+                        for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
+                            ExtractDoubleColumn(q_results.data[inner_idx], qchunk.size(),
+                                                qg.inner_terms[inner_idx].sign,
+                                                eqg.row_coefficients[inner_idx],
+                                                "quadratic constraint coefficient");
                         }
                     }
-                    eqg.row_coefficients.push_back(std::move(row_coeffs));
                 }
                 if (quadratic_filters[group_idx].has_filter) {
                     auto &mask = quadratic_filters[group_idx].mask;
@@ -2591,12 +2633,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // without knowing which bucket it came from.
             vector<unique_ptr<Expression>> flat_coeffs;
             vector<pair<idx_t, idx_t>> route; // (bucket_idx, term_idx)
+            vector<LogicalType> obj_result_types;
+            ExpressionExecutor obj_executor(context);
             for (idx_t b_idx = 0; b_idx < buckets.size(); b_idx++) {
                 auto &b = buckets[b_idx];
                 for (idx_t term_idx = 0; term_idx < b.src_terms->size(); term_idx++) {
                     flat_coeffs.push_back(
                         TransformToChunkExpression(*(*b.src_terms)[term_idx].coefficient, context));
+                    obj_result_types.push_back(flat_coeffs.back()->return_type);
+                    obj_executor.AddExpression(*flat_coeffs.back());
                     route.emplace_back(b_idx, term_idx);
+                    (*b.out_coeffs)[term_idx].reserve(num_rows);
                 }
             }
 
@@ -2604,45 +2651,25 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             gstate.data.InitializeScan(obj_scan_state);
             DataChunk obj_chunk;
             obj_chunk.Initialize(context, gstate.data.Types());
+            DataChunk obj_results;
+            if (!flat_coeffs.empty()) {
+                obj_results.Initialize(context, obj_result_types);
+            }
 
             while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
+                if (flat_coeffs.empty()) {
+                    continue;
+                }
+                obj_results.Reset();
+                obj_executor.Execute(obj_chunk, obj_results);
                 for (idx_t j = 0; j < flat_coeffs.size(); j++) {
-                    ExpressionExecutor term_executor(context);
-                    term_executor.AddExpression(*flat_coeffs[j]);
-
-                    DataChunk term_result;
-                    vector<LogicalType> result_types = {flat_coeffs[j]->return_type};
-                    term_result.Initialize(context, result_types);
-                    term_executor.Execute(obj_chunk, term_result);
-
-                    auto &vec = term_result.data[0];
                     auto &b = buckets[route[j].first];
                     idx_t term_idx = route[j].second;
                     auto &out = (*b.out_coeffs)[term_idx];
                     int term_sign = (*b.src_terms)[term_idx].sign;
-
-                    for (idx_t row_in_chunk = 0; row_in_chunk < obj_chunk.size(); row_in_chunk++) {
-                        Value val = vec.GetValue(row_in_chunk);
-                        if (val.IsNull()) {
-                            throw InvalidInputException(
-                                "DECIDE objective coefficient returned NULL at row %llu. "
-                                "NULL values are not allowed in optimization objective. "
-                                "Use COALESCE() to handle NULLs or filter them with WHERE clause.",
-                                out.size());
-                        }
-                        double double_val = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                        if (!std::isfinite(double_val)) {
-                            throw InvalidInputException(
-                                "DECIDE objective coefficient contains invalid value (NaN or Infinity) at row %llu. "
-                                "Common causes:\n"
-                                "  • Division by zero in objective expression\n"
-                                "  • Arithmetic overflow in calculations\n"
-                                "  • NULL values that propagated through math operations\n"
-                                "Check your objective expressions and input data.",
-                                out.size());
-                        }
-                        out.push_back(double_val * term_sign);
-                    }
+                    ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(),
+                                        static_cast<double>(term_sign), out,
+                                        "objective coefficient");
                 }
             }
 
@@ -2729,46 +2756,56 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         // No extra debug here; solver output will show timings/objective
 
-        // Evaluate bilinear term coefficients (non-Boolean pairs left by optimizer)
+        // Evaluate bilinear term coefficients (non-Boolean pairs left by optimizer).
+        // Batch terms with coefficient expressions into a single ExpressionExecutor.
         if (gstate.objective->has_bilinear) {
-            for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size(); term_idx++) {
+            const idx_t num_bl = gstate.objective->bilinear_terms.size();
+            vector<DecideGlobalSinkState::EvaluatedBilinearTerm> ebts(num_bl);
+            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
                 auto &bt = gstate.objective->bilinear_terms[term_idx];
-                DecideGlobalSinkState::EvaluatedBilinearTerm ebt;
-                ebt.var_a = bt.var_a;
-                ebt.var_b = bt.var_b;
+                ebts[term_idx].var_a = bt.var_a;
+                ebts[term_idx].var_b = bt.var_b;
+            }
 
-                if (bt.coefficient) {
-                    // Evaluate the data coefficient per-row
-                    auto transformed = TransformToChunkExpression(*bt.coefficient, context);
-                    ExpressionExecutor coef_executor(context);
-                    coef_executor.AddExpression(*transformed);
-
-                    ColumnDataScanState bl_scan;
-                    gstate.data.InitializeScan(bl_scan);
-                    DataChunk bl_chunk;
-                    bl_chunk.Initialize(context, gstate.data.Types());
-
-                    while (gstate.data.Scan(bl_scan, bl_chunk)) {
-                        DataChunk coef_result;
-                        coef_result.Initialize(context, {transformed->return_type});
-                        coef_executor.Execute(bl_chunk, coef_result);
-                        auto &vec = coef_result.data[0];
-                        for (idx_t r = 0; r < bl_chunk.size(); r++) {
-                            Value val = vec.GetValue(r);
-                            if (val.IsNull()) {
-                                throw InvalidInputException(
-                                    "DECIDE bilinear objective coefficient returned NULL at row %llu.",
-                                    ebt.row_coefficients.size());
-                            }
-                            double dval = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                            ebt.row_coefficients.push_back(dval * bt.sign);
-                        }
-                    }
-                } else {
-                    // Coefficient is 1.0 for all rows
-                    ebt.row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+            vector<unique_ptr<Expression>> bl_transformed;
+            vector<idx_t> bl_route;
+            vector<LogicalType> bl_types;
+            ExpressionExecutor bl_executor(context);
+            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+                auto &bt = gstate.objective->bilinear_terms[term_idx];
+                if (!bt.coefficient) {
+                    ebts[term_idx].row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+                    continue;
                 }
+                bl_transformed.push_back(TransformToChunkExpression(*bt.coefficient, context));
+                bl_types.push_back(bl_transformed.back()->return_type);
+                bl_executor.AddExpression(*bl_transformed.back());
+                bl_route.push_back(term_idx);
+                ebts[term_idx].row_coefficients.reserve(num_rows);
+            }
 
+            if (!bl_transformed.empty()) {
+                ColumnDataScanState bl_scan;
+                gstate.data.InitializeScan(bl_scan);
+                DataChunk bl_chunk;
+                bl_chunk.Initialize(context, gstate.data.Types());
+                DataChunk bl_results;
+                bl_results.Initialize(context, bl_types);
+                while (gstate.data.Scan(bl_scan, bl_chunk)) {
+                    bl_results.Reset();
+                    bl_executor.Execute(bl_chunk, bl_results);
+                    for (idx_t j = 0; j < bl_route.size(); j++) {
+                        idx_t term_idx = bl_route[j];
+                        ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(),
+                                            gstate.objective->bilinear_terms[term_idx].sign,
+                                            ebts[term_idx].row_coefficients,
+                                            "bilinear objective coefficient");
+                    }
+                }
+            }
+
+            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+                auto &ebt = ebts[term_idx];
                 if (obj_bilinear_filters[term_idx].has_filter) {
                     auto &mask = obj_bilinear_filters[term_idx].mask;
                     for (idx_t row = 0; row < ebt.row_coefficients.size(); row++) {
@@ -2777,8 +2814,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         }
                     }
                 }
-
-                // Apply WHEN mask to bilinear coefficients (same as linear)
                 if (objective_has_when) {
                     for (idx_t row = 0; row < ebt.row_coefficients.size(); row++) {
                         if (!objective_when_mask[row]) {
@@ -2786,7 +2821,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         }
                     }
                 }
-
                 gstate.evaluated_bilinear_terms.push_back(std::move(ebt));
             }
         }
@@ -3242,79 +3276,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return false;
         };
 
-        // Evaluate PER columns
-        vector<vector<Value>> obj_per_values;
-        obj_per_values.resize(gstate.objective->per_columns.size());
-        for (idx_t col_idx = 0; col_idx < gstate.objective->per_columns.size(); col_idx++) {
-            auto transformed_col = TransformToChunkExpression(*gstate.objective->per_columns[col_idx], context);
-            ExpressionExecutor per_executor(context);
-            per_executor.AddExpression(*transformed_col);
-            obj_per_values[col_idx].reserve(num_rows);
-            ColumnDataScanState per_scan;
-            gstate.data.InitializeScan(per_scan);
-            DataChunk per_chunk;
-            per_chunk.Initialize(context, gstate.data.Types());
-            while (gstate.data.Scan(per_scan, per_chunk)) {
-                DataChunk per_result;
-                per_result.Initialize(context, {transformed_col->return_type});
-                per_executor.Execute(per_chunk, per_result);
-                auto &vec = per_result.data[0];
-                for (idx_t r = 0; r < per_chunk.size(); r++) {
-                    obj_per_values[col_idx].push_back(vec.GetValue(r));
-                }
-            }
-        }
-
-        // Build unified row_group_ids for objective
-        solver_input.objective_row_group_ids.resize(num_rows);
-        unordered_map<string, idx_t> obj_value_to_group;
-        idx_t obj_next_group = 0;
-
-        // Helper: build composite PER key for objective
-        auto build_obj_per_key = [&](idx_t row, bool &has_null_out) -> string {
-            has_null_out = false;
-            for (idx_t col_idx = 0; col_idx < obj_per_values.size(); col_idx++) {
-                if (obj_per_values[col_idx][row].IsNull()) {
-                    has_null_out = true;
-                    return {};
-                }
-            }
-            string key;
-            for (idx_t col_idx = 0; col_idx < obj_per_values.size(); col_idx++) {
-                if (col_idx > 0) key.push_back('\0');
-                key += obj_per_values[col_idx][row].ToString();
-            }
-            return key;
-        };
-
         auto obj_row_is_included = [&](idx_t row) -> bool {
             if (objective_has_when && !objective_when_mask[row]) return false;
             if (!objective_row_has_local_term(row)) return false;
             return true;
         };
 
-        // WHEN→PER: discover groups only from qualifying rows
-        for (idx_t row = 0; row < num_rows; row++) {
-            if (!obj_row_is_included(row)) {
-                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                continue;
-            }
-            bool has_null = false;
-            string key = build_obj_per_key(row, has_null);
-            if (has_null) {
-                solver_input.objective_row_group_ids[row] = DConstants::INVALID_INDEX;
-                continue;
-            }
-            auto it = obj_value_to_group.find(key);
-            if (it == obj_value_to_group.end()) {
-                obj_value_to_group[key] = obj_next_group;
-                solver_input.objective_row_group_ids[row] = obj_next_group;
-                obj_next_group++;
-            } else {
-                solver_input.objective_row_group_ids[row] = it->second;
-            }
+        vector<unique_ptr<Expression>> key_exprs;
+        key_exprs.reserve(gstate.objective->per_columns.size());
+        for (auto &col : gstate.objective->per_columns) {
+            key_exprs.push_back(TransformToChunkExpression(*col, context));
         }
-        solver_input.objective_num_groups = obj_next_group;
+        BuildGroupIds(key_exprs, context, gstate.data, num_rows,
+                      obj_row_is_included, /*null_excludes=*/true,
+                      solver_input.objective_row_group_ids,
+                      solver_input.objective_num_groups);
     }
 
     auto ScaleObjectiveAvgRows = [&](vector<double> &coefficients, bool has_filter, const vector<bool> &filter_mask,
