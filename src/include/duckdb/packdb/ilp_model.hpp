@@ -74,14 +74,6 @@ struct VarIndexer {
     static VarIndexer BuildRef(const SolverInput &input);
 };
 
-//! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
-struct ModelConstraint {
-    vector<int> indices;       //!< Variable indices into the flattened variable array
-    vector<double> coefficients; //!< Coefficient for each variable
-    char sense;                //!< '<' (<=), '>' (>=), '=' (==)
-    double rhs;                //!< Right-hand side value
-};
-
 //! Solver-agnostic optimization model, ready for any backend to consume.
 //! Supports linear objectives (LP/MILP) and convex quadratic objectives (QP/MIQP).
 struct SolverModel {
@@ -109,8 +101,22 @@ struct SolverModel {
     //! Gurobi handles this with NonConvex=2; HiGHS cannot solve it.
     bool nonconvex_quadratic = false;
 
-    //! Constraints (linear)
-    vector<ModelConstraint> constraints;
+    //! Linear constraints stored row-wise in CSR form so HiGHS can ingest the
+    //! matrix directly (no COO intermediate) and Gurobi can use GRBaddconstrs.
+    //!
+    //!   row i has nnz entries in [row_start[i], row_start[i+1])
+    //!   col_index[k] = variable index, value[k] = coefficient
+    //!   sense[i] in {'<','>','='}, rhs[i] = right-hand side
+    //!
+    //! Invariant: row_start.size() == NumConstraints() + 1, with row_start[0] == 0
+    //! and row_start.back() == col_index.size() == value.size().
+    vector<int> row_start;
+    vector<int> col_index;
+    vector<double> value;
+    vector<char> sense;
+    vector<double> rhs;
+
+    idx_t NumConstraints() const { return sense.size(); }
 
     //! Quadratic constraints: sum(linear) + sum(q * x_i * x_j) <sense> rhs
     //! Used for bilinear terms in constraints (QCQP). Gurobi only.
@@ -127,7 +133,7 @@ struct SolverModel {
 
     //! Build a SolverModel from a SolverInput (the shared model-building logic).
     //! Takes a non-const reference because raw global constraints are moved out of `input`
-    //! into `model.constraints` to avoid deep copies.
+    //! into the CSR storage to avoid deep copies.
     //! `indexer` must already be constructed for `input` (typically built once in
     //! PhysicalDecide::Finalize() and threaded through).
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);

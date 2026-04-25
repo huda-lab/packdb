@@ -70,7 +70,7 @@ The `maximize` flag is set from `input.sense`.
 
 ## Constraint Building
 
-Each `EvaluatedConstraint` is converted to one or more `ModelConstraint` structs. The path depends on whether the constraint is aggregate (SUM-level) and whether it has groups (WHEN/PER).
+Each `EvaluatedConstraint` is staged into a builder-local `ModelConstraint` scratch struct (defined in an anonymous namespace inside `ilp_model_builder.cpp`) which is then flattened into the model's CSR storage on emission. The path depends on whether the constraint is aggregate (SUM-level) and whether it has groups (WHEN/PER).
 
 ### Row-Scoped Fast Path (Path 1 and Path 2)
 
@@ -80,7 +80,7 @@ Both the ungrouped and grouped aggregate branches use this same fast-path select
 
 ### Path 1: Aggregate, Ungrouped (No WHEN, No PER)
 
-A single `ModelConstraint` is produced that sums over all rows:
+A single CSR row is produced that sums over all rows:
 
 - **Fast path (all-row-scoped, no duplicate vars)**: reserve `active_terms * num_rows` capacity and push each `(term, row)` contribution directly, skipping zeros.
 - **Accumulation path**: `SparseCoeffAccumulator` keyed by solver variable index, then flushed to COO format. Needed when entity-scoped variables or repeated decide vars can collide on the same flat index.
@@ -89,7 +89,7 @@ A single `ModelConstraint` is produced that sums over all rows:
 
 ### Path 2: Aggregate, Grouped (WHEN and/or PER)
 
-A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one `ModelConstraint` is emitted per non-empty group, using the same fast-path vs. accumulation split as Path 1 (reserves `active_terms * group_rows[g].size()` on the fast path).
+A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one CSR row is emitted per non-empty group, using the same fast-path vs. accumulation split as Path 1 (reserves `active_terms * group_rows[g].size()` on the fast path).
 
 - Only rows in the group contribute coefficients.
 - RHS comes from `rhs_values[0]`.
@@ -97,15 +97,15 @@ A `group_to_rows` index is built: for each group ID, collect which rows belong t
 
 ### Path 3: Per-Row
 
-One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint pre-reserves `per_row_active_terms` and contains only the terms for that single row, with RHS from `rhs_values[row]`. Variable indices are obtained via `var_indexer.Get(decide_var_idx, row)`.
+One CSR row per source row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each scratch staging step pre-reserves `per_row_active_terms` and contains only the terms for that single row, with RHS from `rhs_values[row]`. Variable indices are obtained via `var_indexer.Get(decide_var_idx, row)`.
 
 ### Normalization on Emission
 
-All three paths push through `PushNormalizedConstraint()` rather than `model.constraints.push_back()` directly. It drops empty-LHS tautologies (`0 <= k>=0`, `0 >= k<=0`, `0 = 0`) and throws `InvalidInputException` for violated empty-LHS rows (e.g., `0 <= -1` after absorbing variable bounds and cancelling terms) — surfacing infeasibility here yields a clearer error than a solver status code.
+All three paths push through `PushNormalizedConstraint()`, which flattens the scratch staging buffer into `model.col_index` / `model.value` / `model.sense` / `model.rhs` and appends the next `model.row_start` sentinel. It drops empty-LHS tautologies (`0 <= k>=0`, `0 >= k<=0`, `0 = 0`) and throws `InvalidInputException` for violated empty-LHS rows (e.g., `0 <= -1` after absorbing variable bounds and cancelling terms) — surfacing infeasibility here yields a clearer error than a solver status code.
 
 ### Size Estimation and Reservation
 
-Before the constraint loop, the builder sums an upper bound on `model.constraints.size()` (aggregates contribute 1 or `num_groups`, per-row contributes `num_rows`) and reserves once. `deterministic_naive.cpp` precomputes total nnz across `model.constraints` and reserves `a_rows` / `a_cols` / `a_vals` / `row_lower` / `row_upper` in one shot, avoiding repeated reallocation when flattening to HiGHS COO.
+Before the constraint loop, the builder sums an upper bound on the number of CSR rows (aggregates contribute 1 or `num_groups`, per-row contributes `num_rows`) and reserves `model.row_start` / `model.sense` / `model.rhs` once. `deterministic_naive.cpp` ingests `model.row_start` / `model.col_index` / `model.value` directly into `HighsLp::a_matrix_` (no COO intermediate), and Gurobi calls `GRBaddconstrs` once over the same CSR storage when the symbol is available (with per-row `GRBaddconstr` fallback).
 
 ## `ApplyComparisonSense()`
 
@@ -135,20 +135,19 @@ The inner linear expression of `SUM(POWER(expr, 2))` has already been evaluated 
 
 **Convexity guarantee**: Because Q = sum(a·a^T) = A^T A, it is always positive semidefinite by construction. This is the key payoff of the syntax-enforced convexity design.
 
-## `ModelConstraint` Format
+## Linear Constraint Storage (CSR)
 
-Each constraint is stored in COO (coordinate) format:
+Linear constraints live in row-wise CSR form on `SolverModel`:
 
 ```
-struct ModelConstraint {
-    vector<int> indices;        // Variable indices into the flattened array
-    vector<double> coefficients; // Coefficient for each variable
-    char sense;                 // '<' (<=), '>' (>=), '=' (==)
-    double rhs;                 // Right-hand side value
-};
+vector<int>    row_start;   // size = num_constraints + 1; row i spans [row_start[i], row_start[i+1])
+vector<int>    col_index;   // size = total_nnz
+vector<double> value;       // size = total_nnz
+vector<char>   sense;       // size = num_constraints; '<' (<=), '>' (>=), '=' (==)
+vector<double> rhs;         // size = num_constraints
 ```
 
-This format is consumed directly by Gurobi (`GRBaddconstr` takes COO) and converted to CSR for HiGHS.
+`HighsLp::a_matrix_` is row-major CSR, so `deterministic_naive.cpp` assigns `model.row_start` / `model.col_index` / `model.value` directly. Gurobi's `GRBaddconstrs` (loaded as an optional symbol; mirrors the existing `addqconstr` loader pattern) consumes the same arrays plus `sense.data()` / `rhs.data()` in a single C-API call. When `GRBaddconstrs` is unavailable, `gurobi_solver.cpp` falls back to per-row `GRBaddconstr` over the same CSR slices.
 
 ## `SolverModel` Structure
 
@@ -165,7 +164,15 @@ struct SolverModel {
     vector<int> q_cols;          // Q matrix column indices (COO, lower triangle)
     vector<double> q_vals;       // Q matrix values
     bool has_quadratic_obj;      // True if QP objective present
-    vector<ModelConstraint> constraints;
+    bool nonconvex_quadratic;    // Set when MAXIMIZE+PSD or MINIMIZE+NSD
+    // Linear constraints in CSR (see above)
+    vector<int>    row_start;
+    vector<int>    col_index;
+    vector<double> value;
+    vector<char>   sense;
+    vector<double> rhs;
+    // Quadratic constraints (Gurobi-only QCQP)
+    vector<QuadraticConstraint> quadratic_constraints;
 };
 ```
 
@@ -177,10 +184,11 @@ After building, the model is validated:
 
 2. **Objective coefficients**: Every objective coefficient must be finite (not NaN or Infinity).
 
-3. **Constraint validity**: For each constraint:
-   - `indices` and `coefficients` vectors must be the same size.
-   - Every variable index must be within `[0, total_vars)`.
-   - Every coefficient must be finite.
-   - RHS must not be NaN (infinity is allowed for range-based representations).
+3. **CSR validity**:
+   - `col_index.size() == value.size()` and `row_start.size() == NumConstraints() + 1`.
+   - `row_start.back() == col_index.size()` (the trailing sentinel is intact).
+   - Every `col_index[k]` is within `[0, total_vars)`.
+   - Every `value[k]` is finite.
+   - Each `rhs[c]` is not NaN (infinity is allowed for range-based representations).
 
 These checks catch bugs in the evaluation or model-building logic before they propagate to the solver, where error messages would be less informative.

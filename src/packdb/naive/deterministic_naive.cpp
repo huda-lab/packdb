@@ -25,53 +25,29 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
     ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
 
     //===--------------------------------------------------------------------===//
-    // 2. Convert SolverModel constraints to HiGHS range format + COO matrix
+    // 2. Derive row bounds from sense/rhs and build HighsLp directly from CSR
     //===--------------------------------------------------------------------===//
 
-    vector<int> a_rows;
-    vector<int> a_cols;
-    vector<double> a_vals;
+    idx_t num_constraints = model.NumConstraints();
+
     vector<double> row_lower;
     vector<double> row_upper;
-
-    // Precompute total nnz to avoid repeated vector reallocation
-    idx_t total_nnz = 0;
-    for (auto &constr : model.constraints) {
-        total_nnz += constr.indices.size();
-    }
-    a_rows.reserve(total_nnz);
-    a_cols.reserve(total_nnz);
-    a_vals.reserve(total_nnz);
-    row_lower.reserve(model.constraints.size());
-    row_upper.reserve(model.constraints.size());
-
-    idx_t constraint_idx = 0;
-    for (auto &constr : model.constraints) {
-        for (idx_t j = 0; j < constr.indices.size(); j++) {
-            a_rows.push_back(static_cast<int>(constraint_idx));
-            a_cols.push_back(constr.indices[j]);
-            a_vals.push_back(constr.coefficients[j]);
-        }
-
-        if (constr.sense == '>') {
-            row_lower.push_back(constr.rhs);
+    row_lower.reserve(num_constraints);
+    row_upper.reserve(num_constraints);
+    for (idx_t i = 0; i < num_constraints; i++) {
+        char s = model.sense[i];
+        double r = model.rhs[i];
+        if (s == '>') {
+            row_lower.push_back(r);
             row_upper.push_back(1e30);
-        } else if (constr.sense == '<') {
+        } else if (s == '<') {
             row_lower.push_back(-1e30);
-            row_upper.push_back(constr.rhs);
+            row_upper.push_back(r);
         } else {
-            row_lower.push_back(constr.rhs);
-            row_upper.push_back(constr.rhs);
+            row_lower.push_back(r);
+            row_upper.push_back(r);
         }
-
-        constraint_idx++;
     }
-
-    idx_t num_constraints = static_cast<idx_t>(row_lower.size());
-
-    //===--------------------------------------------------------------------===//
-    // 3. Build HighsLp and convert COO to CSR
-    //===--------------------------------------------------------------------===//
 
     HighsLp lp;
     lp.num_col_ = total_vars;
@@ -81,34 +57,17 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
     lp.col_cost_ = model.obj_coeffs;
     lp.col_lower_ = model.col_lower;
     lp.col_upper_ = model.col_upper;
-    lp.row_lower_ = row_lower;
-    lp.row_upper_ = row_upper;
+    lp.row_lower_ = std::move(row_lower);
+    lp.row_upper_ = std::move(row_upper);
 
     lp.a_matrix_.format_ = MatrixFormat::kRowwise;
-    vector<HighsInt> row_starts(num_constraints + 1, 0);
-
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        row_starts[a_rows[i] + 1]++;
-    }
-    for (idx_t i = 0; i < num_constraints; i++) {
-        row_starts[i + 1] += row_starts[i];
-    }
-
-    vector<HighsInt> col_indices(a_vals.size());
-    vector<double> values(a_vals.size());
-    vector<HighsInt> current_pos = row_starts;
-
-    for (idx_t i = 0; i < a_rows.size(); i++) {
-        idx_t row = a_rows[i];
-        idx_t pos = current_pos[row];
-        col_indices[pos] = a_cols[i];
-        values[pos] = a_vals[i];
-        current_pos[row]++;
-    }
-
-    lp.a_matrix_.start_ = row_starts;
-    lp.a_matrix_.index_ = col_indices;
-    lp.a_matrix_.value_ = values;
+    // CSR layout already matches HiGHS row-wise format. If HighsInt has the
+    // same width as int we could move the model arrays directly, but the
+    // copy-with-conversion is element-cheap and keeps the SolverModel intact
+    // for the lifetime of the call.
+    lp.a_matrix_.start_.assign(model.row_start.begin(), model.row_start.end());
+    lp.a_matrix_.index_.assign(model.col_index.begin(), model.col_index.end());
+    lp.a_matrix_.value_ = model.value;
 
     lp.integrality_.resize(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {

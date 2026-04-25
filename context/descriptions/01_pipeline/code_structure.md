@@ -21,7 +21,7 @@ The PackDB extension is integrated across several layers of the DuckDB engine.
     -   `packdb/symbolic/decide_symbolic.hpp`: Interface to SymbolicC++.
 -   **Solver & Model Headers**:
     -   `packdb/solver_input.hpp`: `SolverInput`, `EvaluatedConstraint` structs — bridge between execution and solver.
-    -   `packdb/ilp_model.hpp`: `SolverModel`, `ModelConstraint` structs — solver-agnostic model representation.
+    -   `packdb/ilp_model.hpp`: `SolverModel` struct — solver-agnostic model representation. Linear constraints are stored row-wise in CSR (`row_start` / `col_index` / `value` / `sense` / `rhs`) so HiGHS ingests them directly and Gurobi can use `GRBaddconstrs`.
     -   `packdb/ilp_solver.hpp`: `SolveModel()` facade declaration.
     -   `packdb/gurobi/gurobi_solver.hpp`: `GurobiSolver` class declaration.
     -   `packdb/naive/deterministic_naive.hpp`: `DeterministicNaive` class declaration.
@@ -40,9 +40,9 @@ The PackDB extension is integrated across several layers of the DuckDB engine.
     -   `execution/operator/decide/physical_decide.cpp`: The core execution engine and HiGHS integration.
 -   **Solver & Model Layer**:
     -   `packdb/utility/ilp_model_builder.cpp`: Transforms `SolverInput` → `SolverModel` (variable setup, constraint building, sanity checks).
-    -   `packdb/utility/ilp_solver.cpp`: Solver facade — dispatches to Gurobi or HiGHS.
-    -   `packdb/gurobi/gurobi_solver.cpp`: Gurobi backend using C API, COO format constraints.
-    -   `packdb/naive/deterministic_naive.cpp`: HiGHS backend using C++ API, COO→CSR conversion.
+    -   `packdb/utility/ilp_solver.cpp`: Solver facade — inspects `SolverInput` for required capabilities (quadratic constraints, non-convex objective, MIQP), picks Gurobi vs. HiGHS, rejects HiGHS-incompatible models *before* `SolverModel::Build()` to avoid wasted Q/QC assembly, then dispatches.
+    -   `packdb/gurobi/gurobi_solver.cpp`: Gurobi backend using C API, single bulk `GRBaddconstrs` from CSR (per-row fallback when symbol absent).
+    -   `packdb/naive/deterministic_naive.cpp`: HiGHS backend using C++ API, ingests `SolverModel` CSR directly into `HighsLp::a_matrix_`.
 
 ## 2. Class Hierarchy
 
