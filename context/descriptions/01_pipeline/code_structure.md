@@ -156,10 +156,11 @@ classDiagram
 -   **`LogicalDecide::ParamsToString()`** / **`PhysicalDecide::ParamsToString()`**: Build an `InsertionOrderPreservingMap` with `Variables`, `Objective`, and `Constraints` entries. Constraints are extracted by recursively splitting the AND-tree via `CollectConstraintStrings`, unwrapping WHEN/PER wrappers into display suffixes.
 
 ### `src/packdb/utility/ilp_model_builder.cpp`
--   **`SolverModel::Build(const SolverInput &input)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row). AVG scaling is applied during coefficient evaluation before `SolverInput` reaches the model builder.
+-   **`SolverModel::Build(SolverInput &input, const VarIndexer &indexer)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row). AVG scaling is applied during coefficient evaluation before `SolverInput` reaches the model builder. Takes `SolverInput` by non-const reference so raw global constraints can be moved (not copied) into `SolverModel`. The `VarIndexer` is built once in `PhysicalDecide::Finalize()` and threaded in.
+-   **`SparseCoeffAccumulator`** (declared in `ilp_model.hpp`): Reusable scratch storage used by aggregate-constraint accumulation paths in both `ilp_model_builder.cpp` and `physical_decide.cpp`. Two strategies — dense (`vector<double>` indexed by flat var idx + `touched` list) when the decide-variable index span fits a memory cap, sorted/merged `(idx, coeff)` pairs otherwise.
 
 ### `src/packdb/utility/ilp_solver.cpp`
--   **`SolveModel(const SolverInput &input)`**: Facade that builds the SolverModel and dispatches to GurobiSolver (if available) or DeterministicNaive (HiGHS fallback).
+-   **`SolveModel(SolverInput &input, const VarIndexer &indexer)`**: Facade that builds the SolverModel and dispatches to GurobiSolver (if available) or DeterministicNaive (HiGHS fallback). Receives the `VarIndexer` from the caller (built once in finalization) instead of constructing one internally.
 
 ### `src/packdb/gurobi/gurobi_solver.cpp`
 -   **`GurobiSolver::IsAvailable()`**: One-time lazy check for Gurobi license.
@@ -174,7 +175,7 @@ classDiagram
 
 -   **`EntityScopeInfo`** (`src/include/duckdb/planner/operator/logical_decide.hpp`): Carries table-scoped variable metadata through the plan. Contains `table_alias`, `source_table_index`, `entity_key_bindings` (logical column bindings), `entity_key_physical_indices` (physical chunk positions, resolved during plan creation in `plan_decide.cpp`), and `scoped_variable_indices`.
 -   **`EntityMapping`** (`src/include/duckdb/packdb/solver_input.hpp`): Execution-time mapping from rows to entity IDs. Contains `num_entities` and `row_to_entity` vector. Built during Phase 1.5 in `physical_decide.cpp`.
--   **`VarIndexer`** (struct, `src/include/duckdb/packdb/ilp_model.hpp`): Computes and encapsulates the three-block variable layout (row-scoped, entity-scoped, global auxiliary). Provides `Get(var_idx, row)` for index lookup and `NumInstances(var_idx)` for instance count. Built via `Build()` (owning, for readback in `GetData`) or `BuildRef()` (non-owning, for temporary use during model building).
+-   **`VarIndexer`** (struct, `src/include/duckdb/packdb/ilp_model.hpp`): Computes and encapsulates the three-block variable layout (row-scoped, entity-scoped, global auxiliary). Provides `Get(var_idx, row)` for index lookup and `NumInstances(var_idx)` for instance count. Built once via `Build()` (owning) in `PhysicalDecide::Finalize()` and threaded through `SolveModel()` / `SolverModel::Build()`, then moved onto `gstate.var_indexer` for readback in `GetData`. `BuildRef()` (non-owning) is retained but currently unused in production code.
 
 ### Key Code Paths
 
@@ -183,5 +184,5 @@ classDiagram
 -   **Plan creation**: `src/execution/physical_plan/plan_decide.cpp` — transfers `EntityScopeInfo` to `LogicalDecide` / `PhysicalDecide`, resolves logical column bindings to physical chunk indices via `op.children[0]->GetColumnBindings()`.
 -   **Optimizer**: `src/optimizer/decide/decide_optimizer.cpp` — auxiliary variables receive `INVALID_INDEX` scope (row-scoped); entity scope propagated via `variable_entity_scope` vector.
 -   **Execution (Phase 1.5)**: `src/execution/operator/decide/physical_decide.cpp` — evaluates entity key columns, builds `EntityMapping` using `unordered_map<string, idx_t>` with NULL-safe composite key tagging.
--   **Model building**: `src/packdb/utility/ilp_model_builder.cpp` — `VarIndexer::Build()` computes three-block layout; aggregate constraint coefficients accumulated via `unordered_map<int, double>` for entity-scoped variables.
+-   **Model building**: `src/packdb/utility/ilp_model_builder.cpp` — `VarIndexer::Build()` computes three-block layout; aggregate constraint coefficients accumulated via `SparseCoeffAccumulator` (dense + touched-list, or sorted-pairs fallback) for entity-scoped variables.
 -   **Readback**: `src/execution/operator/decide/physical_decide.cpp` (`GetData`) — uses `gstate.var_indexer.Get(var_idx, row)` for all variable types.

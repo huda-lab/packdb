@@ -9,8 +9,8 @@
 
 namespace duckdb {
 
-vector<double> SolveModel(const SolverInput &input) {
-    SolverModel model = SolverModel::Build(input);
+vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
+    SolverModel model = SolverModel::Build(input, indexer);
 
     // Test-only override: PACKDB_FORCE_SOLVER=highs|gurobi pins the backend.
     // Used by the DECIDE test suite (see test/decide/conftest.py fixtures

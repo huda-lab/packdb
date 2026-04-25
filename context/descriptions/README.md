@@ -26,6 +26,7 @@ This makes it trivial to determine what exists vs. what needs building.
 | `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md. Also includes `problem_types/` for LP/ILP/QP classification. | You want to know if a construct is valid, or are implementing a new keyword   |
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
 | `05_testing/`          | Test coverage tracking — which scenarios are oracle-verified vs. feasibility-only, and what gaps remain            | You are adding tests, auditing coverage, or debugging a suspected correctness regression |
+| `06_performance/`      | Append-only log of performance optimizations applied to PackDB. One file per optimization batch, dated, with hypothesis + measured outcome. | You want to know what's already been tried, or you're about to commit a perf change and need to record it |
 
 ---
 

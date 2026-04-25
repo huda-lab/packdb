@@ -5,8 +5,8 @@
 PackDB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the selected backend. It supports a test override (`PACKDB_FORCE_SOLVER=highs|gurobi`) before the default auto-selection:
 
 ```cpp
-vector<double> SolveModel(const SolverInput &input) {
-    SolverModel model = SolverModel::Build(input);
+vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
+    SolverModel model = SolverModel::Build(input, indexer);
     if (const char *force = std::getenv("PACKDB_FORCE_SOLVER")) {
         std::string choice(force);
         if (choice == "highs" || choice == "HIGHS") {

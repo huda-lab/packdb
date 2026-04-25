@@ -125,8 +125,53 @@ struct SolverModel {
     };
     vector<QuadraticConstraint> quadratic_constraints;
 
-    //! Build a SolverModel from a SolverInput (the shared model-building logic)
-    static SolverModel Build(const SolverInput &input);
+    //! Build a SolverModel from a SolverInput (the shared model-building logic).
+    //! Takes a non-const reference because raw global constraints are moved out of `input`
+    //! into `model.constraints` to avoid deep copies.
+    //! `indexer` must already be constructed for `input` (typically built once in
+    //! PhysicalDecide::Finalize() and threaded through).
+    static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
+};
+
+//! Reusable scratch storage for accumulating sparse coefficients keyed by flat
+//! variable index. Two strategies, picked once per constraint via Begin*():
+//!   - Dense:  vector<double> indexed by flat var idx, with a `touched` list
+//!             so reset is O(touched), not O(total_vars).
+//!   - Sparse: append-only (idx, coeff) pairs, sorted+merged at Flush().
+//! The same instance can be reused across groups (within a constraint) and
+//! across constraints.
+struct SparseCoeffAccumulator {
+    //! Dense path
+    vector<double> dense;
+    vector<int> touched;
+    bool use_dense = false;
+
+    //! Sparse path
+    vector<std::pair<int, double>> pairs;
+
+    //! Configure for dense accumulation. Allocates `total_vars` doubles
+    //! (zero-initialized) on first use; subsequent calls only clear `touched`.
+    void BeginDense(idx_t total_vars);
+
+    //! Configure for sorted-pairs accumulation. `expected_size` is a hint for reserve().
+    void BeginSparse(idx_t expected_size);
+
+    //! Add a contribution. Branchless on use_dense via the pre-set mode.
+    inline void Add(int idx, double coeff) {
+        if (use_dense) {
+            if (dense[idx] == 0.0) {
+                touched.push_back(idx);
+            }
+            dense[idx] += coeff;
+        } else {
+            pairs.emplace_back(idx, coeff);
+        }
+    }
+
+    //! Drain accumulated entries into out_indices/out_coefficients (dropping zeros)
+    //! and reset for the next group. Dense path zeros only touched cells; sparse
+    //! path sorts+merges pairs.
+    void Flush(vector<int> &out_indices, vector<double> &out_coefficients);
 };
 
 } // namespace duckdb

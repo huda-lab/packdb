@@ -12,12 +12,20 @@
 #pragma once
 
 #include "duckdb/packdb/solver_input.hpp"
+#include "duckdb/packdb/ilp_model.hpp"
 
 namespace duckdb {
 
 //! Builds a SolverModel from the given SolverInput, selects the best available
 //! solver backend (Gurobi if licensed, otherwise HiGHS), solves, and returns
 //! the solution vector of size (num_rows * num_decide_vars).
-vector<double> SolveModel(const SolverInput &input);
+//!
+//! `input` is taken by non-const reference because the raw global constraints
+//! are moved (not copied) into the SolverModel during Build(). Callers must not
+//! read `input.global_constraints` after this call returns.
+//!
+//! `indexer` is the VarIndexer constructed once in Finalize() and threaded
+//! through here to avoid duplicate construction inside SolverModel::Build().
+vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer);
 
 } // namespace duckdb

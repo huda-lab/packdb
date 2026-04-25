@@ -1,6 +1,7 @@
 #include "duckdb/packdb/ilp_model.hpp"
 #include "duckdb/common/exception.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <unordered_map>
@@ -70,15 +71,13 @@ VarIndexer VarIndexer::BuildRef(const SolverInput &input) {
     return idx;
 }
 
-SolverModel SolverModel::Build(const SolverInput &input) {
+SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     SolverModel model;
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
 
-    // Build VarIndexer for mixed row-scoped / entity-scoped variable support.
-    // Use BuildRef — the SolverInput outlives this VarIndexer (both are local to Build).
-    VarIndexer indexer = VarIndexer::BuildRef(input);
+    // VarIndexer is built once in PhysicalDecide::Finalize() and threaded in.
     idx_t total_vars = indexer.total_vars;
 
     model.num_vars = total_vars;
@@ -544,6 +543,23 @@ SolverModel SolverModel::Build(const SolverInput &input) {
 
                 bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
 
+                // For the slow (accumulating) path, pick a strategy once per constraint
+                // and reuse the scratch storage across all groups.
+                // The decide-variable flat indices span [0, global_block_start),
+                // so size the dense accumulator to that — tighter than total_vars.
+                SparseCoeffAccumulator accum;
+                if (!row_scoped_fast) {
+                    constexpr idx_t DENSE_CAP = 1u << 20; // ~8MB scratch ceiling
+                    idx_t decide_var_index_span = indexer.global_block_start;
+                    if (decide_var_index_span <= DENSE_CAP) {
+                        accum.BeginDense(decide_var_index_span);
+                    } else {
+                        idx_t expected = eval_const.variable_indices.size() *
+                                         (eval_const.num_groups > 0 ? num_rows / eval_const.num_groups : num_rows);
+                        accum.BeginSparse(expected);
+                    }
+                }
+
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
                     if (group_rows[g].empty()) {
                         continue;
@@ -570,26 +586,16 @@ SolverModel SolverModel::Build(const SolverInput &input) {
                             }
                         }
                     } else {
-                        std::unordered_map<int, double> coeff_accum;
-
                         for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                            if (decide_var_idx != DConstants::INVALID_INDEX) {
-                                for (idx_t row : group_rows[g]) {
-                                    double coeff = eval_const.row_coefficients[term_idx][row];
-                                    int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                    coeff_accum[var_idx] += coeff;
-                                }
+                            if (decide_var_idx == DConstants::INVALID_INDEX) continue;
+                            for (idx_t row : group_rows[g]) {
+                                double coeff = eval_const.row_coefficients[term_idx][row];
+                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                accum.Add(var_idx, coeff);
                             }
                         }
-
-                        for (auto &pair : coeff_accum) {
-                            if (pair.second != 0.0) {
-                                constr.indices.push_back(pair.first);
-                                constr.coefficients.push_back(pair.second);
-                            }
-                        }
+                        accum.Flush(constr.indices, constr.coefficients);
                     }
 
                     ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
@@ -835,11 +841,13 @@ SolverModel SolverModel::Build(const SolverInput &input) {
         }
     }
 
-    // Append raw global constraints (for MIN/MAX objective linking, etc.)
+    // Append raw global constraints (for MIN/MAX objective linking, etc.).
+    // Move the index/coefficient vectors out of `input` to avoid deep copies —
+    // SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
     for (auto &raw : input.global_constraints) {
         ModelConstraint constr;
-        constr.indices = raw.indices;
-        constr.coefficients = raw.coefficients;
+        constr.indices = std::move(raw.indices);
+        constr.coefficients = std::move(raw.coefficients);
         constr.sense = raw.sense;
         constr.rhs = raw.rhs;
         model.constraints.push_back(std::move(constr));
@@ -902,6 +910,71 @@ SolverModel SolverModel::Build(const SolverInput &input) {
     }
 
     return model;
+}
+
+//===----------------------------------------------------------------------===//
+// SparseCoeffAccumulator
+//===----------------------------------------------------------------------===//
+
+void SparseCoeffAccumulator::BeginDense(idx_t total_vars) {
+    use_dense = true;
+    if (dense.size() < total_vars) {
+        dense.assign(total_vars, 0.0);
+    }
+    // Cells previously written were already zeroed in Flush(); no full re-zero needed.
+    touched.clear();
+    pairs.clear();
+}
+
+void SparseCoeffAccumulator::BeginSparse(idx_t expected_size) {
+    use_dense = false;
+    pairs.clear();
+    if (expected_size > pairs.capacity()) {
+        pairs.reserve(expected_size);
+    }
+    touched.clear();
+}
+
+void SparseCoeffAccumulator::Flush(vector<int> &out_indices, vector<double> &out_coefficients) {
+    if (use_dense) {
+        out_indices.reserve(out_indices.size() + touched.size());
+        out_coefficients.reserve(out_coefficients.size() + touched.size());
+        for (int idx : touched) {
+            double v = dense[idx];
+            if (v != 0.0) {
+                out_indices.push_back(idx);
+                out_coefficients.push_back(v);
+            }
+            dense[idx] = 0.0;
+        }
+        touched.clear();
+    } else {
+        if (pairs.empty()) {
+            return;
+        }
+        std::sort(pairs.begin(), pairs.end(),
+                  [](const std::pair<int, double> &a, const std::pair<int, double> &b) {
+                      return a.first < b.first;
+                  });
+        // Merge consecutive equal indices, drop zeros.
+        idx_t n = pairs.size();
+        idx_t i = 0;
+        while (i < n) {
+            int idx = pairs[i].first;
+            double sum = pairs[i].second;
+            idx_t j = i + 1;
+            while (j < n && pairs[j].first == idx) {
+                sum += pairs[j].second;
+                j++;
+            }
+            if (sum != 0.0) {
+                out_indices.push_back(idx);
+                out_coefficients.push_back(sum);
+            }
+            i = j;
+        }
+        pairs.clear();
+    }
 }
 
 } // namespace duckdb

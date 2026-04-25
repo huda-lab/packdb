@@ -3011,7 +3011,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
 
                 if (ec.lhs_is_aggregate) {
-                    // Aggregate NE: defer to after pre_indexer is built.
+                    // Aggregate NE: defer to after var_indexer is built.
                     // Will be expanded with a single global z per group.
                     DeferredAggregateNE deferred;
                     deferred.original = ec; // copy before the loop moves on
@@ -3376,12 +3376,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //   Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN
     //   Hard (Big-M indicators): MINIMIZE+MIN or MAXIMIZE+MAX
 
-    // Build a preliminary VarIndexer for computing absolute variable indices
-    // in the MIN/MAX objective constraint generation below.
-    // Use BuildRef — solver_input is alive for the duration of this scope.
-    VarIndexer pre_indexer = VarIndexer::BuildRef(solver_input);
+    // Build the VarIndexer once and reuse it for: (1) computing absolute variable
+    // indices during deferred-NE / MIN/MAX objective construction below, (2) the
+    // SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
+    // for solution readback after the solve. Use the owning form so it survives
+    // past `solver_input` once moved onto gstate.
+    //
+    // The row+entity portions of the index never change after this point;
+    // however `solver_input.num_global_vars` keeps growing as auxiliary globals
+    // are added below. We refresh `total_vars` just before SolveModel is called.
+    VarIndexer var_indexer = VarIndexer::Build(solver_input);
 
-    // Global variables are appended at pre_indexer.global_block_start.
+    // Global variables are appended at var_indexer.global_block_start.
     // As we add more global vars, their indices are global_block_start + g
     // where g is the position in the global vars array.
 
@@ -3389,6 +3395,23 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Each group gets a single z (binary), yielding two raw constraints:
     //   SUM(coeffs) - M*z <= K-1       (z=0 → SUM ≤ K-1; z=1 → trivially true)
     //   SUM(coeffs) - M*z >= K+1-M     (z=0 → trivially true; z=1 → SUM ≥ K+1)
+    //
+    // Reusable scratch for per-group LHS accumulation (replaces a per-group
+    // unordered_map<int,double>). The decide-variable flat indices are bounded
+    // by var_indexer.global_block_start, so we size the dense accumulator to
+    // that — tighter than total_vars and unaffected by the new globals appended
+    // below as the loop runs.
+    SparseCoeffAccumulator accum;
+    {
+        constexpr idx_t DENSE_CAP = 1u << 20;
+        idx_t decide_var_index_span = var_indexer.global_block_start;
+        if (decide_var_index_span <= DENSE_CAP) {
+            accum.BeginDense(decide_var_index_span);
+        } else {
+            accum.BeginSparse(num_rows); // hint; per-group merging keeps actual size small
+        }
+    }
+
     for (auto &deferred : deferred_ne_aggregate) {
         auto &ec = deferred.original;
         double M = deferred.big_M;
@@ -3429,15 +3452,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
 
             // Allocate one global binary z for this group
-            idx_t z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+            idx_t z_idx = var_indexer.global_block_start + solver_input.num_global_vars;
             solver_input.num_global_vars++;
             solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
             solver_input.global_lower_bounds.push_back(0.0);
             solver_input.global_upper_bounds.push_back(1.0);
             solver_input.global_obj_coeffs.push_back(0.0);
 
-            // Accumulate LHS coefficients for active rows in this group
-            std::unordered_map<int, double> coeff_accum;
+            // Accumulate LHS coefficients for active rows in this group.
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
                 idx_t decide_var_idx = ec.variable_indices[term_idx];
                 if (decide_var_idx == DConstants::INVALID_INDEX) {
@@ -3448,21 +3470,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (std::abs(coeff) < 1e-15) {
                         continue;
                     }
-                    int var_idx = static_cast<int>(pre_indexer.Get(decide_var_idx, row));
-                    coeff_accum[var_idx] += coeff;
+                    int var_idx = static_cast<int>(var_indexer.Get(decide_var_idx, row));
+                    accum.Add(var_idx, coeff);
                 }
             }
+
+            // Flush once into a deduped (idx, coeff) snapshot reused for both rc1 and rc2.
+            vector<int> common_indices;
+            vector<double> common_coefs;
+            accum.Flush(common_indices, common_coefs);
 
             // ec1: SUM(coeffs) - M*z <= K - 1
             SolverInput::RawConstraint rc1;
             rc1.sense = '<';
             rc1.rhs = rhs - 1.0;
-            for (auto &[idx, coeff] : coeff_accum) {
-                if (coeff != 0.0) {
-                    rc1.indices.push_back(idx);
-                    rc1.coefficients.push_back(coeff);
-                }
-            }
+            rc1.indices = common_indices;
+            rc1.coefficients = common_coefs;
             rc1.indices.push_back(static_cast<int>(z_idx));
             rc1.coefficients.push_back(-M);
             solver_input.global_constraints.push_back(std::move(rc1));
@@ -3471,12 +3494,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             SolverInput::RawConstraint rc2;
             rc2.sense = '>';
             rc2.rhs = rhs + 1.0 - M;
-            for (auto &[idx, coeff] : coeff_accum) {
-                if (coeff != 0.0) {
-                    rc2.indices.push_back(idx);
-                    rc2.coefficients.push_back(coeff);
-                }
-            }
+            rc2.indices = std::move(common_indices);
+            rc2.coefficients = std::move(common_coefs);
             rc2.indices.push_back(static_cast<int>(z_idx));
             rc2.coefficients.push_back(-M);
             solver_input.global_constraints.push_back(std::move(rc2));
@@ -3549,7 +3568,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             bool inner_easy = per_inner_is_easy;
             double M = compute_big_m();
 
-            idx_t z_base = pre_indexer.global_block_start + solver_input.num_global_vars;
+            idx_t z_base = var_indexer.global_block_start + solver_input.num_global_vars;
             for (idx_t g = 0; g < K; g++) {
                 group_value_indices[g] = z_base + g;
                 solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
@@ -3572,7 +3591,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3599,7 +3618,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3640,13 +3659,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         if (inner_is_minmax && outer_is_sum) {
             // Outer SUM: objective = sum of z_g's
             for (idx_t g = 0; g < K; g++) {
-                solver_input.global_obj_coeffs[group_value_indices[g] - pre_indexer.global_block_start] = 1.0;
+                solver_input.global_obj_coeffs[group_value_indices[g] - var_indexer.global_block_start] = 1.0;
             }
         } else if (inner_is_minmax && outer_is_minmax) {
             // Outer MIN/MAX over z_g's: create global w auxiliary
             bool outer_easy = per_outer_is_easy;
 
-            idx_t w_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+            idx_t w_idx = var_indexer.global_block_start + solver_input.num_global_vars;
             solver_input.num_global_vars += 1;
             solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
             solver_input.global_lower_bounds.push_back(-1e30);
@@ -3730,7 +3749,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // Create w auxiliary for outer MIN/MAX over group sums
             bool outer_easy = per_outer_is_easy;
 
-            idx_t w_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+            idx_t w_idx = var_indexer.global_block_start + solver_input.num_global_vars;
             solver_input.num_global_vars += 1;
             solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
             solver_input.global_lower_bounds.push_back(-1e30);
@@ -3754,7 +3773,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                 coeff /= static_cast<double>(group_rows[g].size());
                             }
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3783,7 +3802,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                 coeff /= static_cast<double>(group_rows[g].size());
                             }
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = pre_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3819,7 +3838,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool is_min_agg = (flat_objective_agg == ObjectiveAggregateType::MIN_AGG);
         bool is_easy = flat_objective_is_easy;
 
-        idx_t z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+        idx_t z_idx = var_indexer.global_block_start + solver_input.num_global_vars;
 
         // Create global variable z (continuous, unbounded)
         solver_input.num_global_vars += 1;
@@ -3844,7 +3863,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t][row];
                     if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = pre_indexer.Get(var, row);
+                    idx_t var_idx = var_indexer.Get(var, row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
@@ -3870,7 +3889,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t][row];
                     if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = pre_indexer.Get(var, row);
+                    idx_t var_idx = var_indexer.Get(var, row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
@@ -4011,7 +4030,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 idx_t cnt = 0;
                 for (bool m : ta.filter_mask) if (m) cnt++;
                 RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed constraint");
-                ta.z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+                ta.z_idx = var_indexer.global_block_start + solver_input.num_global_vars;
                 solver_input.num_global_vars += 1;
                 solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
                 solver_input.global_lower_bounds.push_back(-1e30);
@@ -4049,7 +4068,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                             row_rhs += coef;
                         } else {
-                            idx_t abs_idx = pre_indexer.Get(inner_t.variable_index, row);
+                            idx_t abs_idx = var_indexer.Get(inner_t.variable_index, row);
                             rc.indices.push_back((int)abs_idx);
                             rc.coefficients.push_back(-coef);
                         }
@@ -4088,7 +4107,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                                 outer_rhs -= coef;
                             } else {
-                                int abs_idx = (int)pre_indexer.Get(inner_t.variable_index, row);
+                                int abs_idx = (int)var_indexer.Get(inner_t.variable_index, row);
                                 outer_accum[abs_idx] += coef;
                             }
                         }
@@ -4221,7 +4240,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t cnt = 0;
             for (bool m : ta.filter_mask) if (m) cnt++;
             RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed objective");
-            ta.z_idx = pre_indexer.global_block_start + solver_input.num_global_vars;
+            ta.z_idx = var_indexer.global_block_start + solver_input.num_global_vars;
             solver_input.num_global_vars += 1;
             solver_input.global_variable_types.push_back(LogicalType::DOUBLE);
             solver_input.global_lower_bounds.push_back(-1e30);
@@ -4255,7 +4274,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                         row_rhs += coef;
                     } else {
-                        idx_t abs_idx = pre_indexer.Get(inner_t.variable_index, row);
+                        idx_t abs_idx = var_indexer.Get(inner_t.variable_index, row);
                         rc.indices.push_back((int)abs_idx);
                         rc.coefficients.push_back(-coef);
                     }
@@ -4275,7 +4294,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         for (auto &ta : obj_analyses) {
             if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
                 // The z_k's obj coef is ta.sign (the MIN/MAX term's sign in the additive sum).
-                idx_t gslot = ta.z_idx - pre_indexer.global_block_start;
+                idx_t gslot = ta.z_idx - var_indexer.global_block_start;
                 solver_input.global_obj_coeffs[gslot] = (double)ta.sign;
             } else {
                 double avg_divisor = 1.0;
@@ -4303,11 +4322,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     }
 
-    // Build VarIndexer for solution readback (also used by model builder)
-    gstate.var_indexer = VarIndexer::Build(solver_input);
+    // Refresh total_vars: the row/entity blocks were finalized at construction,
+    // but global aux vars were appended throughout deferred-NE and MIN/MAX expansion.
+    var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
 
     // Capture model size before solve (solver may move data)
-    size_t bench_total_vars = gstate.var_indexer.total_vars;
+    size_t bench_total_vars = var_indexer.total_vars;
     size_t bench_total_constraints = solver_input.constraints.size() + solver_input.global_constraints.size();
 
     if (bench) {
@@ -4315,7 +4335,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_timer.Start();
     }
 
-    gstate.ilp_solution = SolveModel(solver_input);
+    gstate.ilp_solution = SolveModel(solver_input, var_indexer);
+    // Move the indexer onto gstate now that solve is complete; readback in
+    // Execute() needs it to outlive solver_input.
+    gstate.var_indexer = std::move(var_indexer);
 
     if (bench) {
         solver_timer.End();

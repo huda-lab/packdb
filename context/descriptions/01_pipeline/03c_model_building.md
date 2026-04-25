@@ -4,7 +4,7 @@
 
 The model builder transforms the solver-agnostic `SolverInput` (evaluated constraints with numeric coefficients) into a `SolverModel` (flat variable arrays + constraint list in COO format + optional Q matrix for QP). This is the bridge between PackDB's domain model and the generic optimization formulation that any solver backend can consume.
 
-The core logic lives in `SolverModel::Build()`, a static method that takes a `SolverInput` and returns a fully constructed `SolverModel`.
+The core logic lives in `SolverModel::Build()`, a static method that takes a `SolverInput` (by non-const reference, so raw global constraints can be moved rather than copied) and a pre-built `VarIndexer`, and returns a fully constructed `SolverModel`. The `VarIndexer` is constructed once in `PhysicalDecide::Finalize()` and threaded through both `SolveModel()` and `Build()` to avoid duplicate construction (see `01_pipeline/03_execution.md`).
 
 **Key Source File**: `src/packdb/utility/ilp_model_builder.cpp`
 **Headers**: `src/include/duckdb/packdb/ilp_model.hpp`, `src/include/duckdb/packdb/solver_input.hpp`
@@ -32,8 +32,8 @@ The `VarIndexer` provides two key methods:
 - **`VarIndexer::NumInstances(var_idx)`**: Returns the number of solver variable instances for a given DECIDE variable — `num_rows` for row-scoped, `num_entities` for entity-scoped.
 
 The indexer is constructed via two static methods:
-- **`VarIndexer::Build()`**: Owning construction — copies entity mappings so the VarIndexer can outlive the `SolverInput`. Used for `gstate.var_indexer` which persists through solution readback in `GetData`.
-- **`VarIndexer::BuildRef()`**: Lightweight construction — stores a `const` pointer to the `SolverInput`'s entity mappings without copying. Used for temporary indexers during model building and MIN/MAX objective constraint generation, where the `SolverInput` is guaranteed to outlive the indexer.
+- **`VarIndexer::Build()`**: Owning construction — copies entity mappings so the VarIndexer can outlive the `SolverInput`. This is the form used in `PhysicalDecide::Finalize()`: the indexer is built once early in finalization, threaded through `SolveModel()` / `SolverModel::Build()`, and finally moved onto `gstate.var_indexer` for solution readback in `GetData`. `total_vars` is refreshed just before the solve once all auxiliary globals have been appended.
+- **`VarIndexer::BuildRef()`**: Lightweight construction — stores a `const` pointer to the `SolverInput`'s entity mappings without copying. Available for callers that need a short-lived non-owning indexer (currently no production callers; retained for tests and future use).
 
 ### Per-Variable Type and Default Bounds
 
@@ -74,7 +74,7 @@ Each `EvaluatedConstraint` is converted to one or more `ModelConstraint` structs
 
 ### Row-Scoped Fast Path (Path 1 and Path 2)
 
-`CanUseRowScopedFastPath()` inspects the constraint's `variable_indices` once up front and returns true only when (a) every term references a row-scoped decide variable and (b) no decide variable appears in more than one term. Under those conditions each `(term, row)` pair produces a unique flat solver index, so coefficients can be pushed directly into `constr.indices` / `constr.coefficients` without `unordered_map` accumulation. Entity-scoped vars or duplicated decide vars fall back to the hash-map path, which is what the aggregate paths need to handle `(entity, row)` collisions correctly.
+`CanUseRowScopedFastPath()` inspects the constraint's `variable_indices` once up front and returns true only when (a) every term references a row-scoped decide variable and (b) no decide variable appears in more than one term. Under those conditions each `(term, row)` pair produces a unique flat solver index, so coefficients can be pushed directly into `constr.indices` / `constr.coefficients` without sparse accumulation. Entity-scoped vars or duplicated decide vars fall back to the accumulation path (`SparseCoeffAccumulator`, declared in `ilp_model.hpp`), which the aggregate paths need to handle `(entity, row)` collisions correctly. The accumulator picks one strategy per constraint and reuses scratch storage across all groups: a dense `vector<double>` indexed by flat var idx with a `touched` list (when the decide-variable index span fits in the cap, ~1M slots), or a sorted/merged `(idx, coeff)` pair list otherwise.
 
 Both the ungrouped and grouped aggregate branches use this same fast-path selector.
 
@@ -83,7 +83,7 @@ Both the ungrouped and grouped aggregate branches use this same fast-path select
 A single `ModelConstraint` is produced that sums over all rows:
 
 - **Fast path (all-row-scoped, no duplicate vars)**: reserve `active_terms * num_rows` capacity and push each `(term, row)` contribution directly, skipping zeros.
-- **Accumulation path**: `unordered_map<int, double>` keyed by solver variable index, then flattened to COO format. Needed when entity-scoped variables or repeated decide vars can collide on the same flat index.
+- **Accumulation path**: `SparseCoeffAccumulator` keyed by solver variable index, then flushed to COO format. Needed when entity-scoped variables or repeated decide vars can collide on the same flat index.
 - RHS comes from `rhs_values[0]`.
 - AVG terms have already been coefficient-scaled in Phase 2. The model builder consumes the evaluated coefficients directly.
 

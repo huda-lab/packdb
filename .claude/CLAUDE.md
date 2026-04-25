@@ -32,6 +32,8 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 
 **Optimization loop**: Use `/bench` to automate build → benchmark (medium) → analyze stages → suggest next optimization. Full docs: `context/descriptions/02_operations/benchmarking.md`.
 
+**MANDATORY: Record performance commits.** When a commit lands whose primary purpose is improving performance, append an entry to `context/descriptions/06_performance/` (one file per batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is the next sequential log number — e.g., `002_9c3a53fb62_6bc8ae1412.md`). The entry must reference the commit hash, list the change set + hypothesis, and include measured deltas vs. the prior baseline (with both `benchmark/decide/results/<commit>.json` paths). The log is append-only — supersede entries by adding a new one, don't rewrite history.
+
 ## Key PackDB source paths
 
 - Parser/Symbolic: `src/packdb/symbolic/decide_symbolic.cpp`
@@ -118,7 +120,8 @@ See `.claude/lessons.md` for corrections and gotchas discovered during developme
 ## Development Priorities
 
 1. **Performance**: Use `/bench` for the optimize-measure loop. Solver dominates (~95% at scale). Focus on reducing solver input size and improving formulations.
-   - See `context/descriptions/02_operations/benchmarking.md`
+   - Methodology: `context/descriptions/02_operations/benchmarking.md`
+   - History of applied optimizations + outcomes: `context/descriptions/06_performance/`
 2. **Expressivity**: See `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
 3. **Optimizer**: Big-M reformulation, push-down / pull-out rewrites
    - See `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`)
@@ -133,5 +136,6 @@ Key areas: `00_project_overview/` (syntax spec), `01_pipeline/` (architecture), 
 - Implementation changes (data structures, code paths, function signatures)
 - Code Pointers sections (line numbers, file references, tag constants)
 - New feature interactions (e.g., WHEN+PER composition)
+- **Performance commits**: add an entry to `context/descriptions/06_performance/` recording the change set, hypothesis, and measured outcome (see the dedicated section above).
 
 If unsure which doc to update, check `context/descriptions/README.md` for the directory layout. Ask the user for confirmation if which doc to update is not clear or if a new doc may be needed.

@@ -70,7 +70,7 @@ The NE Big-M disjunction uses a **single global binary indicator variable** per 
 - `SUM(coeffs) - M*z <= K-1`  (z=0 → SUM ≤ K-1)
 - `SUM(coeffs) - M*z >= K+1-M`  (z=1 → SUM ≥ K+1)
 
-Code pointer: deferred aggregate NE expansion in `physical_decide.cpp`, after `VarIndexer pre_indexer` construction.
+Code pointer: deferred aggregate NE expansion in `physical_decide.cpp`, after the single `VarIndexer var_indexer` is built (the same indexer is later threaded through `SolveModel()` and ultimately moved onto `gstate.var_indexer`).
 
 ### Aggregate-local WHEN
 
