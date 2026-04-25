@@ -139,6 +139,19 @@ struct SolverModel {
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
 };
 
+//! Build CSR group→rows index from a per-row group_id array.
+//!   row_group_ids[r] in [0..num_groups) → row r belongs to that group
+//!   row_group_ids[r] == DConstants::INVALID_INDEX → row r is excluded
+//! Output:
+//!   offsets has size num_groups + 1; group g's rows live in
+//!   [offsets[g], offsets[g+1]) of flat_rows. Empty groups are still represented
+//!   (offsets[g] == offsets[g+1]).
+//! No-op if row_group_ids is empty (ungrouped fast path) or already populated.
+void BuildGroupCSR(const vector<idx_t> &row_group_ids,
+                   idx_t num_groups,
+                   vector<idx_t> &offsets,
+                   vector<idx_t> &flat_rows);
+
 //! Reusable scratch storage for accumulating sparse coefficients keyed by flat
 //! variable index. Two strategies, picked once per constraint via Begin*():
 //!   - Dense:  vector<double> indexed by flat var idx, with a `touched` list

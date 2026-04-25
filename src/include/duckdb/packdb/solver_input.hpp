@@ -16,13 +16,147 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/planner/expression.hpp"
 
+#include <cmath>
+
 namespace duckdb {
+
+//! Compact per-row coefficient/value column.
+//!
+//! Many constraint columns are *broadcast* — every row gets the same value
+//! (e.g., the M coefficient on a hard MIN/MAX indicator term, the constant RHS
+//! on most aggregate constraints, McCormick L1–L4 constants). Allocating a
+//! `vector<double>(num_rows, K)` for these wastes memory bandwidth and
+//! allocation pressure scaling with `num_rows × num_terms × num_constraints`.
+//!
+//! `CoefficientColumn` stores either a single scalar or a dense `vector<double>`
+//! of length `logical_size`. Reads via `Get(row)` are branchless on the storage
+//! kind. Mutation lazily promotes Scalar → Dense — once a row needs a unique
+//! value, the underlying vector is materialized and subsequent ops are O(1).
+//!
+//! Invariants:
+//!   - `logical_size` always equals num_rows for the constraint that owns the column.
+//!   - When `kind == Dense`, `dense_values.size() == logical_size`.
+//!   - `Empty()` (logical_size == 0) is reserved for not-yet-initialized columns.
+struct CoefficientColumn {
+    enum class Kind : uint8_t { Scalar, Dense };
+    Kind kind = Kind::Dense;
+    double scalar_value = 0.0;
+    vector<double> dense_values;
+    idx_t logical_size = 0;
+
+    CoefficientColumn() = default;
+
+    static CoefficientColumn MakeScalar(double v, idx_t n) {
+        CoefficientColumn c;
+        c.kind = Kind::Scalar;
+        c.scalar_value = v;
+        c.logical_size = n;
+        return c;
+    }
+    static CoefficientColumn MakeDense(idx_t n, double init = 0.0) {
+        CoefficientColumn c;
+        c.kind = Kind::Dense;
+        c.dense_values.assign(n, init);
+        c.logical_size = n;
+        return c;
+    }
+    static CoefficientColumn FromVector(vector<double> &&v) {
+        CoefficientColumn c;
+        c.kind = Kind::Dense;
+        c.logical_size = v.size();
+        c.dense_values = std::move(v);
+        return c;
+    }
+
+    inline double Get(idx_t row) const {
+        return kind == Kind::Scalar ? scalar_value : dense_values[row];
+    }
+    inline double operator[](idx_t row) const { return Get(row); }
+    idx_t Size() const { return logical_size; }
+    bool Empty() const { return logical_size == 0; }
+    bool IsUniform() const { return kind == Kind::Scalar; }
+    double UniformValue() const { return scalar_value; }
+
+    //! Force Dense storage (allocates if currently Scalar).
+    //! After this, dense_values.size() == logical_size.
+    void EnsureDense() {
+        if (kind == Kind::Scalar) {
+            dense_values.assign(logical_size, scalar_value);
+            kind = Kind::Dense;
+        }
+    }
+
+    //! Set one row to v. Promotes Scalar → Dense if needed.
+    inline void Set(idx_t row, double v) {
+        EnsureDense();
+        dense_values[row] = v;
+    }
+    inline void MaskRow(idx_t row) { Set(row, 0.0); }
+    inline void ScaleRow(idx_t row, double factor) {
+        EnsureDense();
+        dense_values[row] *= factor;
+    }
+
+    //! Bulk replace with a uniform scalar broadcast.
+    void AssignScalar(idx_t n, double v) {
+        kind = Kind::Scalar;
+        scalar_value = v;
+        logical_size = n;
+        // Drop any prior dense allocation
+        vector<double>().swap(dense_values);
+    }
+    //! Bulk replace with a dense column, all entries = init.
+    void AssignDense(idx_t n, double init = 0.0) {
+        kind = Kind::Dense;
+        dense_values.assign(n, init);
+        logical_size = n;
+    }
+    //! Reserve dense capacity for upcoming PushBack-style fills.
+    void Reserve(idx_t n) {
+        EnsureDense();
+        dense_values.reserve(n);
+    }
+    //! Resize dense storage; values default to 0.
+    void Resize(idx_t n, double init = 0.0) {
+        EnsureDense();
+        dense_values.resize(n, init);
+        logical_size = n;
+    }
+    //! Append a value (used by ExtractDoubleColumn-style fills via MutableDense).
+    inline void PushBack(double v) {
+        EnsureDense();
+        dense_values.push_back(v);
+        logical_size = dense_values.size();
+    }
+    //! Mutable access to the underlying dense vector. Forces Dense kind.
+    //! After mutating size externally (push_back/resize), call SyncSize().
+    vector<double> &MutableDense() {
+        EnsureDense();
+        return dense_values;
+    }
+    //! Refresh logical_size after external mutation through MutableDense().
+    void SyncSize() {
+        D_ASSERT(kind == Kind::Dense);
+        logical_size = dense_values.size();
+    }
+    //! For helpers that need to know whether all values are integral.
+    //! Scalar: O(1). Dense: O(n).
+    bool AllIntegral() const {
+        if (kind == Kind::Scalar) {
+            return std::floor(scalar_value) == scalar_value;
+        }
+        for (double c : dense_values) {
+            if (std::floor(c) != c) return false;
+        }
+        return true;
+    }
+};
 
 //! Represents an evaluated constraint ready for the solver
 struct EvaluatedConstraint {
     vector<idx_t> variable_indices;           // Which variable for each term
-    vector<vector<double>> row_coefficients;  // [term_idx][row_idx] = coefficient value
-    vector<double> rhs_values;                // [row_idx] = RHS value
+    vector<CoefficientColumn> row_coefficients;  // [term_idx] = coefficient column for that term
+    CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
     idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
@@ -45,7 +179,7 @@ struct EvaluatedConstraint {
     struct BilinearTerm {
         idx_t var_a;
         idx_t var_b;
-        vector<double> row_coefficients;  // [row_idx]
+        CoefficientColumn row_coefficients;  // logical size = num_rows
     };
     vector<BilinearTerm> bilinear_terms;
 
@@ -55,8 +189,8 @@ struct EvaluatedConstraint {
     //! and accumulates all groups into the same QuadraticConstraint.
     struct QuadraticGroup {
         double sign = 1.0;
-        vector<idx_t> variable_indices;          // [term_idx]
-        vector<vector<double>> row_coefficients;  // [term_idx][row_idx]
+        vector<idx_t> variable_indices;             // [term_idx]
+        vector<CoefficientColumn> row_coefficients; // [term_idx]
     };
     vector<QuadraticGroup> quadratic_groups;
     bool has_quadratic = false;
@@ -67,6 +201,15 @@ struct EvaluatedConstraint {
     //! 0..K-1 = group assignment
     vector<idx_t> row_group_ids;
     idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
+
+    //! CSR-style group→rows index, computed lazily by EnsureGroupCSR().
+    //! group_offsets has size num_groups + 1 when populated; empty otherwise.
+    //! Group g's active rows occupy [group_offsets[g], group_offsets[g+1]) in group_row_ids.
+    //! Empty groups (filtered out by WHEN) have group_offsets[g] == group_offsets[g+1].
+    //! Built once and reused across the model builder, deferred-NE expansion, and
+    //! PER objective MIN/MAX paths to avoid repeated O(num_rows) reconstructions.
+    mutable vector<idx_t> group_offsets;
+    mutable vector<idx_t> group_row_ids;
 };
 
 //! Maps result rows to unique entities in a source table.
@@ -91,8 +234,8 @@ struct SolverInput {
     vector<EvaluatedConstraint> constraints;
 
     // Linear objective
-    vector<vector<double>> objective_coefficients; // [term_idx][row_idx]
-    vector<idx_t> objective_variable_indices;      // [term_idx]
+    vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
+    vector<idx_t> objective_variable_indices;          // [term_idx]
     DecideSense sense;
 
     // Quadratic objective: inner linear expression of SUM(sign * POWER(expr, 2)).
@@ -103,21 +246,24 @@ struct SolverInput {
     // sign = +1.0 → PSD Q (convex), sign = -1.0 → NSD Q (concave).
     bool has_quadratic_objective = false;
     double quadratic_sign = 1.0;
-    vector<vector<double>> quadratic_inner_coefficients; // [term_idx][row_idx]
-    vector<idx_t> quadratic_inner_variable_indices;      // [term_idx]
+    vector<CoefficientColumn> quadratic_inner_coefficients; // [term_idx]
+    vector<idx_t> quadratic_inner_variable_indices;          // [term_idx]
 
     // Bilinear objective terms: products of two different DECIDE variables.
     // Only used for non-Boolean pairs (Boolean×anything is McCormick-linearized).
     struct BilinearObjectiveTerm {
-        idx_t var_a;                    // First DECIDE variable index
-        idx_t var_b;                    // Second DECIDE variable index
-        vector<double> row_coefficients; // [row_idx] = data coefficient
+        idx_t var_a;                       // First DECIDE variable index
+        idx_t var_b;                       // Second DECIDE variable index
+        CoefficientColumn row_coefficients; // logical size = num_rows
     };
     vector<BilinearObjectiveTerm> bilinear_objective_terms;
 
     // Objective PER grouping (mirrors constraint row_group_ids pattern)
     vector<idx_t> objective_row_group_ids;  // per-row group assignment
     idx_t objective_num_groups = 0;          // 0 = ungrouped
+    //! CSR-style group→rows index for objectives (mirrors EvaluatedConstraint).
+    vector<idx_t> objective_group_offsets;
+    vector<idx_t> objective_group_row_ids;
 
     // Global auxiliary variables (exist once, not replicated per row)
     // Appended after the per-row grid at indices num_rows * num_decide_vars + i

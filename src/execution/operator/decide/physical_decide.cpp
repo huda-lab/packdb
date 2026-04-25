@@ -1857,11 +1857,11 @@ public:
     //===--------------------------------------------------------------------===//
 
     vector<EvaluatedConstraint> evaluated_constraints;
-    vector<vector<double>> evaluated_objective_coefficients;  // [term_idx][row_idx]
+    vector<CoefficientColumn> evaluated_objective_coefficients;  // [term_idx]
     vector<idx_t> objective_variable_indices;
 
     // Quadratic objective: evaluated inner linear expression coefficients
-    vector<vector<double>> evaluated_quadratic_coefficients;  // [term_idx][row_idx]
+    vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]
     vector<idx_t> quadratic_variable_indices;
     bool has_quadratic_objective = false;
     double quadratic_sign = 1.0;
@@ -1870,7 +1870,7 @@ public:
     struct EvaluatedBilinearTerm {
         idx_t var_a;
         idx_t var_b;
-        vector<double> row_coefficients; // [row_idx]
+        CoefficientColumn row_coefficients;
     };
     vector<EvaluatedBilinearTerm> evaluated_bilinear_terms;
 
@@ -2139,7 +2139,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 throw InternalException("Failed to add expression for term %llu: %s\nOriginal: %s\nTransformed: %s",
                     term_idx, e.what(), term.coefficient->ToString(), transformed_coefs.back()->ToString());
             }
-            eval_const.row_coefficients[term_idx].reserve(num_rows);
+            eval_const.row_coefficients[term_idx].Reserve(num_rows);
         }
 
         DataChunk coef_results;
@@ -2154,10 +2154,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             coef_results.Reset();
             coef_executor.Execute(chunk, coef_results);
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+                auto &col = eval_const.row_coefficients[term_idx].MutableDense();
                 ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(),
                                     constraint->lhs_terms[term_idx].sign,
-                                    eval_const.row_coefficients[term_idx],
+                                    col,
                                     "constraint coefficient");
+                eval_const.row_coefficients[term_idx].SyncSize();
             }
         }
 
@@ -2165,7 +2167,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (!term_filters[term_idx].has_filter) {
                 continue;
             }
-            auto &coefficients = eval_const.row_coefficients[term_idx];
+            auto &coefficients = eval_const.row_coefficients[term_idx].MutableDense();
             auto &mask = term_filters[term_idx].mask;
             for (idx_t row = 0; row < coefficients.size(); row++) {
                 if (!mask[row]) {
@@ -2176,18 +2178,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         // Evaluate RHS
         // RHS can be a constant, an aggregate (scalar), or a row-varying expression (for row-wise constraints)
-        
-        // Initialize RHS values vector
-        eval_const.rhs_values.reserve(num_rows);
 
         if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
             auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
             double rhs_constant = const_expr.value.GetValue<double>();
-            eval_const.rhs_values.assign(num_rows, rhs_constant);
+            eval_const.rhs_values.AssignScalar(num_rows, rhs_constant);
         } else {
             // RHS is a complex expression. It might be row-varying (e.g., column ref) or scalar (aggregate).
             // We evaluate it against the data chunks.
-            
+            eval_const.rhs_values.Reserve(num_rows);
+
             auto transformed_rhs = TransformToChunkExpression(*constraint->rhs_expr, context, num_rows);
 
             // Prepare executor
@@ -2206,9 +2206,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             while (gstate.data.Scan(rhs_scan_state, rhs_chunk)) {
                 rhs_result.Reset();
                 rhs_executor.Execute(rhs_chunk, rhs_result);
+                auto &rhs_col = eval_const.rhs_values.MutableDense();
                 ExtractDoubleColumn(rhs_result.data[0], rhs_chunk.size(), 1.0,
-                                    eval_const.rhs_values,
+                                    rhs_col,
                                     "constraint right-hand side");
+                eval_const.rhs_values.SyncSize();
             }
         }
 
@@ -2300,8 +2302,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             RejectEmptyAggregate(cnt, "quadratic aggregate term", "constraint");
         }
 
-        auto ScaleAvgRowCoefficients = [&](vector<double> &coefficients, bool has_filter,
+        auto ScaleAvgRowCoefficients = [&](CoefficientColumn &col, bool has_filter,
                                            const vector<bool> &filter_mask) {
+            auto &coefficients = col.MutableDense();
             if (eval_const.row_group_ids.empty()) {
                 idx_t denominator = 0;
                 for (idx_t row = 0; row < num_rows; row++) {
@@ -2340,7 +2343,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         };
 
-        auto ScaleAvgQuadraticCoefficients = [&](vector<vector<double>> &row_coefficients, bool has_filter,
+        auto ScaleAvgQuadraticCoefficients = [&](vector<CoefficientColumn> &row_coefficients, bool has_filter,
                                                  const vector<bool> &filter_mask) {
             if (eval_const.row_group_ids.empty()) {
                 idx_t denominator = 0;
@@ -2350,13 +2353,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
                 if (denominator == 0) {
-                    for (auto &coefficients : row_coefficients) {
+                    for (auto &col : row_coefficients) {
+                        auto &coefficients = col.MutableDense();
                         std::fill(coefficients.begin(), coefficients.end(), 0.0);
                     }
                     return;
                 }
                 double scale = 1.0 / std::sqrt(static_cast<double>(denominator));
-                for (auto &coefficients : row_coefficients) {
+                for (auto &col : row_coefficients) {
+                    auto &coefficients = col.MutableDense();
                     for (auto &coefficient : coefficients) {
                         coefficient *= scale;
                     }
@@ -2374,7 +2379,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     group_counts[gid]++;
                 }
             }
-            for (auto &coefficients : row_coefficients) {
+            for (auto &col : row_coefficients) {
+                auto &coefficients = col.MutableDense();
                 for (idx_t row = 0; row < coefficients.size(); row++) {
                     idx_t gid = eval_const.row_group_ids[row];
                     if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
@@ -2436,14 +2442,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
                 auto &bt = constraint->bilinear_terms[term_idx];
                 if (!bt.coefficient) {
-                    ebts[term_idx].row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+                    ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
                     continue;
                 }
                 bl_transformed.push_back(TransformToChunkExpression(*bt.coefficient, context));
                 bl_types.push_back(bl_transformed.back()->return_type);
                 bl_executor.AddExpression(*bl_transformed.back());
                 bl_route.push_back(term_idx);
-                ebts[term_idx].row_coefficients.reserve(num_rows);
+                ebts[term_idx].row_coefficients.Reserve(num_rows);
             }
 
             if (!bl_transformed.empty()) {
@@ -2458,10 +2464,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     bl_executor.Execute(bl_chunk, bl_results);
                     for (idx_t j = 0; j < bl_route.size(); j++) {
                         idx_t term_idx = bl_route[j];
+                        auto &col = ebts[term_idx].row_coefficients.MutableDense();
                         ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(),
                                             constraint->bilinear_terms[term_idx].sign,
-                                            ebts[term_idx].row_coefficients,
+                                            col,
                                             "bilinear constraint coefficient");
+                        ebts[term_idx].row_coefficients.SyncSize();
                     }
                 }
             }
@@ -2470,9 +2478,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 auto &ebt = ebts[term_idx];
                 if (bilinear_filters[term_idx].has_filter) {
                     auto &mask = bilinear_filters[term_idx].mask;
-                    for (idx_t row = 0; row < ebt.row_coefficients.size(); row++) {
+                    auto &col = ebt.row_coefficients.MutableDense();
+                    for (idx_t row = 0; row < col.size(); row++) {
                         if (!mask[row]) {
-                            ebt.row_coefficients[row] = 0.0;
+                            col[row] = 0.0;
                         }
                     }
                 }
@@ -2503,7 +2512,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     q_transformed.push_back(TransformToChunkExpression(*term.coefficient, context));
                     q_types.push_back(q_transformed.back()->return_type);
                     q_executor.AddExpression(*q_transformed.back());
-                    eqg.row_coefficients[inner_idx].reserve(num_rows);
+                    eqg.row_coefficients[inner_idx].Reserve(num_rows);
                 }
 
                 if (!qg.inner_terms.empty()) {
@@ -2517,16 +2526,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         q_results.Reset();
                         q_executor.Execute(qchunk, q_results);
                         for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
+                            auto &col = eqg.row_coefficients[inner_idx].MutableDense();
                             ExtractDoubleColumn(q_results.data[inner_idx], qchunk.size(),
                                                 qg.inner_terms[inner_idx].sign,
-                                                eqg.row_coefficients[inner_idx],
+                                                col,
                                                 "quadratic constraint coefficient");
+                            eqg.row_coefficients[inner_idx].SyncSize();
                         }
                     }
                 }
                 if (quadratic_filters[group_idx].has_filter) {
                     auto &mask = quadratic_filters[group_idx].mask;
-                    for (auto &coefficients : eqg.row_coefficients) {
+                    for (auto &qcol : eqg.row_coefficients) {
+                        auto &coefficients = qcol.MutableDense();
                         for (idx_t row = 0; row < coefficients.size(); row++) {
                             if (!mask[row]) {
                                 coefficients[row] = 0.0;
@@ -2574,7 +2586,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // was cheap, but doubling the ColumnDataCollection scan was not.
         struct ObjBucket {
             vector<Term> *src_terms;
-            vector<vector<double>> *out_coeffs;
+            vector<CoefficientColumn> *out_coeffs;
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
         };
@@ -2643,7 +2655,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     obj_result_types.push_back(flat_coeffs.back()->return_type);
                     obj_executor.AddExpression(*flat_coeffs.back());
                     route.emplace_back(b_idx, term_idx);
-                    (*b.out_coeffs)[term_idx].reserve(num_rows);
+                    (*b.out_coeffs)[term_idx].Reserve(num_rows);
                 }
             }
 
@@ -2665,11 +2677,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 for (idx_t j = 0; j < flat_coeffs.size(); j++) {
                     auto &b = buckets[route[j].first];
                     idx_t term_idx = route[j].second;
-                    auto &out = (*b.out_coeffs)[term_idx];
+                    auto &out = (*b.out_coeffs)[term_idx].MutableDense();
                     int term_sign = (*b.src_terms)[term_idx].sign;
                     ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(),
                                         static_cast<double>(term_sign), out,
                                         "objective coefficient");
+                    (*b.out_coeffs)[term_idx].SyncSize();
                 }
             }
 
@@ -2680,7 +2693,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 for (idx_t term_idx = 0; term_idx < b.out_coeffs->size(); term_idx++) {
                     if ((*b.out_term_filters)[term_idx].has_filter) {
                         auto &mask = (*b.out_term_filters)[term_idx].mask;
-                        auto &out = (*b.out_coeffs)[term_idx];
+                        auto &out = (*b.out_coeffs)[term_idx].MutableDense();
                         for (idx_t row = 0; row < out.size(); row++) {
                             if (!mask[row]) {
                                 out[row] = 0.0;
@@ -2689,10 +2702,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
                 if (objective_has_when) {
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        if (objective_when_mask[row]) continue;
-                        for (idx_t term_idx = 0; term_idx < b.out_coeffs->size(); term_idx++) {
-                            (*b.out_coeffs)[term_idx][row] = 0.0;
+                    for (idx_t term_idx = 0; term_idx < b.out_coeffs->size(); term_idx++) {
+                        auto &out = (*b.out_coeffs)[term_idx].MutableDense();
+                        for (idx_t row = 0; row < num_rows; row++) {
+                            if (objective_when_mask[row]) continue;
+                            out[row] = 0.0;
                         }
                     }
                 }
@@ -2774,14 +2788,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
                 auto &bt = gstate.objective->bilinear_terms[term_idx];
                 if (!bt.coefficient) {
-                    ebts[term_idx].row_coefficients.assign(num_rows, static_cast<double>(bt.sign));
+                    ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
                     continue;
                 }
                 bl_transformed.push_back(TransformToChunkExpression(*bt.coefficient, context));
                 bl_types.push_back(bl_transformed.back()->return_type);
                 bl_executor.AddExpression(*bl_transformed.back());
                 bl_route.push_back(term_idx);
-                ebts[term_idx].row_coefficients.reserve(num_rows);
+                ebts[term_idx].row_coefficients.Reserve(num_rows);
             }
 
             if (!bl_transformed.empty()) {
@@ -2796,10 +2810,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     bl_executor.Execute(bl_chunk, bl_results);
                     for (idx_t j = 0; j < bl_route.size(); j++) {
                         idx_t term_idx = bl_route[j];
+                        auto &col = ebts[term_idx].row_coefficients.MutableDense();
                         ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(),
                                             gstate.objective->bilinear_terms[term_idx].sign,
-                                            ebts[term_idx].row_coefficients,
+                                            col,
                                             "bilinear objective coefficient");
+                        ebts[term_idx].row_coefficients.SyncSize();
                     }
                 }
             }
@@ -2808,16 +2824,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 auto &ebt = ebts[term_idx];
                 if (obj_bilinear_filters[term_idx].has_filter) {
                     auto &mask = obj_bilinear_filters[term_idx].mask;
-                    for (idx_t row = 0; row < ebt.row_coefficients.size(); row++) {
+                    auto &col = ebt.row_coefficients.MutableDense();
+                    for (idx_t row = 0; row < col.size(); row++) {
                         if (!mask[row]) {
-                            ebt.row_coefficients[row] = 0.0;
+                            col[row] = 0.0;
                         }
                     }
                 }
                 if (objective_has_when) {
-                    for (idx_t row = 0; row < ebt.row_coefficients.size(); row++) {
+                    auto &col = ebt.row_coefficients.MutableDense();
+                    for (idx_t row = 0; row < col.size(); row++) {
                         if (!objective_when_mask[row]) {
-                            ebt.row_coefficients[row] = 0.0;
+                            col[row] = 0.0;
                         }
                     }
                 }
@@ -2874,12 +2892,24 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 double ub = solver_input.upper_bounds[var_idx];
                 if (ub < 1e20) {
                     double max_coef = 0.0;
-                    for (auto &v : ec.row_coefficients[t]) {
-                        max_coef = std::max(max_coef, std::abs(v));
+                    auto &col = ec.row_coefficients[t];
+                    for (idx_t r = 0; r < col.Size(); r++) {
+                        max_coef = std::max(max_coef, std::abs(col.Get(r)));
                     }
                     M = std::max(M, max_coef * ub);
                 }
             }
+
+            auto BuildShiftedRhs = [&](double shift) {
+                if (ec.rhs_values.IsUniform()) {
+                    return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
+                }
+                auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    col.Set(r, ec.rhs_values.Get(r) + shift);
+                }
+                return col;
+            };
 
             if (is_max_agg) {
                 // Hard MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M
@@ -2887,13 +2917,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 EvaluatedConstraint ec_row;
                 ec_row.variable_indices = ec.variable_indices;
                 ec_row.row_coefficients = ec.row_coefficients;
-                // Add indicator variable: -M * y_i
+                // Add indicator variable: -M * y_i (broadcast)
                 ec_row.variable_indices.push_back(indicator_idx);
-                ec_row.row_coefficients.push_back(vector<double>(num_rows, -M));
-                ec_row.rhs_values.resize(num_rows);
-                for (idx_t r = 0; r < num_rows; r++) {
-                    ec_row.rhs_values[r] = ec.rhs_values[r] - M;
-                }
+                ec_row.row_coefficients.push_back(CoefficientColumn::MakeScalar(-M, num_rows));
+                ec_row.rhs_values = BuildShiftedRhs(-M);
                 ec_row.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
                 ec_row.lhs_is_aggregate = false; // per-row!
                 ec_row.row_group_ids = ec.row_group_ids;
@@ -2903,8 +2930,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // SUM(y) >= 1 (at least one row must satisfy)
                 EvaluatedConstraint ec_sum;
                 ec_sum.variable_indices = {indicator_idx};
-                ec_sum.row_coefficients = {vector<double>(num_rows, 1.0)};
-                ec_sum.rhs_values.assign(num_rows, 1.0);
+                ec_sum.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
+                ec_sum.rhs_values.AssignScalar(num_rows, 1.0);
                 ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
@@ -2915,13 +2942,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 EvaluatedConstraint ec_row;
                 ec_row.variable_indices = ec.variable_indices;
                 ec_row.row_coefficients = ec.row_coefficients;
-                // Add indicator variable: +M * y_i
+                // Add indicator variable: +M * y_i (broadcast)
                 ec_row.variable_indices.push_back(indicator_idx);
-                ec_row.row_coefficients.push_back(vector<double>(num_rows, M));
-                ec_row.rhs_values.resize(num_rows);
-                for (idx_t r = 0; r < num_rows; r++) {
-                    ec_row.rhs_values[r] = ec.rhs_values[r] + M;
-                }
+                ec_row.row_coefficients.push_back(CoefficientColumn::MakeScalar(M, num_rows));
+                ec_row.rhs_values = BuildShiftedRhs(M);
                 ec_row.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
                 ec_row.lhs_is_aggregate = false;
                 ec_row.row_group_ids = ec.row_group_ids;
@@ -2931,8 +2955,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // SUM(y) >= 1
                 EvaluatedConstraint ec_sum;
                 ec_sum.variable_indices = {indicator_idx};
-                ec_sum.row_coefficients = {vector<double>(num_rows, 1.0)};
-                ec_sum.rhs_values.assign(num_rows, 1.0);
+                ec_sum.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
+                ec_sum.rhs_values.AssignScalar(num_rows, 1.0);
                 ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
@@ -2965,18 +2989,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     auto NEIsRealType = [](const LogicalType &t) {
         return t == LogicalType::DOUBLE || t == LogicalType::FLOAT;
     };
-    auto NEAllCoeffsIntegral = [](const vector<double> &coeffs) {
-        for (double c : coeffs) {
-            if (std::floor(c) != c) return false;
-        }
-        return true;
-    };
     auto NELhsIsIntegerValued = [&](const EvaluatedConstraint &ec) -> bool {
         for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
             idx_t vi = ec.variable_indices[i];
             if (vi == DConstants::INVALID_INDEX) continue;
             if (NEIsRealType(solver_input.variable_types[vi])) return false;
-            if (!NEAllCoeffsIntegral(ec.row_coefficients[i])) return false;
+            if (!ec.row_coefficients[i].AllIntegral()) return false;
         }
         return true;
     };
@@ -2999,12 +3017,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     double ub = solver_input.upper_bounds[var_idx];
                     if (ub < 1e20) {
                         double max_coef = 0.0;
-                        for (idx_t r = 0; r < ec.row_coefficients[t].size(); r++) {
+                        auto &col = ec.row_coefficients[t];
+                        for (idx_t r = 0; r < col.Size(); r++) {
                             if (!ec.row_group_ids.empty() &&
                                 ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
                                 continue;
                             }
-                            max_coef = std::max(max_coef, std::abs(ec.row_coefficients[t][r]));
+                            max_coef = std::max(max_coef, std::abs(col.Get(r)));
                         }
                         M = std::max(M, max_coef * ub);
                     }
@@ -3022,14 +3041,31 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     // Per-row NE: expand inline with row-scoped indicator variable
                     idx_t indicator_var_idx = ec.ne_indicator_idx;
 
-                    // Build indicator coefficient vector (0 for excluded rows, -M for active)
-                    vector<double> indicator_coeffs(num_rows, 0.0);
-                    for (idx_t r = 0; r < num_rows; r++) {
-                        if (ec.row_group_ids.empty() ||
-                            ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
-                            indicator_coeffs[r] = -M;
+                    // Build indicator coefficient column. If no WHEN/PER filter, every
+                    // row gets -M (broadcast scalar). Otherwise, build a dense column
+                    // with 0 on excluded rows.
+                    CoefficientColumn indicator_coeffs;
+                    if (ec.row_group_ids.empty()) {
+                        indicator_coeffs = CoefficientColumn::MakeScalar(-M, num_rows);
+                    } else {
+                        indicator_coeffs = CoefficientColumn::MakeDense(num_rows, 0.0);
+                        for (idx_t r = 0; r < num_rows; r++) {
+                            if (ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
+                                indicator_coeffs.Set(r, -M);
+                            }
                         }
                     }
+
+                    auto BuildShiftedRhs = [&](double shift) {
+                        if (ec.rhs_values.IsUniform()) {
+                            return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
+                        }
+                        auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
+                        for (idx_t r = 0; r < num_rows; r++) {
+                            col.Set(r, ec.rhs_values.Get(r) + shift);
+                        }
+                        return col;
+                    };
 
                     // Constraint 1: x - M*z ≤ K - 1
                     EvaluatedConstraint ec1;
@@ -3037,10 +3073,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec1.row_coefficients = ec.row_coefficients;
                     ec1.variable_indices.push_back(indicator_var_idx);
                     ec1.row_coefficients.push_back(indicator_coeffs);
-                    ec1.rhs_values.resize(num_rows);
-                    for (idx_t r = 0; r < num_rows; r++) {
-                        ec1.rhs_values[r] = ec.rhs_values[r] - 1.0;
-                    }
+                    ec1.rhs_values = BuildShiftedRhs(-1.0);
                     ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
                     ec1.lhs_is_aggregate = false; // per-row
                     ec1.row_group_ids = ec.row_group_ids;
@@ -3052,11 +3085,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec2.variable_indices = ec.variable_indices;
                     ec2.row_coefficients = ec.row_coefficients;
                     ec2.variable_indices.push_back(indicator_var_idx);
-                    ec2.row_coefficients.push_back(indicator_coeffs);
-                    ec2.rhs_values.resize(num_rows);
-                    for (idx_t r = 0; r < num_rows; r++) {
-                        ec2.rhs_values[r] = ec.rhs_values[r] + 1.0 - M;
-                    }
+                    ec2.row_coefficients.push_back(std::move(indicator_coeffs));
+                    ec2.rhs_values = BuildShiftedRhs(1.0 - M);
                     ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
                     ec2.lhs_is_aggregate = false; // per-row
                     ec2.row_group_ids = ec.row_group_ids;
@@ -3086,8 +3116,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // Constraint: w <= U * b  (i.e., w - U*b <= 0)
         EvaluatedConstraint ec1;
         ec1.variable_indices = {link.aux_idx, link.bool_var_idx};
-        ec1.row_coefficients = {vector<double>(num_rows, 1.0), vector<double>(num_rows, -U)};
-        ec1.rhs_values.assign(num_rows, 0.0);
+        ec1.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
+        ec1.row_coefficients.push_back(CoefficientColumn::MakeScalar(-U, num_rows));
+        ec1.rhs_values.AssignScalar(num_rows, 0.0);
         ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec1.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec1));
@@ -3096,12 +3127,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // Rearranged: w - x + U*b >= -U  →  1*w + (-1)*x + (-U)*b >= -U
         EvaluatedConstraint ec2;
         ec2.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
-        ec2.row_coefficients = {
-            vector<double>(num_rows, 1.0),     // +w
-            vector<double>(num_rows, -1.0),    // -x
-            vector<double>(num_rows, -U)       // -U*b
-        };
-        ec2.rhs_values.assign(num_rows, -U);   // RHS = -U
+        ec2.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+        ec2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+        ec2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-U, num_rows));    // -U*b
+        ec2.rhs_values.AssignScalar(num_rows, -U);
         ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
         ec2.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec2));
@@ -3155,7 +3184,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // This upper-bounds |inner| across all rows and variable values.
             double M = 0.0;
             for (idx_t r = 0; r < num_rows; r++) {
-                double row_bound = std::abs(c1_rhs[r]);
+                double row_bound = std::abs(c1_rhs.Get(r));
                 for (idx_t t = 0; t < c1_vis.size(); t++) {
                     if (c1_vis[t] == link.aux_idx) {
                         continue;
@@ -3170,22 +3199,30 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias,
                             decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias);
                     }
-                    row_bound += std::abs(c1_rcs[t][r]) * std::max(std::abs(lb), std::abs(ub));
+                    row_bound += std::abs(c1_rcs[t].Get(r)) * std::max(std::abs(lb), std::abs(ub));
                 }
                 M = std::max(M, row_bound);
             }
             double two_M = 2.0 * M;
+
+            auto ShiftRhs = [&](const CoefficientColumn &src, double delta) {
+                if (src.IsUniform()) {
+                    return CoefficientColumn::MakeScalar(src.UniformValue() + delta, num_rows);
+                }
+                auto out = CoefficientColumn::MakeDense(num_rows, 0.0);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    out.Set(r, src.Get(r) + delta);
+                }
+                return out;
+            };
 
             // C_ub1: same as C1 but add y_idx with coeff +2M, flip to <=, rhs[r] += 2M
             EvaluatedConstraint ec_ub1;
             ec_ub1.variable_indices = c1_vis;
             ec_ub1.row_coefficients = c1_rcs;
             ec_ub1.variable_indices.push_back(link.y_idx);
-            ec_ub1.row_coefficients.push_back(vector<double>(num_rows, two_M));
-            ec_ub1.rhs_values.resize(num_rows);
-            for (idx_t r = 0; r < num_rows; r++) {
-                ec_ub1.rhs_values[r] = c1_rhs[r] + two_M;
-            }
+            ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(two_M, num_rows));
+            ec_ub1.rhs_values = ShiftRhs(c1_rhs, two_M);
             ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
             ec_ub1.lhs_is_aggregate = false;
             ec_ub1.row_group_ids = c1_rgids;
@@ -3197,7 +3234,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ec_ub2.variable_indices = c2_vis;
             ec_ub2.row_coefficients = c2_rcs;
             ec_ub2.variable_indices.push_back(link.y_idx);
-            ec_ub2.row_coefficients.push_back(vector<double>(num_rows, -two_M));
+            ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-two_M, num_rows));
             ec_ub2.rhs_values = c2_rhs;
             ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
             ec_ub2.lhs_is_aggregate = false;
@@ -3293,8 +3330,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                       solver_input.objective_num_groups);
     }
 
-    auto ScaleObjectiveAvgRows = [&](vector<double> &coefficients, bool has_filter, const vector<bool> &filter_mask,
+    auto ScaleObjectiveAvgRows = [&](CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask,
                                      bool quadratic_inner) {
+        auto &coefficients = col.MutableDense();
         if (solver_input.objective_row_group_ids.empty()) {
             idx_t denominator = 0;
             for (idx_t row = 0; row < num_rows; row++) {
@@ -3417,38 +3455,45 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         double M = deferred.big_M;
         bool has_groups = !ec.row_group_ids.empty();
 
-        // Build group → rows mapping (mirrors model builder unified path)
+        // Build group → rows mapping. For grouped constraints reuse the CSR
+        // index already attached to ec; for ungrouped, materialize the trivial
+        // single-group CSR locally.
         idx_t num_groups_to_process = 1;
-        vector<vector<idx_t>> group_rows;
+        vector<idx_t> ungrouped_offsets;
+        vector<idx_t> ungrouped_flat;
+        const vector<idx_t> *offsets_ptr = nullptr;
+        const vector<idx_t> *flat_ptr = nullptr;
         if (has_groups) {
-            group_rows.resize(ec.num_groups);
+            BuildGroupCSR(ec.row_group_ids, ec.num_groups,
+                          ec.group_offsets, ec.group_row_ids);
             num_groups_to_process = ec.num_groups;
-            for (idx_t row = 0; row < num_rows; row++) {
-                idx_t gid = ec.row_group_ids[row];
-                if (gid != DConstants::INVALID_INDEX) {
-                    group_rows[gid].push_back(row);
-                }
-            }
+            offsets_ptr = &ec.group_offsets;
+            flat_ptr = &ec.group_row_ids;
         } else {
-            // No WHEN/PER — all rows in one implicit group
-            group_rows.resize(1);
-            for (idx_t row = 0; row < num_rows; row++) {
-                group_rows[0].push_back(row);
-            }
+            ungrouped_offsets = {0, num_rows};
+            ungrouped_flat.resize(num_rows);
+            for (idx_t r = 0; r < num_rows; r++) ungrouped_flat[r] = r;
+            offsets_ptr = &ungrouped_offsets;
+            flat_ptr = &ungrouped_flat;
         }
+        const auto &offsets = *offsets_ptr;
+        const auto &flat_rows = *flat_ptr;
 
         // Base (unscaled) RHS. For AVG(x) <> K we store the original K in rhs_values and
         // multiply by group size per non-empty group below.
-        double base_rhs = ec.rhs_values[0];
+        double base_rhs = ec.rhs_values.Get(0);
 
         for (idx_t g = 0; g < num_groups_to_process; g++) {
-            if (group_rows[g].empty()) {
+            idx_t g_begin = offsets[g];
+            idx_t g_end = offsets[g + 1];
+            if (g_begin == g_end) {
                 continue;
             }
+            idx_t g_size = g_end - g_begin;
 
             double rhs = base_rhs;
             if (ec.ne_avg_rhs_scale) {
-                rhs *= static_cast<double>(group_rows[g].size());
+                rhs *= static_cast<double>(g_size);
             }
 
             // Allocate one global binary z for this group
@@ -3465,8 +3510,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (decide_var_idx == DConstants::INVALID_INDEX) {
                     continue;
                 }
-                for (idx_t row : group_rows[g]) {
-                    double coeff = ec.row_coefficients[term_idx][row];
+                auto &col = ec.row_coefficients[term_idx];
+                for (idx_t k = g_begin; k < g_end; k++) {
+                    idx_t row = flat_rows[k];
+                    double coeff = col.Get(row);
                     if (std::abs(coeff) < 1e-15) {
                         continue;
                     }
@@ -3511,7 +3558,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         !saved_obj_var_indices.empty() &&
         ((per_inner_agg != ObjectiveAggregateType::NONE && solver_input.objective_num_groups > 0) ||
          flat_objective_agg != ObjectiveAggregateType::NONE);
-    vector<vector<double>> saved_obj_coefficients;
+    vector<CoefficientColumn> saved_obj_coefficients;
     if (need_saved_obj) {
         saved_obj_coefficients = solver_input.objective_coefficients;
     }
@@ -3524,8 +3571,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             double ub = solver_input.upper_bounds[var];
             if (ub < 1e20) {
                 double max_coef = 0.0;
-                for (auto &v : saved_obj_coefficients[t]) {
-                    max_coef = std::max(max_coef, std::abs(v));
+                auto &col = saved_obj_coefficients[t];
+                for (idx_t r = 0; r < col.Size(); r++) {
+                    max_coef = std::max(max_coef, std::abs(col.Get(r)));
                 }
                 M = std::max(M, max_coef * ub);
             }
@@ -3541,13 +3589,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         idx_t K = solver_input.objective_num_groups;
         auto &row_groups = solver_input.objective_row_group_ids;
 
-        // Build group→rows index
-        vector<vector<idx_t>> group_rows(K);
-        for (idx_t row = 0; row < num_rows; row++) {
-            if (row_groups[row] != DConstants::INVALID_INDEX) {
-                group_rows[row_groups[row]].push_back(row);
-            }
-        }
+        // Build group→rows CSR index once, reuse across phases.
+        BuildGroupCSR(row_groups, K,
+                      solver_input.objective_group_offsets,
+                      solver_input.objective_group_row_ids);
+        auto &obj_offsets = solver_input.objective_group_offsets;
+        auto &obj_flat_rows = solver_input.objective_group_row_ids;
+        auto group_size = [&](idx_t g) {
+            return obj_offsets[g + 1] - obj_offsets[g];
+        };
 
         // Clear per-row objective (auxiliaries become the objective)
         solver_input.objective_coefficients.clear();
@@ -3582,7 +3632,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // Easy: z_g >= expr_r (for MAX) or z_g <= expr_r (for MIN)
                 char sense_char = inner_is_min ? '<' : '>';
                 for (idx_t g = 0; g < K; g++) {
-                    for (idx_t row : group_rows[g]) {
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) { idx_t row = obj_flat_rows[k];
                         SolverInput::RawConstraint rc;
                         rc.sense = sense_char;
                         rc.rhs = 0.0;
@@ -3599,11 +3649,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
             } else {
-                // Hard: per-row indicators per group
+                // Hard: per-row indicators per group. Allocate only for ACTIVE rows
+                // (rows that appear in some non-empty group). The CSR's flat_rows
+                // already enumerates exactly those rows in group order — use its
+                // position as the active index to keep the mapping cache-friendly.
                 idx_t first_y = z_base + K;
-                idx_t total_indicators = num_rows; // one per row (only grouped rows used)
-                solver_input.num_global_vars += total_indicators;
-                for (idx_t r = 0; r < total_indicators; r++) {
+                idx_t num_active = obj_flat_rows.size();
+                solver_input.num_global_vars += num_active;
+                for (idx_t r = 0; r < num_active; r++) {
                     solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
                     solver_input.global_lower_bounds.push_back(0.0);
                     solver_input.global_upper_bounds.push_back(1.0);
@@ -3611,7 +3664,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
 
                 for (idx_t g = 0; g < K; g++) {
-                    for (idx_t row : group_rows[g]) {
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        idx_t row = obj_flat_rows[k];
+                        idx_t active_idx = k; // position in flat_rows == active index
                         SolverInput::RawConstraint rc;
                         rc.indices.push_back((int)group_value_indices[g]);
                         rc.coefficients.push_back(1.0);
@@ -3622,7 +3677,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
-                        idx_t y_idx = first_y + row;
+                        idx_t y_idx = first_y + active_idx;
                         if (inner_is_min) {
                             // MINIMIZE MIN inner: z_g - expr_r - M*y_r >= -M
                             rc.indices.push_back((int)y_idx);
@@ -3640,8 +3695,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                     // SUM(y) >= 1 per group
                     SolverInput::RawConstraint sum_y;
-                    for (idx_t row : group_rows[g]) {
-                        sum_y.indices.push_back((int)(first_y + row));
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        sum_y.indices.push_back((int)(first_y + k));
                         sum_y.coefficients.push_back(1.0);
                     }
                     sum_y.sense = '>';
@@ -3733,10 +3788,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // Inner AVG + Outer SUM: scale each row's coefficient by 1/n_g
                 // SUM over groups of AVG(expr) = Σ_g (Σ_{r∈g} c_r * x_r) / n_g
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                    auto &col = saved_obj_coefficients[t].MutableDense();
                     for (idx_t row = 0; row < num_rows; row++) {
                         if (row_groups[row] != DConstants::INVALID_INDEX) {
                             idx_t g = row_groups[row];
-                            saved_obj_coefficients[t][row] /= static_cast<double>(group_rows[g].size());
+                            col[row] /= static_cast<double>(group_size(g));
                         }
                     }
                 }
@@ -3766,11 +3822,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     rc.rhs = 0.0;
                     rc.indices.push_back((int)w_idx);
                     rc.coefficients.push_back(1.0);
-                    for (idx_t row : group_rows[g]) {
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) { idx_t row = obj_flat_rows[k];
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (per_inner_was_avg) {
-                                coeff /= static_cast<double>(group_rows[g].size());
+                                coeff /= static_cast<double>(group_size(g));
                             }
                             if (std::abs(coeff) < 1e-15) continue;
                             idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
@@ -3795,11 +3851,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     SolverInput::RawConstraint rc;
                     rc.indices.push_back((int)w_idx);
                     rc.coefficients.push_back(1.0);
-                    for (idx_t row : group_rows[g]) {
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) { idx_t row = obj_flat_rows[k];
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (per_inner_was_avg) {
-                                coeff /= static_cast<double>(group_rows[g].size());
+                                coeff /= static_cast<double>(group_size(g));
                             }
                             if (std::abs(coeff) < 1e-15) continue;
                             idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
@@ -3838,6 +3894,34 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool is_min_agg = (flat_objective_agg == ObjectiveAggregateType::MIN_AGG);
         bool is_easy = flat_objective_is_easy;
 
+        // Compute active rows: pass WHEN, and have at least one nonzero coefficient.
+        // - Easy path: skipping inactive rows just avoids vacuous linking constraints
+        //   (the existing code already skipped zero coefficients individually, but still
+        //   emitted an empty linking row).
+        // - Hard path: this also reduces the number of indicator binaries and the size
+        //   of the SUM(y) >= 1 constraint sent to the solver.
+        vector<idx_t> active_rows;
+        active_rows.reserve(num_rows);
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (objective_has_when && !objective_when_mask[row]) continue;
+            bool has_nonzero = false;
+            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                if (std::abs(saved_obj_coefficients[t].Get(row)) >= 1e-15) {
+                    has_nonzero = true;
+                    break;
+                }
+            }
+            if (has_nonzero) {
+                active_rows.push_back(row);
+            }
+        }
+        if (active_rows.empty()) {
+            throw InvalidInputException(
+                "MIN/MAX objective has no active rows after WHEN filtering and zero-coefficient "
+                "elimination. The auxiliary variable would have no pinning constraints, "
+                "making the optimization unbounded or vacuous.");
+        }
+
         idx_t z_idx = var_indexer.global_block_start + solver_input.num_global_vars;
 
         // Create global variable z (continuous, unbounded)
@@ -3853,7 +3937,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         if (is_easy) {
             char sense_char = is_min_agg ? '<' : '>';
-            for (idx_t row = 0; row < num_rows; row++) {
+            for (idx_t row : active_rows) {
                 SolverInput::RawConstraint rc;
                 rc.sense = sense_char;
                 rc.rhs = 0.0;
@@ -3861,7 +3945,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 rc.coefficients.push_back(1.0);
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                     idx_t var = saved_obj_var_indices[t];
-                    double coeff = saved_obj_coefficients[t][row];
+                    double coeff = saved_obj_coefficients[t].Get(row);
                     if (std::abs(coeff) < 1e-15) continue;
                     idx_t var_idx = var_indexer.Get(var, row);
                     rc.indices.push_back((int)var_idx);
@@ -3872,28 +3956,31 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         } else {
             double M = compute_big_m();
 
+            // Allocate one indicator binary per ACTIVE row (not per total row).
             idx_t first_y_idx = z_idx + 1;
-            solver_input.num_global_vars += num_rows;
-            for (idx_t r = 0; r < num_rows; r++) {
+            idx_t num_active = active_rows.size();
+            solver_input.num_global_vars += num_active;
+            for (idx_t r = 0; r < num_active; r++) {
                 solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
                 solver_input.global_lower_bounds.push_back(0.0);
                 solver_input.global_upper_bounds.push_back(1.0);
                 solver_input.global_obj_coeffs.push_back(0.0);
             }
 
-            for (idx_t row = 0; row < num_rows; row++) {
+            for (idx_t a = 0; a < active_rows.size(); a++) {
+                idx_t row = active_rows[a];
                 SolverInput::RawConstraint rc;
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                     idx_t var = saved_obj_var_indices[t];
-                    double coeff = saved_obj_coefficients[t][row];
+                    double coeff = saved_obj_coefficients[t].Get(row);
                     if (std::abs(coeff) < 1e-15) continue;
                     idx_t var_idx = var_indexer.Get(var, row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
-                idx_t y_idx = first_y_idx + row;
+                idx_t y_idx = first_y_idx + a;
                 if (is_min_agg) {
                     rc.indices.push_back((int)y_idx);
                     rc.coefficients.push_back(-M);
@@ -3909,8 +3996,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
 
             SolverInput::RawConstraint sum_y;
-            for (idx_t row = 0; row < num_rows; row++) {
-                sum_y.indices.push_back((int)(first_y_idx + row));
+            for (idx_t a = 0; a < active_rows.size(); a++) {
+                sum_y.indices.push_back((int)(first_y_idx + a));
                 sum_y.coefficients.push_back(1.0);
             }
             sum_y.sense = '>';
@@ -4318,7 +4405,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
         for (auto &p : obj_coef_accum) {
             solver_input.objective_variable_indices.push_back(p.first);
-            solver_input.objective_coefficients.push_back(std::move(p.second));
+            solver_input.objective_coefficients.push_back(CoefficientColumn::FromVector(std::move(p.second)));
         }
     }
 

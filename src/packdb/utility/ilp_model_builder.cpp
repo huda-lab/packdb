@@ -82,6 +82,40 @@ VarIndexer VarIndexer::BuildRef(const SolverInput &input) {
     return idx;
 }
 
+void BuildGroupCSR(const vector<idx_t> &row_group_ids,
+                   idx_t num_groups,
+                   vector<idx_t> &offsets,
+                   vector<idx_t> &flat_rows) {
+    if (row_group_ids.empty() || num_groups == 0) {
+        offsets.clear();
+        flat_rows.clear();
+        return;
+    }
+    if (!offsets.empty()) {
+        // Already built; reuse.
+        return;
+    }
+    offsets.assign(num_groups + 1, 0);
+    // First pass: count rows per group
+    for (idx_t r = 0; r < row_group_ids.size(); r++) {
+        idx_t gid = row_group_ids[r];
+        if (gid == DConstants::INVALID_INDEX) continue;
+        offsets[gid + 1]++;
+    }
+    // Prefix sum
+    for (idx_t g = 0; g < num_groups; g++) {
+        offsets[g + 1] += offsets[g];
+    }
+    // Second pass: scatter rows into their group bucket using a tmp cursor
+    flat_rows.assign(offsets[num_groups], 0);
+    vector<idx_t> cursor = offsets;
+    for (idx_t r = 0; r < row_group_ids.size(); r++) {
+        idx_t gid = row_group_ids[r];
+        if (gid == DConstants::INVALID_INDEX) continue;
+        flat_rows[cursor[gid]++] = r;
+    }
+}
+
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     SolverModel model;
 
@@ -189,13 +223,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 continue;
             }
 
+            if (term_idx >= input.objective_coefficients.size()) {
+                continue;
+            }
+            auto &col = input.objective_coefficients[term_idx];
             for (idx_t row = 0; row < num_rows; row++) {
+                if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
-                if (term_idx < input.objective_coefficients.size() &&
-                    row < input.objective_coefficients[term_idx].size()) {
-                    // Use += because entity-scoped vars: multiple rows map to same solver var
-                    model.obj_coeffs[var_idx] += input.objective_coefficients[term_idx][row];
-                }
+                // Use += because entity-scoped vars: multiple rows map to same solver var
+                model.obj_coeffs[var_idx] += col.Get(row);
             }
         }
     }
@@ -234,11 +270,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
                 for (idx_t t = 0; t < num_q_terms; t++) {
                     if (t >= input.quadratic_inner_coefficients.size() ||
-                        row >= input.quadratic_inner_coefficients[t].size()) {
+                        row >= input.quadratic_inner_coefficients[t].Size()) {
                         continue;
                     }
                     idx_t decide_var_idx = input.quadratic_inner_variable_indices[t];
-                    double a = input.quadratic_inner_coefficients[t][row];
+                    double a = input.quadratic_inner_coefficients[t].Get(row);
                     if (a == 0.0) continue;
 
                     if (decide_var_idx == DConstants::INVALID_INDEX) {
@@ -268,9 +304,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 double c_row = 0.0;
                 for (idx_t t = 0; t < num_q_terms; t++) {
                     if (t < input.quadratic_inner_coefficients.size() &&
-                        row < input.quadratic_inner_coefficients[t].size() &&
+                        row < input.quadratic_inner_coefficients[t].Size() &&
                         input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
-                        c_row += input.quadratic_inner_coefficients[t][row];
+                        c_row += input.quadratic_inner_coefficients[t].Get(row);
                     }
                 }
                 if (c_row != 0.0) {
@@ -337,30 +373,24 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     auto IsRealType = [](const LogicalType &t) {
         return t == LogicalType::DOUBLE || t == LogicalType::FLOAT;
     };
-    auto AllCoeffsIntegral = [](const vector<double> &coeffs) {
-        for (double c : coeffs) {
-            if (std::floor(c) != c) return false;
-        }
-        return true;
-    };
     auto IsEvalConstraintLhsIntegerValued = [&](const EvaluatedConstraint &ec) -> bool {
         for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
             idx_t vi = ec.variable_indices[i];
             if (vi == DConstants::INVALID_INDEX) continue;
             if (IsRealType(input.variable_types[vi])) return false;
-            if (!AllCoeffsIntegral(ec.row_coefficients[i])) return false;
+            if (!ec.row_coefficients[i].AllIntegral()) return false;
         }
         for (const auto &bt : ec.bilinear_terms) {
             if (IsRealType(input.variable_types[bt.var_a])) return false;
             if (IsRealType(input.variable_types[bt.var_b])) return false;
-            if (!AllCoeffsIntegral(bt.row_coefficients)) return false;
+            if (!bt.row_coefficients.AllIntegral()) return false;
         }
         for (const auto &qg : ec.quadratic_groups) {
             for (idx_t i = 0; i < qg.variable_indices.size(); i++) {
                 idx_t vi = qg.variable_indices[i];
                 if (vi == DConstants::INVALID_INDEX) continue;
                 if (IsRealType(input.variable_types[vi])) return false;
-                if (!AllCoeffsIntegral(qg.row_coefficients[i])) return false;
+                if (!qg.row_coefficients[i].AllIntegral()) return false;
             }
         }
         return true;
@@ -530,39 +560,39 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                 }
 
-                double rhs = eval_const.rhs_values[0];
-                for (idx_t r = 1; r < eval_const.rhs_values.size(); r++) {
-                    if (eval_const.rhs_values[r] != rhs) {
-                        throw InvalidInputException(
-                            "Aggregate constraint (SUM/AVG) requires a scalar right-hand side, "
-                            "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
-                            "This can happen with correlated subqueries. "
-                            "For per-row bounds, use a per-row constraint (e.g., x <= column) instead.",
-                            rhs, r, eval_const.rhs_values[r]);
+                double rhs = eval_const.rhs_values.Get(0);
+                if (!eval_const.rhs_values.IsUniform()) {
+                    for (idx_t r = 1; r < eval_const.rhs_values.Size(); r++) {
+                        if (eval_const.rhs_values.Get(r) != rhs) {
+                            throw InvalidInputException(
+                                "Aggregate constraint (SUM/AVG) requires a scalar right-hand side, "
+                                "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
+                                "This can happen with correlated subqueries. "
+                                "For per-row bounds, use a per-row constraint (e.g., x <= column) instead.",
+                                rhs, r, eval_const.rhs_values.Get(r));
+                        }
                     }
                 }
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
-                // UNIFIED PATH: WHEN and/or PER — build group→rows index, emit one constraint per group
-                vector<vector<idx_t>> group_rows(eval_const.num_groups);
-                for (idx_t row = 0; row < num_rows; row++) {
-                    idx_t gid = eval_const.row_group_ids[row];
-                    if (gid == DConstants::INVALID_INDEX) {
-                        continue;
-                    }
-                    group_rows[gid].push_back(row);
-                }
+                // UNIFIED PATH: WHEN and/or PER — build group→rows CSR once, emit one constraint per group
+                BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
+                              eval_const.group_offsets, eval_const.group_row_ids);
+                auto &offsets = eval_const.group_offsets;
+                auto &flat_rows = eval_const.group_row_ids;
 
-                double rhs = eval_const.rhs_values[0];
-                for (idx_t r = 1; r < eval_const.rhs_values.size(); r++) {
-                    if (eval_const.rhs_values[r] != rhs) {
-                        throw InvalidInputException(
-                            "Aggregate PER constraint requires a scalar right-hand side, "
-                            "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
-                            "This can happen with correlated subqueries.",
-                            rhs, r, eval_const.rhs_values[r]);
+                double rhs = eval_const.rhs_values.Get(0);
+                if (!eval_const.rhs_values.IsUniform()) {
+                    for (idx_t r = 1; r < eval_const.rhs_values.Size(); r++) {
+                        if (eval_const.rhs_values.Get(r) != rhs) {
+                            throw InvalidInputException(
+                                "Aggregate PER constraint requires a scalar right-hand side, "
+                                "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
+                                "This can happen with correlated subqueries.",
+                                rhs, r, eval_const.rhs_values.Get(r));
+                        }
                     }
                 }
 
@@ -586,9 +616,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
 
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
-                    if (group_rows[g].empty()) {
+                    idx_t g_begin = offsets[g];
+                    idx_t g_end = offsets[g + 1];
+                    if (g_begin == g_end) {
                         continue;
                     }
+                    idx_t g_size = g_end - g_begin;
                     ModelConstraint constr;
 
                     if (row_scoped_fast) {
@@ -596,13 +629,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         for (auto v : eval_const.variable_indices) {
                             if (v != DConstants::INVALID_INDEX) active_terms++;
                         }
-                        constr.indices.reserve(active_terms * group_rows[g].size());
-                        constr.coefficients.reserve(active_terms * group_rows[g].size());
+                        constr.indices.reserve(active_terms * g_size);
+                        constr.coefficients.reserve(active_terms * g_size);
                         for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                             if (decide_var_idx == DConstants::INVALID_INDEX) continue;
                             auto &col = eval_const.row_coefficients[term_idx];
-                            for (idx_t row : group_rows[g]) {
+                            for (idx_t k = g_begin; k < g_end; k++) {
+                                idx_t row = flat_rows[k];
                                 double coeff = col[row];
                                 if (coeff == 0.0) continue;
                                 int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
@@ -614,8 +648,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                             if (decide_var_idx == DConstants::INVALID_INDEX) continue;
-                            for (idx_t row : group_rows[g]) {
-                                double coeff = eval_const.row_coefficients[term_idx][row];
+                            auto &col = eval_const.row_coefficients[term_idx];
+                            for (idx_t k = g_begin; k < g_end; k++) {
+                                idx_t row = flat_rows[k];
+                                double coeff = col.Get(row);
                                 int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
                                 accum.Add(var_idx, coeff);
                             }
@@ -729,10 +765,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 double c_row = 0.0;  // Constant term contribution for this row
 
                 for (idx_t t = 0; t < num_q_terms; t++) {
-                    if (t >= qg.row_coefficients.size() || row >= qg.row_coefficients[t].size()) {
+                    if (t >= qg.row_coefficients.size() || row >= qg.row_coefficients[t].Size()) {
                         continue;
                     }
-                    double a = qg.row_coefficients[t][row];
+                    double a = qg.row_coefficients[t].Get(row);
                     if (a == 0.0) continue;
                     idx_t decide_var_idx = qg.variable_indices[t];
                     if (decide_var_idx == DConstants::INVALID_INDEX) {
@@ -827,7 +863,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
 
         if (is_aggregate) {
-            double rhs = eval_const.rhs_values.empty() ? 0.0 : eval_const.rhs_values[0];
+            double rhs = eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(0);
 
             if (!has_groups) {
                 // Single aggregate: all rows
@@ -836,20 +872,21 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 model.quadratic_constraints.push_back(
                     BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer));
             } else {
-                // PER groups: one QuadraticConstraint per group
-                vector<vector<idx_t>> group_rows(eval_const.num_groups);
-                for (idx_t row = 0; row < num_rows; row++) {
-                    idx_t gid = eval_const.row_group_ids[row];
-                    if (gid != DConstants::INVALID_INDEX) {
-                        group_rows[gid].push_back(row);
-                    }
-                }
+                // PER groups: one QuadraticConstraint per group, reuse CSR
+                BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
+                              eval_const.group_offsets, eval_const.group_row_ids);
+                auto &offsets = eval_const.group_offsets;
+                auto &flat_rows = eval_const.group_row_ids;
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
-                    if (group_rows[g].empty()) {
+                    idx_t g_begin = offsets[g];
+                    idx_t g_end = offsets[g + 1];
+                    if (g_begin == g_end) {
                         continue;
                     }
+                    vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin,
+                                                   flat_rows.begin() + g_end);
                     model.quadratic_constraints.push_back(
-                        BuildQuadraticConstraint(eval_const, group_rows[g], rhs, lhs_is_integer));
+                        BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer));
                 }
             }
         } else {
@@ -859,7 +896,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     continue;
                 }
                 vector<idx_t> single_row = {row};
-                double rhs = eval_const.rhs_values[row];
+                double rhs = eval_const.rhs_values.Get(row);
                 model.quadratic_constraints.push_back(
                     BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_is_integer));
             }
