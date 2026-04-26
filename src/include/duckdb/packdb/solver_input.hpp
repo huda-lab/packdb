@@ -16,6 +16,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/planner/expression.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace duckdb {
@@ -38,10 +39,19 @@ namespace duckdb {
 //!   - When `kind == Dense`, `dense_values.size() == logical_size`.
 //!   - `Empty()` (logical_size == 0) is reserved for not-yet-initialized columns.
 struct CoefficientColumn {
-    enum class Kind : uint8_t { Scalar, Dense };
+    //! SparseMasked stores a uniform value at a sorted set of row indices, with
+    //! every other row implicitly 0. Built for the NE per-row indicator path:
+    //! every active row gets `-M`, every excluded row gets 0, so a single
+    //! `sparse_value` plus a sorted `sparse_indices` list captures the column
+    //! at ~10% the memory of Dense when the active rate is ~10%. Mutators all
+    //! route through `EnsureDense()` so any in-place edit promotes back to
+    //! Dense — sparse storage is read-only by design.
+    enum class Kind : uint8_t { Scalar, Dense, SparseMasked };
     Kind kind = Kind::Dense;
     double scalar_value = 0.0;
     vector<double> dense_values;
+    vector<idx_t> sparse_indices;     // sorted ascending; SparseMasked only
+    double sparse_value = 0.0;        // value at every entry in sparse_indices
     idx_t logical_size = 0;
 
     CoefficientColumn() = default;
@@ -67,21 +77,54 @@ struct CoefficientColumn {
         c.dense_values = std::move(v);
         return c;
     }
+    //! Build a column whose only nonzero entries are the rows in `sorted_indices`,
+    //! each holding `value`. `sorted_indices` must be strictly ascending and within
+    //! [0, logical_size). Other rows return 0 from `Get`.
+    static CoefficientColumn MakeSparseMasked(idx_t logical_size,
+                                              vector<idx_t> &&sorted_indices,
+                                              double value) {
+        CoefficientColumn c;
+        c.kind = Kind::SparseMasked;
+        c.sparse_indices = std::move(sorted_indices);
+        c.sparse_value = value;
+        c.logical_size = logical_size;
+        return c;
+    }
 
     inline double Get(idx_t row) const {
-        return kind == Kind::Scalar ? scalar_value : dense_values[row];
+        switch (kind) {
+        case Kind::Scalar:
+            return scalar_value;
+        case Kind::Dense:
+            return dense_values[row];
+        case Kind::SparseMasked: {
+            auto it = std::lower_bound(sparse_indices.begin(), sparse_indices.end(), row);
+            return (it != sparse_indices.end() && *it == row) ? sparse_value : 0.0;
+        }
+        }
+        return 0.0;
     }
     inline double operator[](idx_t row) const { return Get(row); }
     idx_t Size() const { return logical_size; }
     bool Empty() const { return logical_size == 0; }
     bool IsUniform() const { return kind == Kind::Scalar; }
     double UniformValue() const { return scalar_value; }
+    bool IsSparseMasked() const { return kind == Kind::SparseMasked; }
 
-    //! Force Dense storage (allocates if currently Scalar).
+    //! Force Dense storage (allocates if currently Scalar or SparseMasked).
     //! After this, dense_values.size() == logical_size.
     void EnsureDense() {
         if (kind == Kind::Scalar) {
             dense_values.assign(logical_size, scalar_value);
+            kind = Kind::Dense;
+        } else if (kind == Kind::SparseMasked) {
+            vector<double> dense(logical_size, 0.0);
+            for (idx_t r : sparse_indices) {
+                dense[r] = sparse_value;
+            }
+            dense_values = std::move(dense);
+            vector<idx_t>().swap(sparse_indices);
+            sparse_value = 0.0;
             kind = Kind::Dense;
         }
     }
@@ -102,14 +145,18 @@ struct CoefficientColumn {
         kind = Kind::Scalar;
         scalar_value = v;
         logical_size = n;
-        // Drop any prior dense allocation
+        // Drop any prior dense or sparse allocation
         vector<double>().swap(dense_values);
+        vector<idx_t>().swap(sparse_indices);
+        sparse_value = 0.0;
     }
     //! Bulk replace with a dense column, all entries = init.
     void AssignDense(idx_t n, double init = 0.0) {
         kind = Kind::Dense;
         dense_values.assign(n, init);
         logical_size = n;
+        vector<idx_t>().swap(sparse_indices);
+        sparse_value = 0.0;
     }
     //! Reserve dense capacity for upcoming PushBack-style fills.
     void Reserve(idx_t n) {
@@ -140,10 +187,13 @@ struct CoefficientColumn {
         logical_size = dense_values.size();
     }
     //! For helpers that need to know whether all values are integral.
-    //! Scalar: O(1). Dense: O(n).
+    //! Scalar: O(1). Dense: O(n). SparseMasked: O(1) (uniform sparse_value).
     bool AllIntegral() const {
         if (kind == Kind::Scalar) {
             return std::floor(scalar_value) == scalar_value;
+        }
+        if (kind == Kind::SparseMasked) {
+            return std::floor(sparse_value) == sparse_value;
         }
         for (double c : dense_values) {
             if (std::floor(c) != c) return false;

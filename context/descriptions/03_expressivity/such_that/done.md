@@ -38,6 +38,8 @@ SUCH THAT
 
 **`<>` (not-equal) also requires an integer-valued LHS.** `LHS <> K` is rewritten into the Big-M disjunction `LHS <= K-1  OR  LHS >= K+1`, which only spans the full feasible region when `LHS` can take integer values. On a REAL variable or with a non-integer coefficient the band `(K-1, K+1)` is continuous and wrongly excluded. PackDB raises `InvalidInputException` in the same cases as strict `<` / `>`; use a reformulation such as adding an ε-band with `<=` / `>=` if the application can tolerate a small gap. Enforced at the NE expansion site in `src/execution/operator/decide/physical_decide.cpp` (covers both per-row and deferred aggregate NE paths).
 
+**Per-row NE indicator column storage.** When a per-row `<>` constraint is filtered by `WHEN` or grouped by `PER`, the disjunction's indicator column carries `-M` only on rows that pass the filter and `0` everywhere else — typically a small fraction of `num_rows`. The column is stored as `CoefficientColumn::SparseMasked` (a sorted list of active row indices plus a single shared value), not as a Dense `vector<double>` of mostly-zero entries. The unfiltered case stays a `Scalar` broadcast of `-M`. Defined in `src/include/duckdb/packdb/solver_input.hpp`; read paths in `src/packdb/utility/ilp_model_builder.cpp` go through `Get(row)` and observe the same zero-skip semantics as Dense.
+
 ### BETWEEN
 
 `expr BETWEEN a AND b` desugars to `expr >= a AND expr <= b`. Both bounds become separate constraints.

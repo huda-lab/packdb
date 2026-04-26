@@ -3173,18 +3173,24 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     idx_t indicator_var_idx = ec.ne_indicator_idx;
 
                     // Build indicator coefficient column. If no WHEN/PER filter, every
-                    // row gets -M (broadcast scalar). Otherwise, build a dense column
-                    // with 0 on excluded rows.
+                    // row gets -M (broadcast scalar). Otherwise, only the active rows
+                    // hold -M and the rest are 0 — store as SparseMasked instead of
+                    // Dense to skip the per-excluded-row 0 allocation. ec.row_group_ids
+                    // is iterated in row order, so the resulting sparse_indices list is
+                    // already sorted ascending (the SparseMasked invariant).
                     CoefficientColumn indicator_coeffs;
                     if (ec.row_group_ids.empty()) {
                         indicator_coeffs = CoefficientColumn::MakeScalar(-M, num_rows);
                     } else {
-                        indicator_coeffs = CoefficientColumn::MakeDense(num_rows, 0.0);
+                        vector<idx_t> active_indices;
+                        active_indices.reserve(num_rows / 8);
                         for (idx_t r = 0; r < num_rows; r++) {
                             if (ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
-                                indicator_coeffs.Set(r, -M);
+                                active_indices.push_back(r);
                             }
                         }
+                        indicator_coeffs = CoefficientColumn::MakeSparseMasked(
+                            num_rows, std::move(active_indices), -M);
                     }
 
                     auto BuildShiftedRhs = [&](double shift) {
