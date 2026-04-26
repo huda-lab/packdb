@@ -106,39 +106,17 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
     }
 
     //===--------------------------------------------------------------------===//
-    // 3. Add constraints (single bulk call when GRBaddconstrs is available;
-    //    otherwise per-row fallback over the same CSR storage).
+    // 3. Add constraints
     //===--------------------------------------------------------------------===//
 
-    idx_t num_constraints = ilp.NumConstraints();
-    if (num_constraints > 0) {
-        if (api.addconstrs) {
-            error = api.addconstrs(guard.model,
-                                   (int)num_constraints,
-                                   (int)ilp.col_index.size(),
-                                   const_cast<int *>(ilp.row_start.data()),
-                                   const_cast<int *>(ilp.col_index.data()),
-                                   const_cast<double *>(ilp.value.data()),
-                                   const_cast<char *>(ilp.sense.data()),
-                                   const_cast<double *>(ilp.rhs.data()),
-                                   nullptr);
-            if (error) {
-                throw InternalException("Failed to add constraints to Gurobi: %s",
-                                        api.geterrormsg(guard.env));
-            }
-        } else {
-            for (idx_t i = 0; i < num_constraints; i++) {
-                int beg = ilp.row_start[i];
-                int nnz = ilp.row_start[i + 1] - beg;
-                error = api.addconstr(guard.model, nnz,
-                                      const_cast<int *>(ilp.col_index.data() + beg),
-                                      const_cast<double *>(ilp.value.data() + beg),
-                                      ilp.sense[i], ilp.rhs[i], nullptr);
-                if (error) {
-                    throw InternalException("Failed to add constraint to Gurobi: %s",
-                                            api.geterrormsg(guard.env));
-                }
-            }
+    for (auto &constr : ilp.constraints) {
+        error = api.addconstr(guard.model, (int)constr.indices.size(),
+                             const_cast<int *>(constr.indices.data()),
+                             const_cast<double *>(constr.coefficients.data()),
+                             constr.sense, constr.rhs, nullptr);
+        if (error) {
+            throw InternalException("Failed to add constraint to Gurobi: %s",
+                                    api.geterrormsg(guard.env));
         }
     }
 

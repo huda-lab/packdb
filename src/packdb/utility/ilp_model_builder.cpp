@@ -8,17 +8,6 @@
 
 namespace duckdb {
 
-namespace {
-// Builder-local scratch type. The final SolverModel stores constraints in CSR
-// form; this struct is just a per-row staging buffer used inside Build().
-struct ModelConstraint {
-    vector<int> indices;
-    vector<double> coefficients;
-    char sense;
-    double rhs;
-};
-} // namespace
-
 // Shared logic for Build and BuildRef — populates all fields except entity data source
 static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
                                    const vector<EntityMapping> &entity_mappings) {
@@ -436,24 +425,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     };
 
-    // CSR invariant: row_start always starts with 0; each successful push
-    // appends the post-row sentinel.
-    model.row_start.push_back(0);
-
     // Drop constraints whose LHS reduced to 0 (all coefficients cancelled or
     // all variables absorbed into column bounds). A tautology is skipped; a
     // violated constant constraint is rejected early so the solver doesn't
-    // have to diagnose it. Successful pushes flatten the scratch ModelConstraint
-    // into the model's CSR storage.
+    // have to diagnose it.
     auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
         if (!constr.indices.empty()) {
-            for (size_t k = 0; k < constr.indices.size(); k++) {
-                model.col_index.push_back(constr.indices[k]);
-                model.value.push_back(constr.coefficients[k]);
-            }
-            model.sense.push_back(constr.sense);
-            model.rhs.push_back(constr.rhs);
-            model.row_start.push_back(static_cast<int>(model.col_index.size()));
+            model.constraints.push_back(std::move(constr));
             return;
         }
         constexpr double EPS = 1e-9;
@@ -474,10 +452,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
     };
 
-    // Rough upper-bound on total constraint rows to avoid repeated vector
-    // reallocation — aggregate w/o groups contributes 1, aggregate w/ groups
-    // contributes num_groups, per-row contributes num_rows. Plus any raw global
-    // constraints appended after the main loop.
+    // Rough upper-bound on total model.constraints rows to avoid repeated
+    // vector reallocation — aggregate w/o groups contributes 1, aggregate w/
+    // groups contributes num_groups, per-row contributes num_rows. Plus any
+    // raw global constraints appended after the main loop.
     {
         idx_t est_rows = input.global_constraints.size();
         for (auto &ec : input.constraints) {
@@ -489,10 +467,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 est_rows += num_rows;
             }
         }
-        idx_t cur_rows = model.NumConstraints();
-        model.row_start.reserve(cur_rows + est_rows + 1);
-        model.sense.reserve(cur_rows + est_rows);
-        model.rhs.reserve(cur_rows + est_rows);
+        model.constraints.reserve(model.constraints.size() + est_rows);
     }
 
     for (auto &eval_const : input.constraints) {
@@ -941,38 +916,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
 
     // Append raw global constraints (for MIN/MAX objective linking, etc.).
-    // Stream the moved indices/coefficients straight into CSR — SolveModel() in
-    // ilp_solver.cpp does not read input.global_constraints after this call.
+    // Move the index/coefficient vectors out of `input` to avoid deep copies —
+    // SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
     for (auto &raw : input.global_constraints) {
-        if (raw.indices.empty()) {
-            // Apply the same tautology / infeasibility handling as
-            // PushNormalizedConstraint to preserve semantics.
-            constexpr double EPS = 1e-9;
-            bool violated = false;
-            if (raw.sense == '<') {
-                violated = raw.rhs < -EPS;
-            } else if (raw.sense == '>') {
-                violated = raw.rhs > EPS;
-            } else {
-                violated = std::abs(raw.rhs) > EPS;
-            }
-            if (violated) {
-                throw InvalidInputException(
-                    "DECIDE optimization is infeasible: a global constraint reduces to "
-                    "0 %c %g.",
-                    raw.sense, raw.rhs);
-            }
-            continue;
-        }
-        auto moved_indices = std::move(raw.indices);
-        auto moved_coeffs = std::move(raw.coefficients);
-        for (size_t k = 0; k < moved_indices.size(); k++) {
-            model.col_index.push_back(moved_indices[k]);
-            model.value.push_back(moved_coeffs[k]);
-        }
-        model.sense.push_back(raw.sense);
-        model.rhs.push_back(raw.rhs);
-        model.row_start.push_back(static_cast<int>(model.col_index.size()));
+        ModelConstraint constr;
+        constr.indices = std::move(raw.indices);
+        constr.coefficients = std::move(raw.coefficients);
+        constr.sense = raw.sense;
+        constr.rhs = raw.rhs;
+        model.constraints.push_back(std::move(constr));
     }
 
     //===--------------------------------------------------------------------===//
@@ -996,34 +948,22 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
-    if (model.col_index.size() != model.value.size()) {
-        throw InternalException("CSR col_index/value size mismatch (%llu vs %llu)",
-                                (idx_t)model.col_index.size(), (idx_t)model.value.size());
-    }
-    if (model.row_start.size() != model.NumConstraints() + 1) {
-        throw InternalException("CSR row_start size %llu != num_constraints+1 %llu",
-                                (idx_t)model.row_start.size(),
-                                (idx_t)(model.NumConstraints() + 1));
-    }
-    if (!model.row_start.empty() &&
-        (idx_t)model.row_start.back() != model.col_index.size()) {
-        throw InternalException("CSR row_start sentinel %d != col_index size %llu",
-                                model.row_start.back(), (idx_t)model.col_index.size());
-    }
-    for (idx_t c = 0; c < model.NumConstraints(); c++) {
-        int beg = model.row_start[c];
-        int end = model.row_start[c + 1];
-        for (int k = beg; k < end; k++) {
-            if ((idx_t)model.col_index[k] >= total_vars) {
+    for (idx_t c = 0; c < model.constraints.size(); c++) {
+        auto &constr = model.constraints[c];
+        if (constr.indices.size() != constr.coefficients.size()) {
+            throw InternalException("Constraint %llu: indices/coefficients size mismatch", c);
+        }
+        for (idx_t j = 0; j < constr.indices.size(); j++) {
+            if ((idx_t)constr.indices[j] >= total_vars) {
                 throw InternalException("Constraint %llu: variable index %d out of range (>= %llu)",
-                                        c, model.col_index[k], total_vars);
+                                        c, constr.indices[j], total_vars);
             }
-            if (!std::isfinite(model.value[k])) {
-                throw InternalException("Constraint %llu: coefficient not finite at position %d: %f",
-                                        c, k - beg, model.value[k]);
+            if (!std::isfinite(constr.coefficients[j])) {
+                throw InternalException("Constraint %llu: coefficient not finite at position %llu: %f",
+                                        c, j, constr.coefficients[j]);
             }
         }
-        if (!std::isfinite(model.rhs[c]) && !std::isinf(model.rhs[c])) {
+        if (!std::isfinite(constr.rhs) && !std::isinf(constr.rhs)) {
             throw InternalException("Constraint %llu: RHS is NaN", c);
         }
     }

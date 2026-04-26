@@ -58,12 +58,6 @@ struct GurobiAPI {
 	int (*setintattr)(void *model, const char *attrname, int newvalue);
 	int (*addconstr)(void *model, int numnz, int *cind, double *cval,
 	                 char sense, double rhs, const char *constrname);
-	//! Optional bulk variant of addconstr (Gurobi 6+). When present, the entire
-	//! linear constraint matrix can be passed in a single C-API call from the
-	//! SolverModel CSR storage. Falls back to per-row addconstr when null.
-	int (*addconstrs)(void *model, int numconstrs, int numnz,
-	                  int *cbeg, int *cind, double *cval,
-	                  char *sense, double *rhs, char **constrnames);
 	int (*addqpterms)(void *model, int numqnz, int *qrow, int *qcol, double *qval);
 	int (*addqconstr)(void *model, int numlnz, int *lind, double *lval,
 	                  int numqnz, int *qrow, int *qcol, double *qval,

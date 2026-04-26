@@ -159,10 +159,6 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	api.addqconstr = reinterpret_cast<decltype(api.addqconstr)>(dlsym(handle, "GRBaddqconstr"));
 	// Not required — bilinear constraints will error if this is missing and needed
 
-	// Optional: GRBaddconstrs (bulk linear constraint add). Available in all
-	// modern Gurobi releases; if absent we fall back to per-row addconstr.
-	api.addconstrs = reinterpret_cast<decltype(api.addconstrs)>(dlsym(handle, "GRBaddconstrs"));
-
 	return true;
 }
 
