@@ -27,9 +27,8 @@ Block 3: Global auxiliary variables    [block2_end, block2_end + num_aux_globals
 
 **Block 3 (Global auxiliaries)**: Auxiliary variables that exist once globally (ABS linearization auxiliaries, MIN/MAX auxiliary variables). These receive `INVALID_INDEX` as their scope marker during optimizer processing, signaling row-scoped treatment.
 
-The `VarIndexer` provides three key methods:
+The `VarIndexer` provides two key methods:
 - **`VarIndexer::Get(var_idx, row)`**: Returns the solver variable index for a given DECIDE variable and row. For row-scoped variables, this computes `row * num_row_vars + offset`. For entity-scoped variables, this looks up `row_to_entity[row]` and returns `entity_var_base[var_idx] + entity_id`.
-- **`VarIndexer::Resolver(var_idx)`**: Returns a `VarResolver` value that captures the dispatch decisions and pointers for one variable, so a tight inner loop calling `resolver.Get(row)` per row pays one branch + array-index (entity) or one multiply-add (row-scoped) — no per-call vector lookups or pointer chasing. Built once per term outside the row loop; used at every coefficient-emission site in `ilp_model_builder.cpp` and the solution readback in `physical_decide.cpp::GetData`.
 - **`VarIndexer::NumInstances(var_idx)`**: Returns the number of solver variable instances for a given DECIDE variable — `num_rows` for row-scoped, `num_entities` for entity-scoped.
 
 The indexer is constructed via two static methods:
