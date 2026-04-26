@@ -104,6 +104,8 @@ MINIMIZE MAX(AVG(x * hours)) PER empID          -- minimize worst per-employee a
 
 The formulation uses two levels of auxiliary variables: inner (per-group) and outer (across-group), each with easy/hard classification. See [../maximize_minimize/done.md](../maximize_minimize/done.md) for the full formulation details.
 
+**Zero-coefficient row pre-filter (PATH B inner MIN/MAX, both easy and hard)**: A row whose every term coefficient is zero contributes a vacuous `z_g op 0` linking row in the easy branch and an unnecessary indicator binary plus Big-M row in the hard branch. The inner formulation now builds a per-group active-rows CSR (mirroring PATH A's flat pre-filter) and emits constraints only for rows that have at least one nonzero coefficient. For groups with no active rows, `z_g`'s bounds are pinned to `[0, 0]` directly — that preserves the original semantics, where the elided constraints combined with the outer optimization direction would have settled `z_g` at `0`. Outer-easy `MIN/MAX` over inner-`SUM` group sums applies the analogous group-level skip: groups with all-zero contribution don't emit a `w op 0` row, and if every group is identically zero, `w` is pinned to `0` directly.
+
 ---
 
 ## Restrictions

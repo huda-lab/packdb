@@ -3759,11 +3759,51 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 saved_term_resolvers[t] = var_indexer.Resolver(saved_obj_var_indices[t]);
             }
 
+            // Build a per-group active-rows CSR: drop rows whose every term coefficient
+            // is zero. Mirrors PATH A's active_rows pre-filter (lines below). Without it
+            // the easy path emits vacuous z_g op 0 rows and the hard path allocates an
+            // indicator binary plus a Big-M row for each, then references them in the
+            // sum_y >= 1 constraint — all wasted on rows that contribute nothing.
+            vector<idx_t> active_offsets(K + 1, 0);
+            vector<idx_t> active_flat_rows;
+            active_flat_rows.reserve(obj_flat_rows.size());
+            for (idx_t g = 0; g < K; g++) {
+                active_offsets[g] = active_flat_rows.size();
+                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                    idx_t row = obj_flat_rows[k];
+                    bool has_nonzero = false;
+                    for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                        if (std::abs(saved_obj_coefficients[t][row]) >= 1e-15) {
+                            has_nonzero = true;
+                            break;
+                        }
+                    }
+                    if (has_nonzero) active_flat_rows.push_back(row);
+                }
+            }
+            active_offsets[K] = active_flat_rows.size();
+
+            // For groups with no active rows, the original code emitted vacuous
+            // z_g op 0 rows that — combined with the outer optimization direction —
+            // implicitly pinned z_g at 0. Skipping those rows lets z_g float free,
+            // so we instead pin z_g's bounds directly. Captured as a lambda so both
+            // easy and hard branches use identical pinning logic.
+            auto PinZGroupToZero = [&](idx_t g) {
+                idx_t z_local = group_value_indices[g] - var_indexer.global_block_start;
+                solver_input.global_lower_bounds[z_local] = 0.0;
+                solver_input.global_upper_bounds[z_local] = 0.0;
+            };
+
             if (inner_easy) {
                 // Easy: z_g >= expr_r (for MAX) or z_g <= expr_r (for MIN)
                 char sense_char = inner_is_min ? '<' : '>';
                 for (idx_t g = 0; g < K; g++) {
-                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) { idx_t row = obj_flat_rows[k];
+                    if (active_offsets[g] == active_offsets[g + 1]) {
+                        PinZGroupToZero(g);
+                        continue;
+                    }
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
+                        idx_t row = active_flat_rows[k];
                         SolverInput::RawConstraint rc;
                         rc.sense = sense_char;
                         rc.rhs = 0.0;
@@ -3780,12 +3820,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
             } else {
-                // Hard: per-row indicators per group. Allocate only for ACTIVE rows
-                // (rows that appear in some non-empty group). The CSR's flat_rows
-                // already enumerates exactly those rows in group order — use its
-                // position as the active index to keep the mapping cache-friendly.
+                // Hard: per-row indicators per group, allocated only for active rows.
                 idx_t first_y = z_base + K;
-                idx_t num_active = obj_flat_rows.size();
+                idx_t num_active = active_flat_rows.size();
                 solver_input.num_global_vars += num_active;
                 for (idx_t r = 0; r < num_active; r++) {
                     solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
@@ -3795,9 +3832,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
 
                 for (idx_t g = 0; g < K; g++) {
-                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-                        idx_t row = obj_flat_rows[k];
-                        idx_t active_idx = k; // position in flat_rows == active index
+                    if (active_offsets[g] == active_offsets[g + 1]) {
+                        PinZGroupToZero(g);
+                        continue;
+                    }
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
+                        idx_t row = active_flat_rows[k];
+                        idx_t active_idx = k; // position in active_flat_rows
                         SolverInput::RawConstraint rc;
                         rc.indices.push_back((int)group_value_indices[g]);
                         rc.coefficients.push_back(1.0);
@@ -3826,7 +3867,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                     // SUM(y) >= 1 per group
                     SolverInput::RawConstraint sum_y;
-                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
                         sum_y.indices.push_back((int)(first_y + k));
                         sum_y.coefficients.push_back(1.0);
                     }
@@ -3954,6 +3995,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // sum_g = Σ_{r ∈ group_g} Σ_t coeff_t_r * x_{r,var_t}
             if (outer_easy) {
                 char sense_char = outer_is_min ? '<' : '>';
+                bool any_group_emitted = false;
                 for (idx_t g = 0; g < K; g++) {
                     SolverInput::RawConstraint rc;
                     rc.sense = sense_char;
@@ -3972,7 +4014,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             rc.coefficients.push_back(-coeff);
                         }
                     }
+                    // Skip vacuous w op 0 rows: outer MIN/MAX of group sums settles
+                    // dominated zero-sum groups via the optimization direction itself.
+                    if (rc.indices.size() == 1) continue;
                     solver_input.global_constraints.push_back(std::move(rc));
+                    any_group_emitted = true;
+                }
+                if (!any_group_emitted) {
+                    // Every group is identically zero — pin w to 0 so outer
+                    // optimization doesn't push the otherwise-unconstrained w to ±∞.
+                    idx_t w_local = w_idx - var_indexer.global_block_start;
+                    solver_input.global_lower_bounds[w_local] = 0.0;
+                    solver_input.global_upper_bounds[w_local] = 0.0;
                 }
             } else {
                 // Hard outer: indicators over K groups
