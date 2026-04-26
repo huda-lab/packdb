@@ -90,6 +90,27 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 	}
 }
 
+//! Per-Finalize cache for TransformToChunkExpression. Keyed on input Expression
+//! pointer identity — addresses are stable for the duration of one Finalize, and
+//! `num_rows` is constant within Finalize so it's not part of the key. The cache
+//! owns lifetime; callers that pass the returned reference to ExpressionExecutor
+//! must keep the cache alive until the executor is no longer used.
+using ChunkExprCache = std::unordered_map<const Expression*, unique_ptr<Expression>>;
+
+static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
+                                                          const Expression &expr,
+                                                          ClientContext &context,
+                                                          idx_t num_rows = 0) {
+	auto it = cache.find(&expr);
+	if (it != cache.end()) {
+		return *it->second;
+	}
+	auto transformed = TransformToChunkExpression(expr, context, num_rows);
+	auto *raw = transformed.get();
+	cache.emplace(&expr, std::move(transformed));
+	return *raw;
+}
+
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
 //! Throws InvalidInputException on NULL or non-finite values, citing `err_context`.
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
@@ -133,30 +154,10 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 	}
 }
 
-//! Compare two key tuples for grouping equality. Two NULLs in the same column
-//! are treated as identical (entity grouping convention). PER call sites screen
-//! NULLs out before reaching equality, so the choice does not affect them.
-static bool KeyTuplesEqual(const vector<vector<Value>> &cols, idx_t row_a, idx_t row_b) {
-	for (idx_t c = 0; c < cols.size(); c++) {
-		auto &av = cols[c][row_a];
-		auto &bv = cols[c][row_b];
-		if (av.IsNull() != bv.IsNull()) {
-			return false;
-		}
-		if (av.IsNull()) {
-			continue;
-		}
-		if (!(av == bv)) {
-			return false;
-		}
-	}
-	return true;
-}
-
-//! Vectorized typed-hash grouping. Replaces the prior Value::ToString()-based
-//! composite-string keying in entity mapping and PER grouping. Hashes are
-//! computed per chunk via VectorOperations::Hash / CombineHash; collision
-//! fallback uses per-row Values stored as `key_columns`.
+//! Streaming typed-hash grouping. Assigns group IDs during the chunk scan
+//! instead of materializing all key Values up front. Representative key tuples
+//! are stored once per group (size O(num_groups)), not once per row, and only
+//! materialized on the (rare) hash-collision fallback path.
 //!
 //!   key_exprs       — pre-transformed expressions for chunk evaluation, one per key column
 //!   row_filter      — return true to include row in grouping (empty function = include all)
@@ -164,7 +165,7 @@ static bool KeyTuplesEqual(const vector<vector<Value>> &cols, idx_t row_a, idx_t
 //!                     false = NULL is part of the composite key (entity semantics)
 //!   out_row_to_group — sized num_rows; INVALID_INDEX for excluded rows, [0..K) otherwise
 //!   out_num_groups   — K, count of distinct groups in input order
-static void BuildGroupIds(const vector<unique_ptr<Expression>> &key_exprs,
+static void BuildGroupIds(const vector<const Expression *> &key_exprs,
                           ClientContext &context,
                           ColumnDataCollection &data,
                           idx_t num_rows,
@@ -184,17 +185,15 @@ static void BuildGroupIds(const vector<unique_ptr<Expression>> &key_exprs,
 	ExpressionExecutor key_executor(context);
 	vector<LogicalType> key_types;
 	key_types.reserve(num_key_cols);
-	for (auto &e : key_exprs) {
+	for (auto *e : key_exprs) {
 		key_executor.AddExpression(*e);
 		key_types.push_back(e->return_type);
 	}
 
-	vector<hash_t> row_hashes;
-	row_hashes.reserve(num_rows);
-	vector<vector<Value>> key_columns(num_key_cols);
-	for (idx_t c = 0; c < num_key_cols; c++) {
-		key_columns[c].reserve(num_rows);
-	}
+	// rep_keys[c][gid] — key values for the representative row of group `gid`.
+	// Size grows with num_groups, not num_rows.
+	vector<vector<Value>> rep_keys(num_key_cols);
+	std::unordered_multimap<hash_t, idx_t> hash_to_rep_group;
 
 	ColumnDataScanState scan;
 	data.InitializeScan(scan);
@@ -203,6 +202,9 @@ static void BuildGroupIds(const vector<unique_ptr<Expression>> &key_exprs,
 	DataChunk key_results;
 	key_results.Initialize(context, key_types);
 	Vector chunk_hashes(LogicalType::HASH);
+	vector<UnifiedVectorFormat> key_udatas(num_key_cols);
+	idx_t next_group = 0;
+	idx_t row_offset = 0;
 	while (data.Scan(scan, chunk)) {
 		idx_t count = chunk.size();
 		if (count == 0) {
@@ -216,59 +218,75 @@ static void BuildGroupIds(const vector<unique_ptr<Expression>> &key_exprs,
 			VectorOperations::CombineHash(chunk_hashes, key_results.data[c], count);
 		}
 		auto hashes_data = FlatVector::GetData<hash_t>(chunk_hashes);
-		for (idx_t i = 0; i < count; i++) {
-			row_hashes.push_back(hashes_data[i]);
-		}
 
-		// Capture Values for equality fallback. (Skips Value::ToString() entirely.)
+		// UnifiedVectorFormat lets us check NULLness without materializing a Value.
 		for (idx_t c = 0; c < num_key_cols; c++) {
-			auto &vec = key_results.data[c];
-			for (idx_t i = 0; i < count; i++) {
-				key_columns[c].push_back(vec.GetValue(i));
+			key_results.data[c].ToUnifiedFormat(count, key_udatas[c]);
+		}
+
+		for (idx_t i = 0; i < count; i++) {
+			idx_t row = row_offset + i;
+			if (row_filter && !row_filter(row)) {
+				continue;
 			}
-		}
-	}
-
-	if (row_hashes.size() != num_rows) {
-		throw InternalException(
-			"DECIDE BuildGroupIds: chunk scan produced %llu rows, expected %llu",
-			row_hashes.size(), num_rows);
-	}
-
-	std::unordered_multimap<hash_t, idx_t> hash_to_rep_row;
-	hash_to_rep_row.reserve(num_rows);
-	idx_t next_group = 0;
-	for (idx_t row = 0; row < num_rows; row++) {
-		if (row_filter && !row_filter(row)) {
-			continue;
-		}
-		if (null_excludes) {
-			bool has_null = false;
-			for (idx_t c = 0; c < num_key_cols; c++) {
-				if (key_columns[c][row].IsNull()) {
-					has_null = true;
+			if (null_excludes) {
+				bool has_null = false;
+				for (idx_t c = 0; c < num_key_cols; c++) {
+					const auto &u = key_udatas[c];
+					if (!u.validity.RowIsValid(u.sel->get_index(i))) {
+						has_null = true;
+						break;
+					}
+				}
+				if (has_null) {
+					continue;
+				}
+			}
+			hash_t h = hashes_data[i];
+			auto range = hash_to_rep_group.equal_range(h);
+			bool matched = false;
+			for (auto it = range.first; it != range.second; ++it) {
+				idx_t gid = it->second;
+				bool eq = true;
+				for (idx_t c = 0; c < num_key_cols; c++) {
+					Value v = key_results.data[c].GetValue(i);
+					const Value &rv = rep_keys[c][gid];
+					if (v.IsNull() != rv.IsNull()) {
+						eq = false;
+						break;
+					}
+					if (v.IsNull()) {
+						continue;
+					}
+					if (!(v == rv)) {
+						eq = false;
+						break;
+					}
+				}
+				if (eq) {
+					out_row_to_group[row] = gid;
+					matched = true;
 					break;
 				}
 			}
-			if (has_null) {
-				continue;
+			if (!matched) {
+				idx_t gid = next_group++;
+				for (idx_t c = 0; c < num_key_cols; c++) {
+					rep_keys[c].push_back(key_results.data[c].GetValue(i));
+				}
+				hash_to_rep_group.emplace(h, gid);
+				out_row_to_group[row] = gid;
 			}
 		}
-		hash_t h = row_hashes[row];
-		auto range = hash_to_rep_row.equal_range(h);
-		bool matched = false;
-		for (auto it = range.first; it != range.second; ++it) {
-			if (KeyTuplesEqual(key_columns, row, it->second)) {
-				out_row_to_group[row] = out_row_to_group[it->second];
-				matched = true;
-				break;
-			}
-		}
-		if (!matched) {
-			out_row_to_group[row] = next_group++;
-			hash_to_rep_row.emplace(h, row);
-		}
+		row_offset += count;
 	}
+
+	if (row_offset != num_rows) {
+		throw InternalException(
+			"DECIDE BuildGroupIds: chunk scan produced %llu rows, expected %llu",
+			row_offset, num_rows);
+	}
+
 	out_num_groups = next_group;
 }
 
@@ -1941,6 +1959,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Evaluate coefficients and build the model (solver provides verbose output)
 
+    // Per-Finalize cache of TransformToChunkExpression results. Outlives every
+    // ExpressionExecutor created below, so it's safe for executors to retain
+    // references into cached entries.
+    ChunkExprCache chunk_expr_cache;
+
     //===--------------------------------------------------------------------===//
     // PHASE 1.5: Build Entity Mappings for Table-Scoped Variables
     //===--------------------------------------------------------------------===//
@@ -1953,12 +1976,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         // Build BoundReferenceExpression for each entity-key physical column index
         // so BuildGroupIds can run them through one ExpressionExecutor.
-        vector<unique_ptr<Expression>> key_exprs;
+        vector<unique_ptr<Expression>> key_exprs_owned;
+        key_exprs_owned.reserve(scope.entity_key_physical_indices.size());
+        vector<const Expression *> key_exprs;
         key_exprs.reserve(scope.entity_key_physical_indices.size());
         for (idx_t col_idx = 0; col_idx < scope.entity_key_physical_indices.size(); col_idx++) {
             idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
-            key_exprs.push_back(make_uniq_base<Expression, BoundReferenceExpression>(
+            key_exprs_owned.push_back(make_uniq_base<Expression, BoundReferenceExpression>(
                 data_types[phys_idx], phys_idx));
+            key_exprs.push_back(key_exprs_owned.back().get());
         }
 
         BuildGroupIds(key_exprs, context, gstate.data, num_rows,
@@ -1982,15 +2008,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     auto EvaluateBooleanMasks = [&](const vector<const Expression*> &conditions) -> vector<vector<bool>> {
         if (conditions.empty()) return {};
 
-        vector<unique_ptr<Expression>> transformed;
-        transformed.reserve(conditions.size());
-        for (auto *cond : conditions) {
-            transformed.push_back(TransformToChunkExpression(*cond, context));
-        }
-
         ExpressionExecutor cond_executor(context);
-        for (auto &expr : transformed) {
-            cond_executor.AddExpression(*expr);
+        for (auto *cond : conditions) {
+            cond_executor.AddExpression(
+                CachedTransformToChunkExpression(chunk_expr_cache, *cond, context));
         }
 
         vector<vector<bool>> masks(conditions.size());
@@ -2124,20 +2145,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         // Batch all linear coefficient expressions into one ExpressionExecutor and
         // produce a multi-column result chunk per scan iteration.
-        vector<unique_ptr<Expression>> transformed_coefs;
-        transformed_coefs.reserve(constraint->lhs_terms.size());
         vector<LogicalType> coef_result_types;
         coef_result_types.reserve(constraint->lhs_terms.size());
         ExpressionExecutor coef_executor(context);
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             auto &term = constraint->lhs_terms[term_idx];
-            transformed_coefs.push_back(TransformToChunkExpression(*term.coefficient, context));
-            coef_result_types.push_back(transformed_coefs.back()->return_type);
+            const Expression &cached =
+                CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
+            coef_result_types.push_back(cached.return_type);
             try {
-                coef_executor.AddExpression(*transformed_coefs.back());
+                coef_executor.AddExpression(cached);
             } catch (const std::exception &e) {
                 throw InternalException("Failed to add expression for term %llu: %s\nOriginal: %s\nTransformed: %s",
-                    term_idx, e.what(), term.coefficient->ToString(), transformed_coefs.back()->ToString());
+                    term_idx, e.what(), term.coefficient->ToString(), cached.ToString());
             }
             eval_const.row_coefficients[term_idx].Reserve(num_rows);
         }
@@ -2188,11 +2208,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // We evaluate it against the data chunks.
             eval_const.rhs_values.Reserve(num_rows);
 
-            auto transformed_rhs = TransformToChunkExpression(*constraint->rhs_expr, context, num_rows);
+            const Expression &transformed_rhs =
+                CachedTransformToChunkExpression(chunk_expr_cache, *constraint->rhs_expr, context, num_rows);
 
             // Prepare executor
             ExpressionExecutor rhs_executor(context);
-            rhs_executor.AddExpression(*transformed_rhs);
+            rhs_executor.AddExpression(transformed_rhs);
 
             // Scan data and evaluate
             ColumnDataScanState rhs_scan_state;
@@ -2201,7 +2222,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rhs_chunk.Initialize(context, gstate.data.Types());
 
             DataChunk rhs_result;
-            vector<LogicalType> result_types = {transformed_rhs->return_type};
+            vector<LogicalType> result_types = {transformed_rhs.return_type};
             rhs_result.Initialize(context, result_types);
             while (gstate.data.Scan(rhs_scan_state, rhs_chunk)) {
                 rhs_result.Reset();
@@ -2240,10 +2261,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             };
 
             if (has_per) {
-                vector<unique_ptr<Expression>> key_exprs;
+                vector<const Expression *> key_exprs;
                 key_exprs.reserve(constraint->per_columns.size());
                 for (auto &col : constraint->per_columns) {
-                    key_exprs.push_back(TransformToChunkExpression(*col, context));
+                    key_exprs.push_back(
+                        &CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
                 }
                 BuildGroupIds(key_exprs, context, gstate.data, num_rows,
                               row_is_included, /*null_excludes=*/true,
@@ -2435,24 +2457,26 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ebts[term_idx].var_b = bt.var_b;
             }
 
-            vector<unique_ptr<Expression>> bl_transformed;
             vector<idx_t> bl_route;       // result column index → bilinear_terms index
             vector<LogicalType> bl_types;
             ExpressionExecutor bl_executor(context);
+            idx_t bl_added = 0;
             for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
                 auto &bt = constraint->bilinear_terms[term_idx];
                 if (!bt.coefficient) {
                     ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
                     continue;
                 }
-                bl_transformed.push_back(TransformToChunkExpression(*bt.coefficient, context));
-                bl_types.push_back(bl_transformed.back()->return_type);
-                bl_executor.AddExpression(*bl_transformed.back());
+                const Expression &cached =
+                    CachedTransformToChunkExpression(chunk_expr_cache, *bt.coefficient, context);
+                bl_types.push_back(cached.return_type);
+                bl_executor.AddExpression(cached);
                 bl_route.push_back(term_idx);
                 ebts[term_idx].row_coefficients.Reserve(num_rows);
+                bl_added++;
             }
 
-            if (!bl_transformed.empty()) {
+            if (bl_added > 0) {
                 ColumnDataScanState bl_scan;
                 gstate.data.InitializeScan(bl_scan);
                 DataChunk bl_chunk;
@@ -2502,16 +2526,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 EvaluatedConstraint::QuadraticGroup eqg;
                 eqg.sign = qg.sign;
 
-                vector<unique_ptr<Expression>> q_transformed;
                 vector<LogicalType> q_types;
                 ExpressionExecutor q_executor(context);
                 eqg.row_coefficients.resize(qg.inner_terms.size());
                 for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
                     auto &term = qg.inner_terms[inner_idx];
                     eqg.variable_indices.push_back(term.variable_index);
-                    q_transformed.push_back(TransformToChunkExpression(*term.coefficient, context));
-                    q_types.push_back(q_transformed.back()->return_type);
-                    q_executor.AddExpression(*q_transformed.back());
+                    const Expression &cached =
+                        CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
+                    q_types.push_back(cached.return_type);
+                    q_executor.AddExpression(cached);
                     eqg.row_coefficients[inner_idx].Reserve(num_rows);
                 }
 
@@ -2643,17 +2667,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // the bucket and the position within that bucket that flat term `i`
             // writes to — so the scan loop can route each evaluated value back
             // without knowing which bucket it came from.
-            vector<unique_ptr<Expression>> flat_coeffs;
             vector<pair<idx_t, idx_t>> route; // (bucket_idx, term_idx)
             vector<LogicalType> obj_result_types;
             ExpressionExecutor obj_executor(context);
             for (idx_t b_idx = 0; b_idx < buckets.size(); b_idx++) {
                 auto &b = buckets[b_idx];
                 for (idx_t term_idx = 0; term_idx < b.src_terms->size(); term_idx++) {
-                    flat_coeffs.push_back(
-                        TransformToChunkExpression(*(*b.src_terms)[term_idx].coefficient, context));
-                    obj_result_types.push_back(flat_coeffs.back()->return_type);
-                    obj_executor.AddExpression(*flat_coeffs.back());
+                    const Expression &cached = CachedTransformToChunkExpression(
+                        chunk_expr_cache, *(*b.src_terms)[term_idx].coefficient, context);
+                    obj_result_types.push_back(cached.return_type);
+                    obj_executor.AddExpression(cached);
                     route.emplace_back(b_idx, term_idx);
                     (*b.out_coeffs)[term_idx].Reserve(num_rows);
                 }
@@ -2664,17 +2687,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             DataChunk obj_chunk;
             obj_chunk.Initialize(context, gstate.data.Types());
             DataChunk obj_results;
-            if (!flat_coeffs.empty()) {
+            if (!route.empty()) {
                 obj_results.Initialize(context, obj_result_types);
             }
 
             while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
-                if (flat_coeffs.empty()) {
+                if (route.empty()) {
                     continue;
                 }
                 obj_results.Reset();
                 obj_executor.Execute(obj_chunk, obj_results);
-                for (idx_t j = 0; j < flat_coeffs.size(); j++) {
+                for (idx_t j = 0; j < route.size(); j++) {
                     auto &b = buckets[route[j].first];
                     idx_t term_idx = route[j].second;
                     auto &out = (*b.out_coeffs)[term_idx].MutableDense();
@@ -2781,7 +2804,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ebts[term_idx].var_b = bt.var_b;
             }
 
-            vector<unique_ptr<Expression>> bl_transformed;
             vector<idx_t> bl_route;
             vector<LogicalType> bl_types;
             ExpressionExecutor bl_executor(context);
@@ -2791,14 +2813,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
                     continue;
                 }
-                bl_transformed.push_back(TransformToChunkExpression(*bt.coefficient, context));
-                bl_types.push_back(bl_transformed.back()->return_type);
-                bl_executor.AddExpression(*bl_transformed.back());
+                const Expression &cached =
+                    CachedTransformToChunkExpression(chunk_expr_cache, *bt.coefficient, context);
+                bl_types.push_back(cached.return_type);
+                bl_executor.AddExpression(cached);
                 bl_route.push_back(term_idx);
                 ebts[term_idx].row_coefficients.Reserve(num_rows);
             }
 
-            if (!bl_transformed.empty()) {
+            if (!bl_route.empty()) {
                 ColumnDataScanState bl_scan;
                 gstate.data.InitializeScan(bl_scan);
                 DataChunk bl_chunk;
@@ -3160,46 +3183,42 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
+        // Reserve up-front so the two push_back calls per link cannot reallocate
+        // gstate.evaluated_constraints. With capacity guaranteed, references to
+        // existing C1/C2 stay valid across appends and we don't need defensive
+        // copies of their fields.
+        gstate.evaluated_constraints.reserve(
+            gstate.evaluated_constraints.size() + 2 * abs_maximize_links.size());
+
         for (auto &link : abs_maximize_links) {
             auto it = abs_tag_map.find(link.y_idx);
             D_ASSERT(it != abs_tag_map.end() &&
                      it->second.c1 != DConstants::INVALID_INDEX &&
                      it->second.c2 != DConstants::INVALID_INDEX);
 
-            // Copy all data out of C1 and C2 before any push_back that could reallocate
-            // the evaluated_constraints vector and invalidate references.
-            auto c1_vis   = gstate.evaluated_constraints[it->second.c1].variable_indices;
-            auto c1_rcs   = gstate.evaluated_constraints[it->second.c1].row_coefficients;
-            auto c1_rhs   = gstate.evaluated_constraints[it->second.c1].rhs_values;
-            auto c1_rgids = gstate.evaluated_constraints[it->second.c1].row_group_ids;
-            auto c1_ngrps = gstate.evaluated_constraints[it->second.c1].num_groups;
-
-            auto c2_vis   = gstate.evaluated_constraints[it->second.c2].variable_indices;
-            auto c2_rcs   = gstate.evaluated_constraints[it->second.c2].row_coefficients;
-            auto c2_rhs   = gstate.evaluated_constraints[it->second.c2].rhs_values;
-            auto c2_rgids = gstate.evaluated_constraints[it->second.c2].row_group_ids;
-            auto c2_ngrps = gstate.evaluated_constraints[it->second.c2].num_groups;
+            const auto &c1 = gstate.evaluated_constraints[it->second.c1];
+            const auto &c2 = gstate.evaluated_constraints[it->second.c2];
 
             // Compute M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|).
             // This upper-bounds |inner| across all rows and variable values.
             double M = 0.0;
             for (idx_t r = 0; r < num_rows; r++) {
-                double row_bound = std::abs(c1_rhs.Get(r));
-                for (idx_t t = 0; t < c1_vis.size(); t++) {
-                    if (c1_vis[t] == link.aux_idx) {
+                double row_bound = std::abs(c1.rhs_values.Get(r));
+                for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
+                    if (c1.variable_indices[t] == link.aux_idx) {
                         continue;
                     }
-                    double lb = solver_input.lower_bounds[c1_vis[t]];
-                    double ub = solver_input.upper_bounds[c1_vis[t]];
+                    double lb = solver_input.lower_bounds[c1.variable_indices[t]];
+                    double ub = solver_input.upper_bounds[c1.variable_indices[t]];
                     if (ub >= 1e20 || lb <= -1e20) {
                         throw InvalidInputException(
                             "MAXIMIZE SUM(ABS(...)) requires a finite bound on variable '%s'. "
                             "Add constraints '%s >= <lower>' and '%s <= <upper>'.",
-                            decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias,
-                            decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias,
-                            decide_variables[c1_vis[t]]->Cast<BoundColumnRefExpression>().alias);
+                            decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
+                            decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
+                            decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias);
                     }
-                    row_bound += std::abs(c1_rcs[t].Get(r)) * std::max(std::abs(lb), std::abs(ub));
+                    row_bound += std::abs(c1.row_coefficients[t].Get(r)) * std::max(std::abs(lb), std::abs(ub));
                 }
                 M = std::max(M, row_bound);
             }
@@ -3218,28 +3237,28 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
             // C_ub1: same as C1 but add y_idx with coeff +2M, flip to <=, rhs[r] += 2M
             EvaluatedConstraint ec_ub1;
-            ec_ub1.variable_indices = c1_vis;
-            ec_ub1.row_coefficients = c1_rcs;
+            ec_ub1.variable_indices = c1.variable_indices;
+            ec_ub1.row_coefficients = c1.row_coefficients;
             ec_ub1.variable_indices.push_back(link.y_idx);
             ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(two_M, num_rows));
-            ec_ub1.rhs_values = ShiftRhs(c1_rhs, two_M);
+            ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, two_M);
             ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
             ec_ub1.lhs_is_aggregate = false;
-            ec_ub1.row_group_ids = c1_rgids;
-            ec_ub1.num_groups = c1_ngrps;
+            ec_ub1.row_group_ids = c1.row_group_ids;
+            ec_ub1.num_groups = c1.num_groups;
             gstate.evaluated_constraints.push_back(std::move(ec_ub1));
 
             // C_ub2: same as C2 but add y_idx with coeff -2M, flip to <=, rhs unchanged
             EvaluatedConstraint ec_ub2;
-            ec_ub2.variable_indices = c2_vis;
-            ec_ub2.row_coefficients = c2_rcs;
+            ec_ub2.variable_indices = c2.variable_indices;
+            ec_ub2.row_coefficients = c2.row_coefficients;
             ec_ub2.variable_indices.push_back(link.y_idx);
             ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-two_M, num_rows));
-            ec_ub2.rhs_values = c2_rhs;
+            ec_ub2.rhs_values = c2.rhs_values;
             ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
             ec_ub2.lhs_is_aggregate = false;
-            ec_ub2.row_group_ids = c2_rgids;
-            ec_ub2.num_groups = c2_ngrps;
+            ec_ub2.row_group_ids = c2.row_group_ids;
+            ec_ub2.num_groups = c2.num_groups;
             gstate.evaluated_constraints.push_back(std::move(ec_ub2));
         }
     }
@@ -3319,10 +3338,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return true;
         };
 
-        vector<unique_ptr<Expression>> key_exprs;
+        vector<const Expression *> key_exprs;
         key_exprs.reserve(gstate.objective->per_columns.size());
         for (auto &col : gstate.objective->per_columns) {
-            key_exprs.push_back(TransformToChunkExpression(*col, context));
+            key_exprs.push_back(
+                &CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
         }
         BuildGroupIds(key_exprs, context, gstate.data, num_rows,
                       obj_row_is_included, /*null_excludes=*/true,
@@ -4019,16 +4039,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         auto EvaluateTermCoefs = [&](const Term &term) -> vector<double> {
             vector<double> coefs;
             coefs.reserve(num_rows);
-            auto transformed = TransformToChunkExpression(*term.coefficient, context);
+            const Expression &transformed =
+                CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
             ExpressionExecutor exec(context);
-            exec.AddExpression(*transformed);
+            exec.AddExpression(transformed);
             ColumnDataScanState scan;
             gstate.data.InitializeScan(scan);
             DataChunk chunk;
             chunk.Initialize(context, gstate.data.Types());
             while (gstate.data.Scan(scan, chunk)) {
                 DataChunk result;
-                result.Initialize(context, {transformed->return_type});
+                result.Initialize(context, {transformed.return_type});
                 exec.Execute(chunk, result);
                 for (idx_t r = 0; r < chunk.size(); r++) {
                     Value val = result.data[0].GetValue(r);
@@ -4237,16 +4258,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         auto EvaluateTermCoefsObj = [&](const Term &term) -> vector<double> {
             vector<double> coefs;
             coefs.reserve(num_rows);
-            auto transformed = TransformToChunkExpression(*term.coefficient, context);
+            const Expression &transformed =
+                CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
             ExpressionExecutor exec(context);
-            exec.AddExpression(*transformed);
+            exec.AddExpression(transformed);
             ColumnDataScanState scan;
             gstate.data.InitializeScan(scan);
             DataChunk chunk;
             chunk.Initialize(context, gstate.data.Types());
             while (gstate.data.Scan(scan, chunk)) {
                 DataChunk result;
-                result.Initialize(context, {transformed->return_type});
+                result.Initialize(context, {transformed.return_type});
                 exec.Execute(chunk, result);
                 for (idx_t r = 0; r < chunk.size(); r++) {
                     Value val = result.data[0].GetValue(r);
