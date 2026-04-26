@@ -290,6 +290,114 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs,
 	out_num_groups = next_group;
 }
 
+//! Cache for PER group assignments: shares one full-data scan + group-map build
+//! across constraints/objectives that use the same PER expression set.
+//! The cached value is the *unfiltered* row→group mapping (BuildGroupIds run
+//! with row_filter=nullptr); each call site then applies its own WHEN/local
+//! filter and remaps the surviving group IDs to consecutive 0..K' to preserve
+//! today's "encounter-order, no holes" semantics.
+//! Lifetime: one PerGroupCache per Finalize invocation; cleared at end.
+struct PerGroupCacheEntry {
+	vector<const Expression *> exprs;
+	bool null_excludes;
+	vector<idx_t> unfiltered_row_group_ids;
+	idx_t unfiltered_num_groups;
+};
+
+using PerGroupCache = std::unordered_map<size_t, vector<PerGroupCacheEntry>>;
+
+//! Hash a PER expression set + null_excludes flag into a size_t for the cache.
+static size_t HashPerKey(const vector<unique_ptr<Expression>> &per_columns, bool null_excludes) {
+	size_t h = std::hash<bool>{}(null_excludes);
+	for (auto &e : per_columns) {
+		size_t eh = static_cast<size_t>(e->Hash());
+		h ^= eh + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+	}
+	return h;
+}
+
+//! Returns true if the cache entry's expression set + null_excludes flag matches
+//! the constraint/objective being evaluated.
+static bool PerKeyMatches(const PerGroupCacheEntry &entry,
+                          const vector<unique_ptr<Expression>> &per_columns,
+                          bool null_excludes) {
+	if (entry.null_excludes != null_excludes) return false;
+	if (entry.exprs.size() != per_columns.size()) return false;
+	for (idx_t i = 0; i < per_columns.size(); i++) {
+		if (!entry.exprs[i]->Equals(*per_columns[i])) return false;
+	}
+	return true;
+}
+
+//! Look up (or build + cache) the unfiltered group ids for `per_columns`,
+//! then materialize a filter-aware view in `out_row_group_ids` / `out_num_groups`.
+//!
+//! Filter semantics (preserved from BuildGroupIds): rows where row_filter(r) is
+//! false (or NULL keys when null_excludes=true) get INVALID_INDEX in the output.
+//! Surviving group IDs are remapped to consecutive 0..K' in their first-seen
+//! row order so downstream code sees a dense [0..K') range exactly as today.
+static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
+                                     const vector<unique_ptr<Expression>> &per_columns,
+                                     ChunkExprCache &chunk_expr_cache,
+                                     ClientContext &context,
+                                     ColumnDataCollection &data,
+                                     idx_t num_rows,
+                                     bool null_excludes,
+                                     const std::function<bool(idx_t)> &row_filter,
+                                     vector<idx_t> &out_row_group_ids,
+                                     idx_t &out_num_groups) {
+	size_t key = HashPerKey(per_columns, null_excludes);
+	auto &bucket = cache[key];
+	PerGroupCacheEntry *entry = nullptr;
+	for (auto &e : bucket) {
+		if (PerKeyMatches(e, per_columns, null_excludes)) {
+			entry = &e;
+			break;
+		}
+	}
+	if (entry == nullptr) {
+		bucket.emplace_back();
+		entry = &bucket.back();
+		entry->null_excludes = null_excludes;
+		entry->exprs.reserve(per_columns.size());
+		for (auto &e : per_columns) {
+			entry->exprs.push_back(e.get());
+		}
+		// Build unfiltered group ids; BuildGroupIds already excludes NULL keys
+		// when null_excludes=true.
+		vector<const Expression *> key_exprs;
+		key_exprs.reserve(per_columns.size());
+		for (auto &col : per_columns) {
+			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
+		}
+		std::function<bool(idx_t)> no_filter; // empty = include all
+		BuildGroupIds(key_exprs, context, data, num_rows, no_filter, null_excludes,
+		              entry->unfiltered_row_group_ids, entry->unfiltered_num_groups);
+	}
+
+	// Apply per-call filter and remap surviving group IDs to consecutive 0..K'
+	// in encounter order, matching the legacy BuildGroupIds output exactly.
+	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+	if (entry->unfiltered_num_groups == 0 || num_rows == 0) {
+		out_num_groups = 0;
+		return;
+	}
+	vector<idx_t> remap(entry->unfiltered_num_groups, DConstants::INVALID_INDEX);
+	idx_t next_remap = 0;
+	for (idx_t r = 0; r < num_rows; r++) {
+		idx_t unf_gid = entry->unfiltered_row_group_ids[r];
+		if (unf_gid == DConstants::INVALID_INDEX) continue;
+		if (row_filter && !row_filter(r)) continue;
+		idx_t mapped = remap[unf_gid];
+		if (mapped == DConstants::INVALID_INDEX) {
+			mapped = next_remap++;
+			remap[unf_gid] = mapped;
+		}
+		out_row_group_ids[r] = mapped;
+	}
+	out_num_groups = next_remap;
+}
+
 struct NormalizedProductTerm {
 	const BoundFunctionExpression *mul_func = nullptr;
 	vector<const Expression *> coefficient_factors;
@@ -1964,6 +2072,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // references into cached entries.
     ChunkExprCache chunk_expr_cache;
 
+    // Per-Finalize cache of unfiltered PER row→group assignments, shared across
+    // every constraint and the objective so a PER spec evaluated once is reused
+    // by every other call site that asks for the same expression set.
+    PerGroupCache per_group_cache;
+
     //===--------------------------------------------------------------------===//
     // PHASE 1.5: Build Entity Mappings for Table-Scoped Variables
     //===--------------------------------------------------------------------===//
@@ -2261,15 +2374,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             };
 
             if (has_per) {
-                vector<const Expression *> key_exprs;
-                key_exprs.reserve(constraint->per_columns.size());
-                for (auto &col : constraint->per_columns) {
-                    key_exprs.push_back(
-                        &CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
-                }
-                BuildGroupIds(key_exprs, context, gstate.data, num_rows,
-                              row_is_included, /*null_excludes=*/true,
-                              eval_const.row_group_ids, eval_const.num_groups);
+                LookupOrBuildPerGroupIds(per_group_cache, constraint->per_columns,
+                                         chunk_expr_cache, context, gstate.data, num_rows,
+                                         /*null_excludes=*/true, row_is_included,
+                                         eval_const.row_group_ids, eval_const.num_groups);
                 // PER: individual empty groups are skipped downstream (preserved),
                 // but reject when *every* group is empty (the aggregate as a whole
                 // sees no rows after WHEN filtering). Per-row constraints are
@@ -3338,16 +3446,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return true;
         };
 
-        vector<const Expression *> key_exprs;
-        key_exprs.reserve(gstate.objective->per_columns.size());
-        for (auto &col : gstate.objective->per_columns) {
-            key_exprs.push_back(
-                &CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
-        }
-        BuildGroupIds(key_exprs, context, gstate.data, num_rows,
-                      obj_row_is_included, /*null_excludes=*/true,
-                      solver_input.objective_row_group_ids,
-                      solver_input.objective_num_groups);
+        LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns,
+                                 chunk_expr_cache, context, gstate.data, num_rows,
+                                 /*null_excludes=*/true, obj_row_is_included,
+                                 solver_input.objective_row_group_ids,
+                                 solver_input.objective_num_groups);
     }
 
     auto ScaleObjectiveAvgRows = [&](CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask,
@@ -3531,13 +3634,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     continue;
                 }
                 auto &col = ec.row_coefficients[term_idx];
+                auto rsv = var_indexer.Resolver(decide_var_idx);
                 for (idx_t k = g_begin; k < g_end; k++) {
                     idx_t row = flat_rows[k];
                     double coeff = col.Get(row);
                     if (std::abs(coeff) < 1e-15) {
                         continue;
                     }
-                    int var_idx = static_cast<int>(var_indexer.Get(decide_var_idx, row));
+                    int var_idx = static_cast<int>(rsv.Get(row));
                     accum.Add(var_idx, coeff);
                 }
             }
@@ -3648,6 +3752,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
             solver_input.num_global_vars += K;
 
+            // Pre-build resolvers for the saved objective term variables; reused
+            // across both the easy and hard branches' row × term loops.
+            vector<VarResolver> saved_term_resolvers(saved_obj_var_indices.size());
+            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                saved_term_resolvers[t] = var_indexer.Resolver(saved_obj_var_indices[t]);
+            }
+
             if (inner_easy) {
                 // Easy: z_g >= expr_r (for MAX) or z_g <= expr_r (for MIN)
                 char sense_char = inner_is_min ? '<' : '>';
@@ -3661,7 +3772,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = saved_term_resolvers[t].Get(row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3693,7 +3804,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                             double coeff = saved_obj_coefficients[t][row];
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = saved_term_resolvers[t].Get(row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3832,6 +3943,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             solver_input.global_upper_bounds.push_back(1e30);
             solver_input.global_obj_coeffs.push_back(1.0); // objective = w
 
+            // Pre-build resolvers for the saved objective term variables; reused
+            // across both the easy and hard branches' g × row × t loops.
+            vector<VarResolver> saved_term_resolvers(saved_obj_var_indices.size());
+            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                saved_term_resolvers[t] = var_indexer.Resolver(saved_obj_var_indices[t]);
+            }
+
             // For each group g: w >= (or <=) sum_g(coeffs * x)
             // sum_g = Σ_{r ∈ group_g} Σ_t coeff_t_r * x_{r,var_t}
             if (outer_easy) {
@@ -3849,7 +3967,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                 coeff /= static_cast<double>(group_size(g));
                             }
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = saved_term_resolvers[t].Get(row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3878,7 +3996,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                 coeff /= static_cast<double>(group_size(g));
                             }
                             if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
+                            idx_t var_idx = saved_term_resolvers[t].Get(row);
                             rc.indices.push_back((int)var_idx);
                             rc.coefficients.push_back(-coeff);
                         }
@@ -3955,6 +4073,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_input.objective_coefficients.clear();
         solver_input.objective_variable_indices.clear();
 
+        // Pre-build resolvers for the saved objective term variables; reused
+        // across both the easy and hard branches' row × t loops.
+        vector<VarResolver> saved_term_resolvers(saved_obj_var_indices.size());
+        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+            saved_term_resolvers[t] = var_indexer.Resolver(saved_obj_var_indices[t]);
+        }
+
         if (is_easy) {
             char sense_char = is_min_agg ? '<' : '>';
             for (idx_t row : active_rows) {
@@ -3964,10 +4089,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                    idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t].Get(row);
                     if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = var_indexer.Get(var, row);
+                    idx_t var_idx = saved_term_resolvers[t].Get(row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
@@ -3993,10 +4117,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
                 for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                    idx_t var = saved_obj_var_indices[t];
                     double coeff = saved_obj_coefficients[t].Get(row);
                     if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = var_indexer.Get(var, row);
+                    idx_t var_idx = saved_term_resolvers[t].Get(row);
                     rc.indices.push_back((int)var_idx);
                     rc.coefficients.push_back(-coeff);
                 }
@@ -4164,6 +4287,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 //   MAX pushed down: z_k >= inner_expr  (solver drives z_k to max)
                 //   MIN pushed up:   z_k <= inner_expr  (solver drives z_k to min)
                 char sense = is_max ? '>' : '<';
+                // Pre-build resolvers for inner-term variables; reused across all rows.
+                vector<VarResolver> inner_resolvers(ta.inner_terms.size());
+                for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
+                    if (ta.inner_terms[it].variable_index != DConstants::INVALID_INDEX) {
+                        inner_resolvers[it] = var_indexer.Resolver(ta.inner_terms[it].variable_index);
+                    }
+                }
                 for (idx_t row = 0; row < num_rows; row++) {
                     if (!ta.filter_mask[row]) continue;
                     SolverInput::RawConstraint rc;
@@ -4176,7 +4306,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                             row_rhs += coef;
                         } else {
-                            idx_t abs_idx = var_indexer.Get(inner_t.variable_index, row);
+                            idx_t abs_idx = inner_resolvers[it].Get(row);
                             rc.indices.push_back((int)abs_idx);
                             rc.coefficients.push_back(-coef);
                         }
@@ -4209,13 +4339,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                     for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
                         auto &inner_t = ta.inner_terms[it];
+                        VarResolver inner_rsv;
+                        if (inner_t.variable_index != DConstants::INVALID_INDEX) {
+                            inner_rsv = var_indexer.Resolver(inner_t.variable_index);
+                        }
                         for (idx_t row = 0; row < num_rows; row++) {
                             if (!ta.filter_mask[row]) continue;
                             double coef = ta.per_term_coefs[it][row] * (double)ta.sign / avg_divisor;
                             if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                                 outer_rhs -= coef;
                             } else {
-                                int abs_idx = (int)var_indexer.Get(inner_t.variable_index, row);
+                                int abs_idx = (int)inner_rsv.Get(row);
                                 outer_accum[abs_idx] += coef;
                             }
                         }
@@ -4371,6 +4505,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // MAXIMIZE+MIN: z_k <= expr_i per row (solver drives z_k up to min)
             // MINIMIZE+MAX: z_k >= expr_i per row (solver drives z_k down to max)
             char sense = is_max ? '>' : '<';
+            // Pre-build resolvers for inner-term variables; reused across all rows.
+            vector<VarResolver> inner_resolvers(ta.inner_terms.size());
+            for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
+                if (ta.inner_terms[it].variable_index != DConstants::INVALID_INDEX) {
+                    inner_resolvers[it] = var_indexer.Resolver(ta.inner_terms[it].variable_index);
+                }
+            }
             for (idx_t row = 0; row < num_rows; row++) {
                 if (!ta.filter_mask[row]) continue;
                 SolverInput::RawConstraint rc;
@@ -4383,7 +4524,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                         row_rhs += coef;
                     } else {
-                        idx_t abs_idx = var_indexer.Get(inner_t.variable_index, row);
+                        idx_t abs_idx = inner_resolvers[it].Get(row);
                         rc.indices.push_back((int)abs_idx);
                         rc.coefficients.push_back(-coef);
                     }
@@ -4513,6 +4654,9 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
         auto &decide_var = decide_variables[decide_var_idx]->Cast<BoundColumnRefExpression>();
         auto var_type = decide_var.return_type;
 
+        // One resolver per decide variable; all readback row loops below use it.
+        auto rsv = gstate.var_indexer.Resolver(decide_var_idx);
+
         // Get data pointer once based on type
         if (var_type == LogicalType::INTEGER || var_type == LogicalType::BIGINT) {
             // Use int32_t for INTEGER, int64_t for BIGINT
@@ -4521,7 +4665,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                    idx_t solution_idx = rsv.Get(global_row);
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -4535,7 +4679,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
                 for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                     idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                    idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                    idx_t solution_idx = rsv.Get(global_row);
 
                     double solution_value = 0.0;
                     if (solution_idx < gstate.ilp_solution.size()) {
@@ -4551,7 +4695,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                idx_t solution_idx = rsv.Get(global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -4565,7 +4709,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                idx_t solution_idx = rsv.Get(global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {
@@ -4580,7 +4724,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
             for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
                 idx_t global_row = source_state.current_row_offset + row_in_chunk;
-                idx_t solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row);
+                idx_t solution_idx = rsv.Get(global_row);
 
                 double solution_value = 0.0;
                 if (solution_idx < gstate.ilp_solution.size()) {

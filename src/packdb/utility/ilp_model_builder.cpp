@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -227,9 +226,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 continue;
             }
             auto &col = input.objective_coefficients[term_idx];
+            auto rsv = indexer.Resolver(decide_var_idx);
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
-                idx_t var_idx = indexer.Get(decide_var_idx, row);
+                idx_t var_idx = rsv.Get(row);
                 // Use += because entity-scoped vars: multiple rows map to same solver var
                 model.obj_coeffs[var_idx] += col.Get(row);
             }
@@ -263,6 +263,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
             idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
 
+            // Build a resolver per term once; the inner row loop just calls Get(row).
+            vector<VarResolver> term_resolvers(num_q_terms);
+            for (idx_t t = 0; t < num_q_terms; t++) {
+                idx_t v = input.quadratic_inner_variable_indices[t];
+                if (v != DConstants::INVALID_INDEX) {
+                    term_resolvers[t] = indexer.Resolver(v);
+                }
+            }
+
             struct VarCoeff { int flat_idx; double coeff; };
             vector<VarCoeff> row_terms;
             for (idx_t row = 0; row < num_rows; row++) {
@@ -281,7 +290,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         continue;
                     }
 
-                    int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                    int flat_idx = static_cast<int>(term_resolvers[t].Get(row));
                     row_terms.push_back({flat_idx, a});
                 }
 
@@ -325,12 +334,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             model.nonconvex_quadratic = true; // Bilinear → always indefinite
 
             for (auto &bt : input.bilinear_objective_terms) {
+                auto rsv_a = indexer.Resolver(bt.var_a);
+                auto rsv_b = indexer.Resolver(bt.var_b);
                 for (idx_t row = 0; row < num_rows; row++) {
                     double coeff = bt.row_coefficients[row];
                     if (coeff == 0.0) continue;
 
-                    int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
-                    int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
+                    int flat_a = static_cast<int>(rsv_a.Get(row));
+                    int flat_b = static_cast<int>(rsv_b.Get(row));
                     int q_row = std::max(flat_a, flat_b);
                     int q_col = std::min(flat_a, flat_b);
                     q_map[pack_q_key(q_row, q_col)] += coeff;
@@ -527,10 +538,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                         if (decide_var_idx == DConstants::INVALID_INDEX) continue;
                         auto &col = eval_const.row_coefficients[term_idx];
+                        auto rsv = indexer.Resolver(decide_var_idx);
                         for (idx_t row = 0; row < num_rows; row++) {
                             double coeff = col[row];
                             if (coeff == 0.0) continue;
-                            int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                            int var_idx = static_cast<int>(rsv.Get(row));
                             constr.indices.push_back(var_idx);
                             constr.coefficients.push_back(coeff);
                         }
@@ -544,9 +556,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
                         if (decide_var_idx != DConstants::INVALID_INDEX) {
+                            auto rsv = indexer.Resolver(decide_var_idx);
                             for (idx_t row = 0; row < num_rows; row++) {
                                 double coeff = eval_const.row_coefficients[term_idx][row];
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                int var_idx = static_cast<int>(rsv.Get(row));
                                 coeff_accum[var_idx] += coeff;
                             }
                         }
@@ -635,11 +648,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                             if (decide_var_idx == DConstants::INVALID_INDEX) continue;
                             auto &col = eval_const.row_coefficients[term_idx];
+                            auto rsv = indexer.Resolver(decide_var_idx);
                             for (idx_t k = g_begin; k < g_end; k++) {
                                 idx_t row = flat_rows[k];
                                 double coeff = col[row];
                                 if (coeff == 0.0) continue;
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                int var_idx = static_cast<int>(rsv.Get(row));
                                 constr.indices.push_back(var_idx);
                                 constr.coefficients.push_back(coeff);
                             }
@@ -649,10 +663,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                             if (decide_var_idx == DConstants::INVALID_INDEX) continue;
                             auto &col = eval_const.row_coefficients[term_idx];
+                            auto rsv = indexer.Resolver(decide_var_idx);
                             for (idx_t k = g_begin; k < g_end; k++) {
                                 idx_t row = flat_rows[k];
                                 double coeff = col.Get(row);
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                                int var_idx = static_cast<int>(rsv.Get(row));
                                 accum.Add(var_idx, coeff);
                             }
                         }
@@ -670,6 +685,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             for (auto v : eval_const.variable_indices) {
                 if (v != DConstants::INVALID_INDEX) per_row_active_terms++;
             }
+            // Pre-build one resolver per term; reused across all rows.
+            idx_t num_terms = eval_const.variable_indices.size();
+            vector<VarResolver> term_resolvers(num_terms);
+            for (idx_t t = 0; t < num_terms; t++) {
+                idx_t v = eval_const.variable_indices[t];
+                if (v != DConstants::INVALID_INDEX) {
+                    term_resolvers[t] = indexer.Resolver(v);
+                }
+            }
             for (idx_t row = 0; row < num_rows; row++) {
                 // Skip rows excluded by WHEN (row_group_ids with INVALID_INDEX)
                 if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
@@ -685,13 +709,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // per-row LHS arrives here with constant/data terms still attached.
                 double rhs_adjustment = 0.0;
 
-                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                for (idx_t term_idx = 0; term_idx < num_terms; term_idx++) {
                     idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                     double coeff = eval_const.row_coefficients[term_idx][row];
 
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
                         if (coeff != 0.0) {
-                            idx_t var_idx = indexer.Get(decide_var_idx, row);
+                            idx_t var_idx = term_resolvers[term_idx].Get(row);
                             constr.indices.push_back((int)var_idx);
                             constr.coefficients.push_back(coeff);
                         }
@@ -714,11 +738,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // and POWER outer-product Q entries — all accumulated together.
 
     // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
-    // row_set: which rows to include (empty = all rows for a single-row per-row case).
+    // range: which rows to include (dense iota or external slice — see RowRange).
     // lhs_is_integer: precomputed from the user's EvaluatedConstraint; gates the
     // strict-inequality rewrite (`< K → <= K-1`) in the same way as the linear path.
     auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec,
-                                        const vector<idx_t> &row_set,
+                                        RowRange range,
                                         double rhs,
                                         bool lhs_is_integer) -> SolverModel::QuadraticConstraint {
         SolverModel::QuadraticConstraint qc;
@@ -730,9 +754,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
             idx_t decide_var_idx = ec.variable_indices[term_idx];
             if (decide_var_idx != DConstants::INVALID_INDEX) {
-                for (idx_t row : row_set) {
+                auto rsv = indexer.Resolver(decide_var_idx);
+                for (idx_t i = 0; i < range.count; i++) {
+                    idx_t row = range.Get(i);
                     double coeff = ec.row_coefficients[term_idx][row];
-                    int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                    int var_idx = static_cast<int>(rsv.Get(row));
                     linear_accum[var_idx] += coeff;
                 }
             }
@@ -740,11 +766,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         // Bilinear terms: x_a * x_b → off-diagonal Q entries
         for (auto &bt : ec.bilinear_terms) {
-            for (idx_t row : row_set) {
+            auto rsv_a = indexer.Resolver(bt.var_a);
+            auto rsv_b = indexer.Resolver(bt.var_b);
+            for (idx_t i = 0; i < range.count; i++) {
+                idx_t row = range.Get(i);
                 double coeff = bt.row_coefficients[row];
                 if (coeff == 0.0) continue;
-                int flat_a = static_cast<int>(indexer.Get(bt.var_a, row));
-                int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
+                int flat_a = static_cast<int>(rsv_a.Get(row));
+                int flat_b = static_cast<int>(rsv_b.Get(row));
                 int q_row = std::max(flat_a, flat_b);
                 int q_col = std::min(flat_a, flat_b);
                 q_accum[pack_q_key(q_row, q_col)] += coeff;
@@ -758,9 +787,19 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             double q_sign = qg.sign;
             idx_t num_q_terms = qg.variable_indices.size();
 
+            // Pre-build resolvers per term (skip terms with INVALID_INDEX).
+            vector<VarResolver> q_term_resolvers(num_q_terms);
+            for (idx_t t = 0; t < num_q_terms; t++) {
+                idx_t v = qg.variable_indices[t];
+                if (v != DConstants::INVALID_INDEX) {
+                    q_term_resolvers[t] = indexer.Resolver(v);
+                }
+            }
+
             struct VarCoeff { int flat_idx; double coeff; };
             vector<VarCoeff> row_terms;
-            for (idx_t row : row_set) {
+            for (idx_t i_r = 0; i_r < range.count; i_r++) {
+                idx_t row = range.Get(i_r);
                 row_terms.clear();
                 double c_row = 0.0;  // Constant term contribution for this row
 
@@ -775,7 +814,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         c_row += a;
                         continue;
                     }
-                    int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
+                    int flat_idx = static_cast<int>(q_term_resolvers[t].Get(row));
                     row_terms.push_back({flat_idx, a});
                 }
 
@@ -866,11 +905,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             double rhs = eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(0);
 
             if (!has_groups) {
-                // Single aggregate: all rows
-                vector<idx_t> all_rows(num_rows);
-                std::iota(all_rows.begin(), all_rows.end(), 0);
+                // Single aggregate: all rows (dense iota — no allocation needed)
+                RowRange range{nullptr, num_rows, true};
                 model.quadratic_constraints.push_back(
-                    BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer));
+                    BuildQuadraticConstraint(eval_const, range, rhs, lhs_is_integer));
             } else {
                 // PER groups: one QuadraticConstraint per group, reuse CSR
                 BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
@@ -883,10 +921,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     if (g_begin == g_end) {
                         continue;
                     }
-                    vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin,
-                                                   flat_rows.begin() + g_end);
+                    RowRange range{flat_rows.data() + g_begin, g_end - g_begin, false};
                     model.quadratic_constraints.push_back(
-                        BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer));
+                        BuildQuadraticConstraint(eval_const, range, rhs, lhs_is_integer));
                 }
             }
         } else {
@@ -895,10 +932,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
                     continue;
                 }
-                vector<idx_t> single_row = {row};
+                RowRange range{&row, 1, false};
                 double rhs = eval_const.rhs_values.Get(row);
                 model.quadratic_constraints.push_back(
-                    BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_is_integer));
+                    BuildQuadraticConstraint(eval_const, range, rhs, lhs_is_integer));
             }
         }
     }

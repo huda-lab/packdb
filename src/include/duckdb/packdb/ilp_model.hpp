@@ -64,6 +64,11 @@ struct VarIndexer {
         return mappings[var_entity_mapping_idx[var_idx]].num_entities;
     }
 
+    //! Build a per-variable resolver. Hoists the per-call dispatch (entity vs row,
+    //! mapping vector lookup, row_to_entity pointer) out of inner loops so each
+    //! row lookup costs one branch + array index OR one multiply-add.
+    inline struct VarResolver Resolver(idx_t var_idx) const;
+
     //! Build a VarIndexer that OWNS a copy of entity_mappings.
     //! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).
     static VarIndexer Build(const SolverInput &input);
@@ -72,6 +77,54 @@ struct VarIndexer {
     //! Caller must ensure the SolverInput outlives this VarIndexer.
     //! Used for temporary indexers (pre_indexer, model builder).
     static VarIndexer BuildRef(const SolverInput &input);
+};
+
+//! One-variable resolver: caches the dispatch decisions and pointers for a single
+//! decide variable so the per-row lookup in tight loops is a single branch.
+//! Build once outside the row loop via VarIndexer::Resolver(var_idx); call Get(row)
+//! per row. Caller must ensure var_idx != DConstants::INVALID_INDEX.
+struct VarResolver {
+    bool entity = false;
+    idx_t row_var_offset = 0;
+    idx_t num_row_vars = 0;
+    idx_t entity_base = 0;
+    const idx_t *row_to_entity = nullptr;  // populated only when entity=true
+
+    inline idx_t Get(idx_t row) const {
+        if (!entity) {
+            return row * num_row_vars + row_var_offset;
+        }
+        return entity_base + row_to_entity[row];
+    }
+};
+
+inline VarResolver VarIndexer::Resolver(idx_t var_idx) const {
+    D_ASSERT(var_idx != DConstants::INVALID_INDEX);
+    VarResolver r;
+    r.num_row_vars = num_row_vars;
+    if (!is_entity_scoped[var_idx]) {
+        r.entity = false;
+        r.row_var_offset = row_var_offset[var_idx];
+    } else {
+        r.entity = true;
+        r.entity_base = entity_var_base[var_idx];
+        auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
+        r.row_to_entity = mappings[var_entity_mapping_idx[var_idx]].row_to_entity.data();
+    }
+    return r;
+}
+
+//! Compact reference to a set of rows. Either a contiguous slice of an external
+//! buffer (rows[0..count)) or the dense iota 0..count. Lets BuildQuadraticConstraint
+//! avoid materializing a vector<idx_t> for the ungrouped, grouped, and per-row paths.
+struct RowRange {
+    const idx_t *rows = nullptr;  // null when dense_iota = true
+    idx_t count = 0;
+    bool dense_iota = false;
+
+    inline idx_t Get(idx_t i) const {
+        return dense_iota ? i : rows[i];
+    }
 };
 
 //! Solver-agnostic optimization model, ready for any backend to consume.
