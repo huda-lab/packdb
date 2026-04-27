@@ -27,6 +27,7 @@ This makes it trivial to determine what exists vs. what needs building.
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
 | `05_testing/`          | Test coverage tracking — which scenarios are oracle-verified vs. feasibility-only, and what gaps remain            | You are adding tests, auditing coverage, or debugging a suspected correctness regression |
 | `06_performance/`      | Append-only log of performance optimizations applied to PackDB. One file per optimization batch, dated, with hypothesis + measured outcome. | You want to know what's already been tried, or you're about to commit a perf change and need to record it |
+| `07_bugs/`             | Known open bugs with symptoms, reproductions, and what has been ruled out                                          | You hit an unexpected error or are looking for a starting point to fix something broken  |
 
 ---
 
