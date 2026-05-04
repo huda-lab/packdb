@@ -32,7 +32,7 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 
 **Optimization loop**: Use `/bench` to automate build → benchmark (medium) → analyze stages → suggest next optimization. Full docs: `context/descriptions/02_operations/benchmarking.md`.
 
-**MANDATORY: Record performance commits.** When a commit lands whose primary purpose is improving performance, append an entry to `context/descriptions/06_performance/` (one file per batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is the next sequential log number — e.g., `002_9c3a53fb62_6bc8ae1412.md`). The entry must reference the commit hash, list the change set + hypothesis, and include measured deltas vs. the prior baseline (with both `benchmark/decide/results/<commit>.json` paths). The log is append-only — supersede entries by adding a new one, don't rewrite history.
+**Recording performance commits.** When a commit lands whose primary purpose is improving performance, the user runs the benchmark and then asks for a perf-log entry to be appended to `context/descriptions/06_performance/` (one file per batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is the next sequential log number — e.g., `002_9c3a53fb62_6bc8ae1412.md`). The entry should reference the commit hash, list the change set + hypothesis, and include measured deltas vs. the prior baseline (with both `benchmark/decide/results/<commit>.json` paths). The log is append-only — supersede entries by adding a new one, don't rewrite history. The perf-log lands as a follow-up commit after the user has measured; do not write it speculatively at code-commit time.
 
 ## Key PackDB source paths
 
@@ -136,6 +136,6 @@ Key areas: `00_project_overview/` (syntax spec), `01_pipeline/` (architecture), 
 - Implementation changes (data structures, code paths, function signatures)
 - Code Pointers sections (line numbers, file references, tag constants)
 - New feature interactions (e.g., WHEN+PER composition)
-- **Performance commits**: add an entry to `context/descriptions/06_performance/` recording the change set, hypothesis, and measured outcome (see the dedicated section above).
+- **Performance commits**: a perf-log entry in `context/descriptions/06_performance/` is added as a follow-up commit once the user has run the benchmark and shared numbers — see the dedicated section above. Do not block the code commit on writing the log.
 
 If unsure which doc to update, check `context/descriptions/README.md` for the directory layout. Ask the user for confirmation if which doc to update is not clear or if a new doc may be needed.
