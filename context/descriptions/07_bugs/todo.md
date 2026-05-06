@@ -63,3 +63,4 @@ User DECIDE queries and regular user-table queries are unaffected.
 
 - Blocks `SHOW TABLES`, `DESCRIBE`, `.tables`, `information_schema.*`, `pg_catalog.*`, `sqlite_master`, any ORM/tool that introspects schema via catalog views.
 - Does **not** block user DECIDE queries or normal user-table SELECTs. The stress-test plan can proceed using a user-created schema that does not rely on catalog introspection.
+
