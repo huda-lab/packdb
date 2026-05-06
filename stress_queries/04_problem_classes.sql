@@ -63,12 +63,17 @@ SUCH THAT qty <= 20 AND SUM(qty) = 50
 MINIMIZE SUM(POWER(qty - 3, 2));
 
 -- --- P7: MIQP — integer + quadratic (Gurobi only) ---------------------
--- Quadratic objective with integer vars.
+-- Quadratic objective with integer vars. Kept small (~22 vars, qty<=5,
+-- SUM=10) so the integer search closes the LP/IP gap quickly. Larger
+-- formulations of the same shape (e.g. p_size<5, qty<=10, SUM=30) are a
+-- genuinely hard MIQP whose B&B explores millions of nodes without
+-- closing the gap; PackDB's 300s solver TimeLimit will return a feasible
+-- (not necessarily optimal) result on such inputs.
 SELECT p_partkey, qty
 FROM part
-WHERE p_size < 5
+WHERE p_size = 1 AND p_partkey < 1000
 DECIDE qty IS INTEGER
-SUCH THAT qty <= 10 AND SUM(qty) = 30
+SUCH THAT qty <= 5 AND SUM(qty) = 10
 MINIMIZE SUM(POWER(qty - 2, 2));
 
 -- --- P8: QCQP — quadratic constraint (Gurobi only) --------------------

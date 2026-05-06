@@ -48,6 +48,7 @@ struct GurobiAPI {
 	int (*startenv)(void *env);
 	void (*freeenv)(void *env);
 	int (*setintparam)(void *env, const char *paramname, int value);
+	int (*setdblparam)(void *env, const char *paramname, double value);
 
 	// Model management
 	int (*newmodel)(void *env, void **modelP, const char *name, int numvars,

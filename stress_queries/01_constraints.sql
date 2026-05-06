@@ -54,11 +54,10 @@ MAXIMIZE SUM(level);
 
 -- --- C6: MIN(expr) <= K (hard, Big-M indicators) ----------------------
 -- Branch: MIN aggregate, hard direction, binary indicator per row.
--- BUG: Using MIN with a mixed expression `expr * pick + const * (1 - pick)`
---      crashes with a DuckDB internal assertion (when constructed standalone)
---      or surfaces as "INTERNAL Error: Failed to add constraint to Gurobi".
---      A plain MIN(s_acctbal * pick) <= 500 works — the trigger is the
---      (1 - pick) term. 
+-- Verified 2026-05-07: now rejected cleanly with
+--   "Invalid Input Error: DECIDE expression contains an unsupported product
+--    factor that still references decision variables after normalization..."
+-- (Earlier crash / "Failed to add constraint to Gurobi" no longer reproduces.)
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
@@ -85,9 +84,9 @@ MAXIMIZE SUM(n_nationkey * flag);
 
 -- --- C9: Composed MIN with SUM inside ---------------------------------
 -- Branch: composed aggregate — MIN of per-row expression + SUM constraint.
--- BUG: Same class as C6 — the `+ const * (1 - pick)` term in MIN triggers
---      "Failed to add constraint to Gurobi". Even though MIN(..) >= K is the
---      easy direction, the rewrite seems to misbehave on this expression shape.
+-- Verified 2026-05-07: now rejected cleanly with the same Invalid Input
+-- Error class as C6 ("unsupported product factor ..."). Earlier
+-- "Failed to add constraint to Gurobi" no longer reproduces.
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN

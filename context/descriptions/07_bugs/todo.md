@@ -64,3 +64,99 @@ User DECIDE queries and regular user-table queries are unaffected.
 - Blocks `SHOW TABLES`, `DESCRIBE`, `.tables`, `information_schema.*`, `pg_catalog.*`, `sqlite_master`, any ORM/tool that introspects schema via catalog views.
 - Does **not** block user DECIDE queries or normal user-table SELECTs. The stress-test plan can proceed using a user-created schema that does not rely on catalog introspection.
 
+---
+
+## Correlated Subquery Multiplied By Decision Variable On Both Sides → INTERNAL Error + Connection Invalidation
+
+**Priority: High** (silently kills the DuckDB connection — every subsequent query in the same session fails with FATAL "database has been invalidated")
+
+### Symptom
+
+```
+INTERNAL Error: Failed to add constraint to Gurobi: Problem adding constraints
+```
+
+After this fires, every subsequent query against the same connection raises:
+
+```
+FATAL Error: Failed: database has been invalidated because of a previous fatal error.
+The database must be restarted prior to being used again.
+```
+
+So a single bad query in the middle of a session kills all the queries after it. Running `stress_queries/01_constraints.sql` end-to-end reproduces 15 cascading FATAL errors after C14.
+
+### Reproduction (`stress_queries/01_constraints.sql` C14)
+
+```sql
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT s_acctbal * pick >= (
+    SELECT MIN(s2.s_acctbal) FROM supplier s2 WHERE s2.s_nationkey = supplier.s_nationkey
+  ) * pick
+  AND SUM(pick) >= 5
+MAXIMIZE SUM(pick);
+```
+
+Trigger shape: per-row constraint where the same decision variable appears on both sides, and one side is a **correlated** scalar subquery scaled by that variable.
+
+### What is known
+
+- Simpler shapes (correlated subquery without the variable on both sides; uncorrelated subqueries) work fine. The trigger is the combination.
+- The error message originates from `src/packdb/gurobi/gurobi_solver.cpp` after `api.addconstr` returns non-zero — i.e. PackDB has built a constraint structure that Gurobi rejects at submission time, rather than catching the issue at bind/optimizer time.
+
+### Where to look next
+
+1. Identify what the optimizer produces for the per-row LHS/RHS in this case (check `decide_optimizer.cpp` rewrites for correlated subquery + bilinear-like shapes).
+2. The two issues are independent and both need addressing:
+   - **Reject earlier.** The bind/optimizer pipeline should catch unsupported shapes and raise `InvalidInputException` before ever calling Gurobi.
+   - **Don't invalidate the connection.** When Gurobi's `addconstr` returns an error, throwing `InternalException` from inside the physical operator marks the DuckDB connection fatal. Convert to `InvalidInputException` (or equivalent non-fatal type) at the throw site so the session survives a bad query.
+
+### Impact
+
+- Real correctness gap: a stress run on `01_constraints.sql` truncates at C14 and silently skips C15–C28.
+- Same connection-invalidation pattern recurs in the bug below (R18).
+
+---
+
+## `POWER(AVG(qty), 2)` In Objective → INTERNAL Error + Connection Invalidation
+
+**Priority: High** (same connection-invalidation cascade as the bug above)
+
+### Symptom
+
+```
+INTERNAL Error: DECIDE objective contains a non-aggregate term: power(sum(qty), CAST(2 AS DOUBLE))
+```
+
+(`AVG` is rewritten to `SUM` upstream, so the eventual error talks about `power(sum(qty), 2)`.)
+
+After this fires, the same `database has been invalidated` cascade applies. Running `stress_queries/05_rejected.sql` end-to-end produces 7 cascading FATAL errors after R18.
+
+### Reproduction (`stress_queries/05_rejected.sql` R18)
+
+```sql
+SELECT p_partkey, qty
+FROM part
+DECIDE qty IS REAL
+SUCH THAT qty <= 10
+MAXIMIZE POWER(AVG(qty), 2);
+```
+
+The user wrapped an aggregate inside `POWER(_, 2)` instead of using the supported `SUM(POWER(_, 2))` shape. Should be rejected at bind time.
+
+### What is known
+
+- Other syntactically-similar non-aggregate-in-objective cases are caught cleanly at bind time with `Invalid Input` errors. `POWER(AVG(...), 2)` slips past the bind-time check because `AVG` is rewritten to `SUM` *after* the non-aggregate-term check sees the original form.
+- The error then surfaces from later execution code as an `InternalException`, which is what poisons the connection.
+
+### Where to look next
+
+1. The bind-time rejection of "non-aggregate term in objective" should run **after** AVG-to-SUM rewriting, not before — so that the rewritten shape `POWER(SUM(qty), 2)` is what the check sees, and gets rejected with the existing clean error.
+2. As with the bug above, the throw site that produces this `INTERNAL Error` should raise `InvalidInputException` instead so the connection survives a bad query.
+
+### Impact
+
+- Truncates `05_rejected.sql` at R18 and silently skips R19–R25.
+- Combined with the C14 cascade above, suggests a general policy issue: **any `InternalException` thrown from inside DECIDE physical execution invalidates the DuckDB session**. A fix to the throw type alone (without addressing the bind-time root causes) would already turn these from fatal-cascading into single-query rejections.
+

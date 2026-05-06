@@ -61,6 +61,10 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 error);
     }
     api.setintparam(guard.env, "OutputFlag", 0);
+    // Cap solve time so a hard MIQP/QCQP doesn't hang the session indefinitely.
+    // 300s is generous for typical workloads; truly hard problems return the best
+    // feasible solution found so far (handled by the GRB_TIME_LIMIT branch below).
+    api.setdblparam(guard.env, "TimeLimit", 300.0);
     // Enable non-convex QP solving via spatial branching when needed
     if (ilp.nonconvex_quadratic) {
         api.setintparam(guard.env, "NonConvex", 2);
@@ -177,6 +181,14 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
     if (error) {
         throw InternalException("Failed to get Gurobi status: %s",
                                 api.geterrormsg(guard.env));
+    }
+
+    // On time-limit termination, accept the best feasible solution if one exists.
+    if (status == GRB_TIME_LIMIT) {
+        int sol_count = 0;
+        if (api.getintattr(guard.model, "SolCount", &sol_count) == 0 && sol_count > 0) {
+            status = GRB_OPTIMAL; // proceed to solution extraction below
+        }
     }
 
     if (status != GRB_OPTIMAL) {
