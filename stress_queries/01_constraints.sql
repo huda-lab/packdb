@@ -208,23 +208,29 @@ SUCH THAT qty <= 20
   AND ABS(qty - 5) <= 3
 MAXIMIZE SUM(s_acctbal * qty);
 
--- --- C22: MIN(ABS(expr)) constraint (lower-envelope, easy direction) --
--- Branch: ABS inside MIN aggregate, MIN(...) >= K stripped to per-row.
+-- --- C22: MAX(ABS(expr)) <= K constraint (easy, sound) ---------------
+-- Branch: ABS inside MAX aggregate, easy direction MAX(...) <= K
+-- stripped to per-row ABS(...) <= K. Both bounds individually upper-
+-- bound the ABS auxiliary, so the lower-envelope linearization is sound.
+-- (Prior version of C22 used MIN(ABS) >= K which is the unsound
+-- hard direction — now rejected at bind time; see R26 in 05_rejected.sql.)
 SELECT s_suppkey, s_acctbal, qty
 FROM supplier
 DECIDE qty IS INTEGER
 SUCH THAT qty <= 10
-  AND MIN(ABS(qty - 4)) >= 1
+  AND MAX(ABS(qty - 4)) <= 3
 MAXIMIZE SUM(s_acctbal * qty);
 
--- --- C23: MAX(ABS(expr)) constraint (Big-M) ---------------------------
--- Branch: ABS inside MAX aggregate, hard direction MAX(...) >= K.
+-- --- C23: SUM(ABS(expr)) <= K aggregate (sound) -----------------------
+-- Branch: SUM of ABS — solver naturally picks aux_i = |e_i| because each
+-- aux is lower-bounded individually and only their sum is upper-bounded.
+-- (Prior version used MAX(ABS) >= K which is the unsound hard direction —
+-- now rejected at bind time; see R27 in 05_rejected.sql.)
 SELECT s_suppkey, s_acctbal, qty
 FROM supplier
 DECIDE qty IS INTEGER
 SUCH THAT qty <= 10
-  AND MAX(ABS(qty - 5)) >= 4
-  AND SUM(qty) >= 50
+  AND SUM(ABS(qty - 5)) <= 50
 MAXIMIZE SUM(s_acctbal * qty);
 
 -- --- C24: Bool × Bool bilinear constraint (AND-linearization) ---------
@@ -277,3 +283,38 @@ DECIDE qty IS INTEGER
 SUCH THAT qty <= 10
   AND qty = 7 WHEN (s_nationkey <= 5)
 MAXIMIZE SUM(qty);
+
+-- --- C30: Per-row quadratic constraint POWER(linear, 2) <= K ----------
+-- Branch: per-row QCQP — distinct from C10's aggregate SUM(POWER(...)).
+-- The per-row form emits one quadratic constraint per data row.
+SELECT p_partkey, p_retailprice, qty
+FROM part
+WHERE p_size < 5
+DECIDE qty IS REAL
+SUCH THAT qty <= 10
+  AND POWER(qty - 5, 2) <= 9
+MAXIMIZE SUM(p_retailprice * qty);
+
+-- --- C31: Hard MAX(...) constraint with WHEN --------------------------
+-- Branch: hard-direction MAX (Big-M indicators) composed with WHEN row
+-- filter. M10 covers MIN-easy + WHEN; C7 covers hard MAX without WHEN.
+-- The combination affects which rows participate in the indicator pool.
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT MAX(s_acctbal * pick) >= 8000 WHEN (s_nationkey <= 10)
+  AND SUM(pick) <= 30
+MAXIMIZE SUM(pick);
+
+-- --- C32: Bilinear constraint with WHEN + PER -------------------------
+-- Branch: McCormick bilinear (bool * int) under both WHEN row filter and
+-- PER grouping. C11/P9 cover bilinear without filters; M5/M7 cover
+-- WHEN/PER on linear. This combination exercises bilinear constraint
+-- emission per group with row filtering.
+SELECT p_partkey, p_size, p_retailprice, pick, qty
+FROM part
+WHERE p_size < 10
+DECIDE pick IS BOOLEAN, qty IS INTEGER
+SUCH THAT qty <= 20
+  AND SUM(pick * qty) <= 30 WHEN (p_retailprice > 1000) PER p_size
+MAXIMIZE SUM(p_retailprice * pick * qty);

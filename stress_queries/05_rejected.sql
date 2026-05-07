@@ -243,3 +243,33 @@ FROM supplier
 DECIDE pick IS BOOLEAN
 SUCH THAT SUM(pick) <= 5 WHEN (s_acctbal > 9999999)
 MAXIMIZE SUM(s_acctbal * pick);
+
+-- --- R26: ABS hard-direction per-row (>=, =, <>, >) -------------------
+-- Expected: rejected — PackDB's ABS linearization is a lower-envelope
+-- (aux >= e, aux >= -e). Soundness requires the constraint to upper-bound
+-- the auxiliary. ABS(...) >= K leaves aux free to inflate above |e|, so
+-- the constraint can be "satisfied" without |e| >= K. Pre-2026-05-07
+-- this was silently accepted and produced wrong solutions.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) >= 3
+MAXIMIZE SUM(qty);
+
+-- --- R27: ABS hard-direction inside MIN aggregate ---------------------
+-- Expected: rejected — MIN(ABS(...)) >= K rewrites under easy-MIN to
+-- per-row ABS(...) >= K, which is the same unsound shape as R26.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND MIN(ABS(qty - 4)) >= 1
+MAXIMIZE SUM(qty);
+
+-- --- R28: ABS in equality constraint ----------------------------------
+-- Expected: rejected — ABS(...) = K leaves aux free to be any value
+-- >= |e| satisfying aux = K, so |e| can differ from K.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) = 3
+MAXIMIZE SUM(qty);

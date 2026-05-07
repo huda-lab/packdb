@@ -170,3 +170,14 @@ WHERE o_orderkey < 500
 DECIDE pick IS BOOLEAN
 SUCH THAT SUM(pick) <= 20 WHEN ((o_orderpriority = '1-URGENT' OR o_orderpriority = '2-HIGH') AND o_totalprice > 10000)
 MAXIMIZE SUM(o_totalprice * pick);
+
+-- --- M19: AVG inside aggregate-local WHEN ------------------------------
+-- Branch: aggregate-local WHEN on an AVG term. AVG-as-inner has 1/n_g
+-- coefficient scaling that interacts with the WHEN row count — a
+-- distinct path from M4/M14 (SUM in aggregate-local WHEN) and C3
+-- (plain AVG without WHEN).
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT AVG(s_acctbal * pick) WHEN (s_nationkey <= 10) <= 1500
+MAXIMIZE SUM(pick);

@@ -25,6 +25,9 @@ static ObjectiveAggregateType StrToAggType(const string &name) {
 	return ObjectiveAggregateType::NONE;
 }
 
+// Forward declaration: defined further down with the ABS soundness gate.
+static void ValidateAbsConstraintDirection(LogicalDecide &decide);
+
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
 
@@ -50,6 +53,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 		timer.Start();
 	}
 
+	ValidateAbsConstraintDirection(decide); // Must run before RewriteAbs: see soundness gate
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
 	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
@@ -192,6 +196,115 @@ static bool BoundExprReferencesDecideVar(const Expression &expr, idx_t decide_in
 		}
 	});
 	return found;
+}
+
+// ---------------------------------------------------------------------------
+// ABS-in-constraint soundness gate (must run BEFORE RewriteAbs)
+// ---------------------------------------------------------------------------
+//
+// PackDB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
+// adds the lower-envelope constraints `aux >= e` and `aux >= -e`. That alone
+// only forces `aux >= |e|`. Soundness depends on the *constraint* upper-
+// bounding `aux`, so the solver picks `aux = |e|` rather than something
+// larger.
+//
+// The constraint context upper-bounds `aux` exactly when:
+//   - ABS appears on the LHS of a `<=` or `<` comparison, OR
+//   - ABS appears on the RHS of a `>=` or `>` comparison.
+//
+// All other shapes (`>=` / `>` with ABS on LHS, `<=` / `<` with ABS on RHS,
+// `=`, `<>`, BETWEEN with ABS) leave `aux` free above |e|, and the solver
+// can satisfy the constraint with `aux > |e|` — silently producing infeasible
+// solutions reported as feasible. The fix here is conservative bind-time
+// rejection (matching the policy for other unsound shapes). A correct hard-
+// direction implementation would require Big-M with a sign-indicator binary,
+// mirroring the existing MAXIMIZE-objective ABS code; that is a separate
+// feature and not done here.
+//
+// Aggregates of ABS (`SUM`, `AVG`, `MIN`, `MAX`) compose under the same rule
+// — when the constraint upper-bounds the aggregate value, individual auxes
+// inherit the bound transitively (the solver's natural minimum has each
+// `aux_i = |e_i|`). When the constraint lower-bounds the aggregate, each
+// aux is free to inflate, and the underlying ABS is not enforced.
+// ---------------------------------------------------------------------------
+
+static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
+			if (BoundExprReferencesDecideVar(*func.children[0], decide_index)) {
+				return true;
+			}
+		}
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = ContainsAbsOverDecideVar(child, decide_index);
+		}
+	});
+	return found;
+}
+
+static void RejectAbsHardDirection(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		// WHEN/PER wrappers: child[0] is the inner constraint; recurse into it.
+		if (conj.alias == WHEN_CONSTRAINT_TAG || IsPerConstraintTag(conj.alias)) {
+			if (!conj.children.empty()) {
+				RejectAbsHardDirection(*conj.children[0], decide_index);
+			}
+			return;
+		}
+		// Regular AND: recurse into every child.
+		for (auto &child : conj.children) {
+			RejectAbsHardDirection(*child, decide_index);
+		}
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		auto &comp = expr.Cast<BoundComparisonExpression>();
+		bool lhs_has_abs = ContainsAbsOverDecideVar(*comp.left, decide_index);
+		bool rhs_has_abs = ContainsAbsOverDecideVar(*comp.right, decide_index);
+		if (!lhs_has_abs && !rhs_has_abs) {
+			return;
+		}
+		auto t = comp.type;
+		bool lhs_upper_bounded = (t == ExpressionType::COMPARE_LESSTHAN ||
+		                          t == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+		bool rhs_upper_bounded = (t == ExpressionType::COMPARE_GREATERTHAN ||
+		                          t == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
+		bool sound = (lhs_has_abs && lhs_upper_bounded && !rhs_has_abs) ||
+		             (rhs_has_abs && rhs_upper_bounded && !lhs_has_abs);
+		if (!sound) {
+			throw InvalidInputException(
+			    "DECIDE constraint with ABS over a decision variable is only sound when "
+			    "the comparison upper-bounds the ABS expression: ABS(...) on the LHS of "
+			    "'<' or '<=', or on the RHS of '>' or '>='. The shape '%s' is not supported "
+			    "(would silently allow solutions that violate the |.| constraint). Aggregate "
+			    "forms (SUM/AVG/MIN/MAX of ABS) follow the same rule. Rewrite the constraint "
+			    "without ABS, or split into bounded form.",
+			    expr.ToString());
+		}
+		return;
+	}
+	// Other top-level shapes (BETWEEN, IN, conjunctions handled above): if they
+	// contain ABS over a decide var, conservatively reject. The supported ABS
+	// shapes are simple comparisons.
+	if (ContainsAbsOverDecideVar(expr, decide_index)) {
+		throw InvalidInputException(
+		    "DECIDE constraint with ABS over a decision variable is only supported in "
+		    "simple comparisons that upper-bound the ABS expression (ABS(...) <= K, "
+		    "ABS(...) < K). The shape '%s' is not supported.",
+		    expr.ToString());
+	}
+}
+
+static void ValidateAbsConstraintDirection(LogicalDecide &decide) {
+	if (!decide.decide_constraints) {
+		return;
+	}
+	RejectAbsHardDirection(*decide.decide_constraints, decide.decide_index);
 }
 
 // ---------------------------------------------------------------------------

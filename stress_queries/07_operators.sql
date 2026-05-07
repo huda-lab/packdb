@@ -143,3 +143,14 @@ DECIDE pick IS BOOLEAN
 SUCH THAT SUM(pick) <= 12
   AND SUM(pick) <> 7
 MAXIMIZE SUM(n_nationkey * pick);
+
+-- --- OP17: <> on AVG aggregate ---------------------------------------
+-- Branch: AVG(...) <> K — distinct from OP16 (SUM <>) because AVG with
+-- <> uses the special-cased ne_avg_rhs_scale path: the <> rewrite
+-- (x <> K → x <= K-1 OR x >= K+1) must scale by row count under AVG.
+SELECT n_nationkey, pick
+FROM nation
+DECIDE pick IS BOOLEAN
+SUCH THAT AVG(pick) <> 0
+  AND SUM(pick) <= 10
+MAXIMIZE SUM(n_nationkey * pick);

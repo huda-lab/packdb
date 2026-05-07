@@ -119,8 +119,10 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                              const_cast<double *>(constr.coefficients.data()),
                              constr.sense, constr.rhs, nullptr);
         if (error) {
-            throw InternalException("Failed to add constraint to Gurobi: %s",
-                                    api.geterrormsg(guard.env));
+            // Use InvalidInputException so a malformed constraint rejects this query
+            // without invalidating the DuckDB session for subsequent queries.
+            throw InvalidInputException("Failed to add constraint to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
         }
     }
 
@@ -141,8 +143,8 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                const_cast<double *>(qc.q_coefficients.data()),
                                qc.sense, qc.rhs, nullptr);
         if (error) {
-            throw InternalException("Failed to add quadratic constraint to Gurobi: %s",
-                                    api.geterrormsg(guard.env));
+            throw InvalidInputException("Failed to add quadratic constraint to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
         }
     }
 
@@ -157,8 +159,8 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                const_cast<int *>(ilp.q_cols.data()),
                                const_cast<double *>(ilp.q_vals.data()));
         if (error) {
-            throw InternalException("Failed to add quadratic objective terms to Gurobi: %s",
-                                    api.geterrormsg(guard.env));
+            throw InvalidInputException("Failed to add quadratic objective terms to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
         }
     }
 
@@ -168,8 +170,8 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
 
     error = api.optimize(guard.model);
     if (error) {
-        throw InternalException("Gurobi optimization call failed: %s",
-                                api.geterrormsg(guard.env));
+        throw InvalidInputException("Gurobi optimization call failed: %s",
+                                    api.geterrormsg(guard.env));
     }
 
     //===--------------------------------------------------------------------===//
@@ -183,8 +185,11 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 api.geterrormsg(guard.env));
     }
 
-    // On time-limit termination, accept the best feasible solution if one exists.
-    if (status == GRB_TIME_LIMIT) {
+    // For terminations that may still carry a feasible incumbent (time/iter/node/solution
+    // limit, user interrupt, suboptimal), accept the best solution found if one exists.
+    if (status == GRB_TIME_LIMIT || status == GRB_ITERATION_LIMIT ||
+        status == GRB_NODE_LIMIT || status == GRB_SOLUTION_LIMIT ||
+        status == GRB_INTERRUPTED || status == GRB_SUBOPTIMAL) {
         int sol_count = 0;
         if (api.getintattr(guard.model, "SolCount", &sol_count) == 0 && sol_count > 0) {
             status = GRB_OPTIMAL; // proceed to solution extraction below

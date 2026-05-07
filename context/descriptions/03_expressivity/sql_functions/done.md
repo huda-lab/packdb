@@ -136,7 +136,7 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 `ABS(expr)` over decision variables is automatically linearized using standard ILP techniques. The formulation depends on whether ABS appears in a constraint or in the objective, and on the optimization sense.
 
-### ABS in constraints (always correct)
+### ABS in constraints (sound only when the constraint upper-bounds the auxiliary)
 
 For each `ABS(expr)` that references a DECIDE variable, the system:
 
@@ -144,7 +144,11 @@ For each `ABS(expr)` that references a DECIDE variable, the system:
 2. Adds two lower-bound constraints: `d >= expr` and `d >= -expr`
 3. Replaces `ABS(expr)` with `d`
 
-The lower-envelope formulation is always correct in constraints because the constraint itself provides the ceiling on `d`.
+The lower-envelope alone forces `d >= |expr|`, but leaves `d` free above `|expr|`. The constraint context must upper-bound `d` for the linearization to be sound — otherwise the solver can satisfy the constraint by inflating `d` without forcing `|expr|` to actually meet the bound.
+
+**Supported (sound):** the constraint upper-bounds the ABS expression — `ABS(...) <= K`, `ABS(...) < K`, on the LHS, or `K >= ABS(...)`, `K > ABS(...)` on the RHS. Aggregates of ABS follow the same rule: `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K` (and the corresponding `<` / RHS-mirrored forms) are all sound — the solver naturally picks `d_i = |e_i|` to satisfy the upper bound.
+
+**Rejected at bind time (would be unsound):** `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, etc.). These would leave `d` free to satisfy the lower bound without forcing `|expr|` to do the same. A correct hard-direction implementation requires Big-M with a sign-indicator binary (mirroring the MAXIMIZE-objective path below); that is a separate feature and not currently implemented. See `07_bugs/done.md` ("ABS Hard-Direction Constraints Were Silently Unsound").
 
 ### ABS in MINIMIZE objectives (lower-envelope)
 

@@ -55,3 +55,224 @@ The pass is a no-op when no scoped variables are declared, and bare `ColumnRefEx
 - Background — generic SELECT binding alias: same file (`bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types)`)
 - Background — per-row fall-through: `src/planner/expression_binder/decide_constraints_binder.cpp` (`return ExpressionBinder::BindExpression(expr_ptr, depth)`)
 - Background — accidental qualifier strip on aggregate path: `src/packdb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive` reads only `colref.GetColumnName()`; `FromSymbolic` rebuilds unqualified)
+
+---
+
+## Gurobi Time-Limit Termination Threw "No Solution Found" Despite Feasible Incumbent
+
+### Symptom
+
+Hard MIQPs that exhausted the 300s solver time limit (e.g. `stress_queries/04_problem_classes.sql` P7-large) raised:
+
+```
+Invalid Input Error: DECIDE optimization failed with Gurobi status 9.
+The optimization could not find a solution.
+```
+
+…even when Gurobi's own log reported `Solution count 4: -90 -62 -60 180` and a finite best objective. PackDB simply never surfaced the incumbent.
+
+### Root cause
+
+Two compounding bugs in `src/packdb/gurobi/gurobi_loader.hpp`:
+
+1. **Wrong status constants.** PackDB defined `GRB_TIME_LIMIT = 7` and `GRB_ITERATION_LIMIT = 8`, but Gurobi's actual values are `ITERATION_LIMIT = 7`, `NODE_LIMIT = 8`, `TIME_LIMIT = 9`. So when Gurobi returned `status == 9`, the time-limit branch in `gurobi_solver.cpp` never matched, the SolCount-check was skipped, and the fallthrough else-branch threw "no solution found with status %d" — the `9` in the user-visible error was the give-away.
+2. **Narrow accept-incumbent branch.** Even with the correct constants, only `GRB_TIME_LIMIT` was being treated as "may carry a feasible solution"; `NODE_LIMIT`, `SOLUTION_LIMIT`, `INTERRUPTED`, `SUBOPTIMAL` (all of which can also leave an incumbent in the pool) all went to the throw path.
+
+### Fix
+
+- `gurobi_loader.hpp`: corrected status codes and added the missing ones (`GRB_CUTOFF=6`, `GRB_NODE_LIMIT=8`, `GRB_TIME_LIMIT=9`, `GRB_SOLUTION_LIMIT=10`, `GRB_INTERRUPTED=11`, `GRB_NUMERIC=12`, `GRB_SUBOPTIMAL=13`, `GRB_INPROGRESS=14`, `GRB_USER_OBJ_LIMIT=15`).
+- `gurobi_solver.cpp`: widened the SolCount-rescue branch to all terminations that may carry an incumbent (time/iter/node/solution limit, interrupt, suboptimal). When `SolCount > 0`, status is rewritten to `GRB_OPTIMAL` so the existing `getdblattrarray("X")` extraction path runs.
+
+### Verification
+
+- P7-large on `small.db` (170 vars, p_size<5, qty<=10, SUM=30, MIN sum-of-squares): now returns the best feasible solution (objective 590, sum=30) after 300s instead of throwing. Connection survives for follow-up queries.
+- `make decide-test` — 547 passed, 0 failed.
+
+### Code pointers
+
+- Status constants: `src/packdb/gurobi/gurobi_loader.hpp` (status code block)
+- Time-limit acceptance branch: `src/packdb/gurobi/gurobi_solver.cpp` (after the `getintattr(STATUS)` call)
+
+---
+
+## DECIDE Errors Cascaded "database has been invalidated" Across The Session
+
+### Symptom
+
+A single bad DECIDE query — either a malformed shape that Gurobi rejected at submission time, or a non-aggregate term that slipped past the bind check into execution — raised an `INTERNAL Error`. DuckDB's connection-invalidation policy treats `InternalException` as fatal, so every subsequent query in the same session failed with:
+
+```
+FATAL Error: Failed: database has been invalidated because of a previous fatal error.
+The database must be restarted prior to being used again.
+```
+
+This produced cascading FATAL errors after `stress_queries/01_constraints.sql` C14 and `stress_queries/05_rejected.sql` R18 — those single bad queries silently truncated the rest of the file.
+
+### Reproductions
+
+C14 (correlated subquery scaled by decision variable on both sides):
+
+```sql
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT s_acctbal * pick >= (
+    SELECT MIN(s2.s_acctbal) FROM supplier s2 WHERE s2.s_nationkey = supplier.s_nationkey
+  ) * pick
+  AND SUM(pick) >= 5
+MAXIMIZE SUM(pick);
+```
+
+R18 (`POWER` wrapping an aggregate, bypassing the bind-time check):
+
+```sql
+SELECT p_partkey, qty
+FROM part
+DECIDE qty IS REAL
+SUCH THAT qty <= 10
+MAXIMIZE POWER(AVG(qty), 2);
+```
+
+### Root cause
+
+Two independent root causes, both surfacing through the same connection-poisoning policy:
+
+1. **R18 specifically**: `DecideObjectiveBinder::GetExpressionType` accepted any function as long as `ContainsDecideAggregate` was true anywhere in its subtree. So `POWER(AVG(...), 2)` passed bind because it contained `AVG`, was rewritten by the optimizer to `POWER(SUM(...), 2)`, and only blew up at execution in `physical_decide.cpp` as `InternalException("DECIDE objective contains a non-aggregate term: ...")`. The supported quadratic shape is `SUM(POWER(_, 2))` (aggregate outermost), not `POWER(AGG(_), _)`.
+2. **Both bugs**: The throw sites in `gurobi_solver.cpp` (`addconstr`/`addqconstr`/`addqpterms`/`optimize` failures) and in `physical_decide.cpp` (the non-aggregate-term rejections) used `InternalException`. DuckDB's connection layer marks the database as invalidated on any `InternalException` raised from execution, killing the session.
+
+### Fix
+
+1. **Tighten the bind-time check.** `decide_objective_binder.cpp:GetExpressionType` now distinguishes the additive composition path (`+`/`-`/`*`) — which legitimately mixes scalar arithmetic with aggregates — from non-additive wrappers (`POWER`, `SQRT`, `LOG`, etc.) that wrap an aggregate. The latter is rejected at bind time with a message pointing the user at `SUM(POWER(expr, 2))`.
+2. **Convert the relevant throw sites to `InvalidInputException`.** All of `gurobi_solver.cpp`'s submit-time failures (`addconstr`, `addqconstr`, `addqpterms`, `optimize`) and `physical_decide.cpp`'s non-aggregate-term / non-SUM rejections now raise `InvalidInputException`, so a malformed query rejects only itself instead of poisoning the connection. `InternalException` is preserved for genuine PackDB invariant violations (Gurobi env/license setup, NaN/Inf in extracted solution).
+
+### Verification
+
+- R18 repro now fails with: `Binder Error: [MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in 'power'. ...`. The next query in the session runs normally.
+- C14 repro now fails with: `Invalid Input Error: Failed to add constraint to Gurobi: Problem adding constraints`. The next query in the session runs normally.
+- `make decide-test` — 547 passed, 0 failed.
+
+### Code pointers
+
+- Bind-time tightening: `src/planner/expression_binder/decide_objective_binder.cpp` (`GetExpressionType` else-branch)
+- Gurobi submit-time throw types: `src/packdb/gurobi/gurobi_solver.cpp` (`addconstr`/`addqconstr`/`addqpterms`/`optimize` error branches)
+- Physical-execution non-aggregate-term rejections: `src/execution/operator/decide/physical_decide.cpp` (`ExtractAggregateConstraintTerms` and `ExtractAggregateObjectiveTerms` non-aggregate / non-SUM branches)
+
+### Notes
+
+- C14 still doesn't *succeed*; the optimizer/binder doesn't yet support a per-row constraint that puts the same decision variable on both sides of a comparison alongside a correlated scalar subquery. That's a separate expressivity gap. The fix here only ensures it fails gracefully instead of taking out the session. Earlier rejection at bind/optimizer time (so Gurobi never sees the bad shape) is still a worthwhile follow-up.
+
+---
+
+## PER-Grouped Aggregate With Every Group Empty Was Rejected Instead Of Skipped
+
+### Symptom
+
+A PER-grouped aggregate constraint where the WHEN clause filtered out every row of every group raised:
+
+```
+Invalid Input Error: DECIDE empty row set for aggregate in constraint.
+An empty aggregate has no well-defined value; check your WHEN clause.
+```
+
+…even though the documented spec (`CLAUDE.md`: "Empty groups (WHEN filters out all rows in a group) are skipped") and the stress-test comments (M9 in `02_modifiers.sql`, N5 in `09_null_edge.sql`) say empty PER groups are skipped silently.
+
+### Reproduction (M9 / N5)
+
+```sql
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT SUM(pick) <= 2 WHEN s_acctbal > 9999999 PER s_nationkey
+MAXIMIZE SUM(pick);
+```
+
+(No supplier has acctbal > 9.99M, so every PER group ends up empty.)
+
+### Root cause
+
+`physical_decide.cpp` had an explicit guard: if a PER aggregate ended up with `num_groups == 0` (i.e. every group was empty after WHEN filtering), it called `RejectEmptyAggregate`. That guard contradicted the documented "skip silently" semantics — a single empty group was already skipped downstream, but *all* groups empty hit the global reject path.
+
+The non-PER empty case (N6: `SUM(pick) <= 5 WHEN false_for_all_rows`) is different and remains rejected — without PER, "empty WHEN" almost always means a user mistake, not a vacuous constraint.
+
+### Fix
+
+Removed the all-groups-empty rejection from the PER constraint branch in `physical_decide.cpp` (around line 2382). When `num_groups == 0`, the downstream emission loop simply emits no constraints, which is mathematically equivalent to writing no constraint at all — the documented spec.
+
+### Verification
+
+- M9 now returns a feasible solution (constraint vacuously satisfied) instead of throwing.
+- N5 now returns a feasible solution.
+- N6 (non-PER empty WHEN) still rejects with the same error, as documented.
+- `make decide-test` — 547 passed, 0 failed.
+
+### Code pointer
+
+- `src/execution/operator/decide/physical_decide.cpp` (PER constraint emission, removed `RejectEmptyAggregate(eval_const.num_groups, ...)` call)
+
+---
+
+## ABS Hard-Direction Constraints Were Silently Unsound (Soundness Bug)
+
+**Severity: critical** — solver returned solutions that violated the constraint, with no error.
+
+### Symptom
+
+Any constraint that lower-bounded an `ABS(...)` expression over a decision variable accepted solutions where `|inner|` did not actually satisfy the bound. Examples (all were silently broken):
+
+```sql
+-- 1. Per-row ABS >= K
+SUCH THAT qty <= 6 AND ABS(qty - 5) >= 4
+-- Forces qty <= 1 (only qty=0 or 1 give |qty-5| >= 4); solver returned qty=6.
+
+-- 2. Per-row ABS = K
+SUCH THAT qty <= 6 AND qty >= 4 AND ABS(qty - 5) = 3
+-- Infeasible (qty in [4,6] gives |qty-5| in [0,1]); solver returned qty=6 as feasible.
+
+-- 3. MIN(ABS(...)) >= K (rewrites to per-row ABS >= K)
+SUCH THAT qty <= 4 AND MIN(ABS(qty - 4)) >= 1
+-- Requires every row qty in 0..3; solver returned qty=4 with |qty-4|=0.
+
+-- 4. SUM(ABS(...)) >= K, MAX(ABS(...)) >= K, AVG(ABS(...)) <> K, etc.
+```
+
+### Root cause
+
+`RewriteAbs` in `src/optimizer/decide/decide_optimizer.cpp` replaces `ABS(e)` with an auxiliary `aux` and emits only the lower envelope — `aux >= e` and `aux >= -e` — which forces `aux >= |e|` but leaves `aux` free to grow above `|e|`. Soundness depends entirely on the *constraint* upper-bounding `aux`:
+
+- **Sound** when the constraint context upper-bounds `aux`: `ABS(...) <= K`, `ABS(...) < K`, `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, etc. The solver naturally picks `aux = |e|` to satisfy the upper bound.
+- **Unsound** when the constraint lower-bounds `aux`: `>=`, `>`, `=`, `<>`. The solver can pick any `aux >= max(|e|, K)`, satisfying the constraint without forcing `|e|` to actually meet the bound.
+
+The MAXIMIZE-objective ABS path *does* allocate the missing upper-envelope (`aux <= e + 2M(1-y)`, `aux <= -e + 2My`) with a sign-indicator binary `y`, so `MAXIMIZE SUM(ABS(...))` was correctly bounded. The constraint path didn't allocate this Big-M machinery, leaving the unsoundness.
+
+The bug had been in the codebase since ABS support was first added; existing stress queries C22/C23 happened to *coincidentally* return correct-looking answers (the maximizer wanted high `qty`, which happened to satisfy the ABS bound), so no test caught it. Audit-time, tighter tests showed the bug clearly.
+
+### Fix
+
+Conservative bind-time rejection. A new `ValidateAbsConstraintDirection` pass runs before `RewriteAbs` and throws `InvalidInputException` when ABS over a decision variable appears in a constraint context that doesn't upper-bound the auxiliary. The check covers:
+
+- Per-row comparisons: ABS on LHS of `<=`/`<` or RHS of `>=`/`>` is sound; everything else (including `=`, `<>`, BETWEEN, IN) is rejected.
+- Aggregates of ABS (`SUM`, `AVG`, `MIN`, `MAX`): same rule applied to the comparison wrapping the aggregate.
+- WHEN/PER wrappers and AND-conjunctions: traversed transparently.
+
+ABS in the **objective** is unchanged — the existing MINIMIZE (lower envelope only, sound by descent) and MAXIMIZE (full Big-M with sign indicator, sound) paths handle it correctly.
+
+A correct hard-direction *constraint* implementation would mirror the existing MAXIMIZE-objective Big-M (binary indicator + bound-aware constraints emitted at execution time once variable bounds are known). That is a substantive feature and was not done in this fix — bind-time rejection is preferable to a partial implementation that risks new soundness or numerical issues.
+
+### Verification
+
+- Per-row `ABS >= K`, `ABS = K`, `ABS <> K`, `ABS > K`: rejected with a clear message.
+- `MIN(ABS) >= K`, `MAX(ABS) >= K`, `SUM(ABS) >= K`, `AVG(ABS) >= K` and the corresponding `=`/`<>`/`>` forms: all rejected.
+- `ABS <= K`, `ABS < K`, `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MINIMIZE SUM(ABS)`, `MAXIMIZE SUM(ABS)`, `MAX(ABS) <= K WHEN ...`, etc.: all still work.
+- `make decide-test`: 547 passed, 0 failed.
+- `stress_queries/01_constraints.sql` C22/C23 rewritten to use the sound easy direction (`MAX(ABS) <= K` / `SUM(ABS) <= K`); R26/R27/R28 added to `05_rejected.sql` to lock in the rejection.
+
+### Code pointers
+
+- New validator: `src/optimizer/decide/decide_optimizer.cpp` (`ValidateAbsConstraintDirection`, `RejectAbsHardDirection`, `ContainsAbsOverDecideVar`).
+- Wire-in site: `OptimizeDecide`, immediately before `RewriteAbs`.
+- Existing sound MAXIMIZE-objective Big-M (kept as the reference for any future hard-direction constraint implementation): same file, `RewriteAbs` MAXIMIZE branch.
+
+### Notes — coverage gaps surfaced by this audit
+
+The audit that found this bug also identified several feature-composition gaps in the stress queries that have now been filled (C30/C31/C32 in `01_constraints.sql`, M19 in `02_modifiers.sql`, O37–O41 in `03_objectives.sql`, P15 in `04_problem_classes.sql`, OP17 in `07_operators.sql`). These are not bugs — just coverage additions for combinations the docs claim are supported but no test exercised.
+

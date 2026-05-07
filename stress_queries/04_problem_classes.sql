@@ -142,3 +142,13 @@ SUCH THAT qty <= 5
   AND SUM(supplier.pick) <= 30
   AND SUM(qty) <= 200
 MAXIMIZE SUM(l.l_extendedprice * qty * supplier.pick);
+
+-- --- P15: MIQP with table-scoped variable -----------------------------
+-- Class: MIQP × table-scoped. P6/P7/P8 cover QP/MIQP without table-
+-- scoping; P13/P14 cover table-scoped + linear. This combination
+-- exercises the per-entity variable indexer under a quadratic objective.
+SELECT s_suppkey, s_acctbal, supplier.qty
+FROM supplier
+DECIDE supplier.qty IS INTEGER
+SUCH THAT supplier.qty <= 10
+MINIMIZE SUM(POWER(supplier.qty - 5, 2));

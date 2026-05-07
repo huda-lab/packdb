@@ -1198,15 +1198,16 @@ public:
             }
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InternalException("DECIDE aggregate constraint LHS contains a non-aggregate term: %s",
-                                    expr.ToString());
+            throw InvalidInputException("DECIDE aggregate constraint LHS contains a non-aggregate term: %s.\n"
+                                        "Use SUM/MIN/MAX/AVG of an expression in decision variables.",
+                                        expr.ToString());
         }
 
         auto &agg = expr.Cast<BoundAggregateExpression>();
         auto agg_name = StringUtil::Lower(agg.function.name);
         if (agg_name != "sum") {
-            throw InternalException("DECIDE optimizer should rewrite aggregate '%s' to SUM before execution",
-                                    agg.function.name);
+            throw InvalidInputException("DECIDE optimizer should rewrite aggregate '%s' to SUM before execution",
+                                        agg.function.name);
         }
         bool is_avg = (agg.alias == AVG_REWRITE_TAG);
 
@@ -1685,14 +1686,19 @@ public:
             }
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InternalException("DECIDE objective contains a non-aggregate term: %s", expr.ToString());
+            throw InvalidInputException(
+                "DECIDE objective contains a non-aggregate term: %s.\n"
+                "The objective must be a SUM/MIN/MAX/AVG of an expression in decision variables.\n"
+                "If you wrapped an aggregate inside another function (e.g. POWER(AVG(x), 2)), "
+                "use the supported shape SUM(POWER(x, 2)) instead.",
+                expr.ToString());
         }
 
         auto &agg = expr.Cast<BoundAggregateExpression>();
         auto agg_name = StringUtil::Lower(agg.function.name);
         if (agg_name != "sum") {
-            throw InternalException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-                                    agg.function.name);
+            throw InvalidInputException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
+                                        agg.function.name);
         }
         bool is_avg = (agg.alias == AVG_REWRITE_TAG);
 
@@ -2378,16 +2384,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                          chunk_expr_cache, context, gstate.data, num_rows,
                                          /*null_excludes=*/true, row_is_included,
                                          eval_const.row_group_ids, eval_const.num_groups);
-                // PER: individual empty groups are skipped downstream (preserved),
-                // but reject when *every* group is empty (the aggregate as a whole
-                // sees no rows after WHEN filtering). Per-row constraints are
-                // exempt — a per-row WHEN matching zero rows is a valid no-op
-                // (the constraint applies to no rows), not an empty aggregate.
-                // Easy-direction MIN/MAX were rewritten by the optimizer to
-                // per-row form but still count as aggregates for rejection.
-                if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
-                    RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
-                }
+                // PER: empty groups are skipped silently. This applies whether
+                // some groups are empty or every group is empty (WHEN filtered
+                // out every row). With num_groups == 0 the aggregate emits no
+                // constraints — equivalent to writing no constraint at all.
+                // This matches the documented spec ("Empty groups are skipped")
+                // and the M9/N5 stress-test comments.
             } else {
                 eval_const.row_group_ids.resize(num_rows);
                 // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
