@@ -207,12 +207,11 @@ SUCH THAT qty <= 20
   AND ABS(qty - 5) <= 3
 MAXIMIZE SUM(s_acctbal * qty);
 
--- --- C22: MAX(ABS(expr)) <= K constraint (easy, sound) ---------------
--- Branch: ABS inside MAX aggregate, easy direction MAX(...) <= K
--- stripped to per-row ABS(...) <= K. Both bounds individually upper-
--- bound the ABS auxiliary, so the lower-envelope linearization is sound.
--- (Prior version of C22 used MIN(ABS) >= K which is the unsound
--- hard direction — now rejected at bind time; see R26 in 05_rejected.sql.)
+-- --- C22: MAX(ABS(expr)) <= K constraint (Path A: lower-envelope only) -
+-- Branch: ABS inside MAX aggregate, easy direction MAX(...) <= K stripped
+-- to per-row ABS(...) <= K. The constraint upper-bounds the ABS auxiliary
+-- directly, so no Big-M sign-indicator is allocated — Path A. The hard-
+-- direction MIN(ABS) >= K shape is exercised separately in C35 via Path B.
 SELECT s_suppkey, s_acctbal, qty
 FROM supplier
 DECIDE qty IS INTEGER
@@ -220,11 +219,10 @@ SUCH THAT qty <= 10
   AND MAX(ABS(qty - 4)) <= 3
 MAXIMIZE SUM(s_acctbal * qty);
 
--- --- C23: SUM(ABS(expr)) <= K aggregate (sound) -----------------------
+-- --- C23: SUM(ABS(expr)) <= K aggregate (Path A: lower-envelope only) --
 -- Branch: SUM of ABS — solver naturally picks aux_i = |e_i| because each
--- aux is lower-bounded individually and only their sum is upper-bounded.
--- (Prior version used MAX(ABS) >= K which is the unsound hard direction —
--- now rejected at bind time; see R27 in 05_rejected.sql.)
+-- aux is lower-bounded individually and the SUM is upper-bounded. Path A,
+-- no Big-M. The hard-direction SUM(ABS) >= K shape is in C36 via Path B.
 SELECT s_suppkey, s_acctbal, qty
 FROM supplier
 DECIDE qty IS INTEGER

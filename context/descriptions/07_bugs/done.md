@@ -213,6 +213,8 @@ Removed the all-groups-empty rejection from the PER constraint branch in `physic
 
 ## ABS Hard-Direction Constraints Were Silently Unsound (Soundness Bug)
 
+> **Superseded — see "ABS Hard-Direction Constraints — Proper Big-M Fix" further down.** This entry documents the original soundness bug and the conservative bind-time-rejection stopgap that was applied first. The proper Big-M sign-indicator implementation has since landed; the rejection-flavored statements below ("rejected at bind time", "C22/C23 rewritten", "R26/R27/R28 added to lock in the rejection") describe the stopgap state, not current behavior. Hard-direction ABS shapes now solve correctly.
+
 **Severity: critical** — solver returned solutions that violated the constraint, with no error.
 
 ### Symptom
