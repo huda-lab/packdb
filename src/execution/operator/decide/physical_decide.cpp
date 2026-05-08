@@ -3482,8 +3482,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     double ub = solver_input.upper_bounds[c1.variable_indices[t]];
                     if (ub >= 1e20 || lb <= -1e20) {
                         throw InvalidInputException(
-                            "MAXIMIZE SUM(ABS(...)) requires a finite bound on variable '%s'. "
-                            "Add constraints '%s >= <lower>' and '%s <= <upper>'.",
+                            "ABS over decision variable requires a finite bound on '%s' "
+                            "for the Big-M sign-indicator linearization. Add constraints "
+                            "'%s >= <lower>' and '%s <= <upper>'. (Triggered by "
+                            "MAXIMIZE SUM(ABS(...)) or by a hard-direction ABS constraint "
+                            "such as ABS(...) >= K or ABS(...) = K.)",
                             decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
                             decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
                             decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias);

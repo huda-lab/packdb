@@ -317,3 +317,53 @@ DECIDE pick IS BOOLEAN, qty IS INTEGER
 SUCH THAT qty <= 20
   AND SUM(pick * qty) <= 30 WHEN (p_retailprice > 1000) PER p_size
 MAXIMIZE SUM(p_retailprice * pick * qty);
+
+-- --- C33: Per-row ABS hard direction (ABS >= K) -----------------------
+-- Branch: hard-direction ABS in constraint, Big-M sign-indicator pair
+-- (aux <= e + 2M(1-y), aux <= -e + 2M*y) on top of the lower envelope.
+-- Was previously rejected (R26 in old 05_rejected.sql); now solves.
+-- Expected: qty in {0,1,2,8,9,10} feasible per row, MAX picks 10. Sum=1000.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) >= 3
+MAXIMIZE SUM(qty);
+
+-- --- C34: ABS equality (ABS = K) --------------------------------------
+-- Branch: hard-direction ABS in equality. Big-M pins aux = |inner|
+-- exactly; the equality then forces |inner| = K. qty in {2, 8}.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) = 3
+MAXIMIZE SUM(qty);
+
+-- --- C35: MIN(ABS) >= K (easy-direction stripped to per-row hard ABS) -
+-- Branch: MIN >= K rewrites under easy-MIN to per-row ABS >= K. Each
+-- per-row ABS is hard-direction → Big-M envelope per row. qty != 4 for
+-- every row. MAX picks qty=10. Sum=1000.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND MIN(ABS(qty - 4)) >= 1
+MAXIMIZE SUM(qty);
+
+-- --- C36: SUM(ABS) >= K (aggregate hard direction) --------------------
+-- Branch: aggregate hard direction over ABS. Each aux pinned via Big-M;
+-- the SUM aggregate then operates on pinned auxes. With qty<=10, max
+-- SUM(|qty-5|) = 100*5 = 500, so 200 is comfortably feasible.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND SUM(ABS(qty - 5)) >= 200
+MAXIMIZE SUM(qty);
+
+-- --- C37: ABS in BETWEEN ----------------------------------------------
+-- Branch: BETWEEN over ABS — desugars to two comparisons, both bounding
+-- aux. Lower bound is hard direction; upper bound is sound. Big-M on
+-- aux makes both comparisons exact. qty in {1,2,3,7,8,9}. MAX picks 9.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) BETWEEN 2 AND 4
+MAXIMIZE SUM(qty);

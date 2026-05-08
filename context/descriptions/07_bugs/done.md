@@ -322,3 +322,41 @@ Three coordinated changes:
 - Per-row coefficient aggregation: `src/packdb/utility/ilp_model_builder.cpp` (per-row constraint loop, ~line 642).
 - Big-M constant skip: `src/execution/operator/decide/physical_decide.cpp` (hard MIN/MAX finalize Big-M scan, ~line 3128).
 
+
+---
+
+## ABS Hard-Direction Constraints — Proper Big-M Fix (Supersedes Earlier Stopgap)
+
+### Symptom
+
+Earlier: PackDB's ABS rewrite was a pure lower-envelope (`aux >= e`, `aux >= -e`), forcing only `aux >= |e|`. For constraint shapes that did not upper-bound `aux` — `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`) — the solver could satisfy the constraint by inflating `aux` above `|e|`, silently producing infeasible-relative-to-the-original-predicate solutions reported as feasible.
+
+The earlier fix (a bind-time soundness gate, `ValidateAbsConstraintDirection`) rejected these shapes at bind time. Correct, but conservative: it reduced the supported surface and forced users to manually reformulate.
+
+### Proper fix
+
+Replace the rejecting validator with a tagging classifier (`TagAbsConstraintsForBigM`) that runs in the same place but, instead of throwing, marks each ABS occurrence in a hard-direction position with `ABS_NEEDS_BIGM_TAG` (set on the `BoundFunctionExpression.alias` of the ABS node).
+
+`RewriteAbs` Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to the per-ABS `AbsPairInfo`. Phase 2 always emits the lower envelope; for any pair where `needs_bigm || (in_objective && MAXIMIZE)`, it additionally allocates a binary sign indicator `y` and tags the lower-bound constraints `ABS_UB_POS_TAG_PREFIX{y_idx}` / `ABS_UB_NEG_TAG_PREFIX{y_idx}` so the existing physical-execution Big-M emitter (originally written for `MAXIMIZE SUM(ABS)`) emits the upper-envelope pair `aux <= e + 2M(1-y)` and `aux <= -e + 2M*y`. Combined with the lower envelope these force `aux = |e|` exactly.
+
+The Big-M emission lives in `physical_decide.cpp` and iterates `LogicalDecide::abs_maximize_links` (vector name preserved for historical reasons; entries are now produced for both objective MAXIMIZE and constraint hard-direction users). M is computed at execution time from the bounds of variables in `expr` — finite bounds are required, with a generic error message naming the unbounded variable.
+
+WHEN/PER on the original constraint are unaffected — the per-row Big-M envelope is unconditional, and the WHEN/PER filter operates on the outer aggregate or constraint that consumes the now-pinned `aux`. ABS on both sides of a comparison is also handled correctly: both auxes are tagged, both pinned, and the comparison reduces to `|e1| op |e2|`.
+
+### Verification
+
+- C33–C37 in `01_constraints.sql` cover per-row hard-direction (`ABS >= K`), equality (`ABS = K`), aggregate hard via easy-MIN strip (`MIN(ABS) >= K`), aggregate hard direction (`SUM(ABS) >= K`), and BETWEEN. All produce oracle-verified correct sums on `small.db`.
+- R26/R27/R28 (the previous rejection-pinning stress queries) are removed from `05_rejected.sql`; that file is now smaller by 3 entries (24 errors vs. 27 before).
+- Existing `MAXIMIZE SUM(ABS(...))` objective path (test `test_abs_linearization.py`) continues to work — the same code path handles both Big-M users.
+- Sound shapes (`ABS <= K`, `SUM(ABS) <= K`, etc.) skip the upper envelope as before — no extra variables, no regressions.
+- `make decide-test`: 547 passed, 0 failed.
+
+### Code pointers
+
+- Classifier: `src/optimizer/decide/decide_optimizer.cpp` — `TagAbsConstraintsForBigM`, `ClassifyAbsConstraints`, `TagAbsForBigM`.
+- Wire-in: `OptimizeDecide`, immediately before `RewriteAbs`.
+- Phase 1 tag-read: `FindAndReplaceAbs` reads `func.alias == ABS_NEEDS_BIGM_TAG`.
+- Phase 2 y-allocation: `RewriteAbs` — `needs_bigm = pair.needs_bigm || (in_objective && MAXIMIZE)`.
+- Big-M emission (unchanged code path, broadened context): `src/execution/operator/decide/physical_decide.cpp` (search for `abs_maximize_links`).
+- Tag constant: `src/include/duckdb/common/enums/decide.hpp` (`ABS_NEEDS_BIGM_TAG`).
+- Doc: `03_expressivity/sql_functions/done.md` (Path A / Path B classification).
