@@ -456,6 +456,67 @@ static unique_ptr<Expression> BuildCoefficientFromFactors(const vector<const Exp
 	return result;
 }
 
+// Distribute multiplication over addition/subtraction: when a `*` chain has
+// an additive (`+` / `-` / unary-`-`) factor, expand into a vector of
+// (sign, product) pairs, each a pure `*` chain with the additive factor
+// replaced by one of its addends. The caller recurses into each pair with
+// its sign applied, so `K * (a - b*x)` becomes `(+1, K*a)` and `(-1, K*b*x)`.
+//
+// Without this expansion, `ClassifyNormalizedProduct` rejects the `(a - b*x)`
+// factor as "unexpanded nonlinear product" because it isn't a bare decide-var
+// reference, even though the algebraic form is linear in decision vars.
+//
+// Returns empty when no additive factor is present (caller falls through to
+// the existing classification logic).
+static vector<pair<int, unique_ptr<Expression>>>
+TryDistributeMultiplyOverAdd(const BoundFunctionExpression &mul_expr) {
+	vector<pair<int, unique_ptr<Expression>>> out;
+	vector<const Expression *> factors;
+	CollectMultiplicativeFactors(mul_expr, factors);
+
+	int additive_idx = -1;
+	for (idx_t i = 0; i < factors.size(); i++) {
+		const Expression *f = factors[i];
+		if (f->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) continue;
+		auto &ff = f->Cast<BoundFunctionExpression>();
+		if (ff.function.name == "+" && ff.children.size() >= 1) {
+			additive_idx = (int)i; break;
+		}
+		if (ff.function.name == "-" &&
+		    (ff.children.size() == 1 || ff.children.size() == 2)) {
+			additive_idx = (int)i; break;
+		}
+	}
+	if (additive_idx < 0) return out;
+
+	auto &add_func = factors[additive_idx]->Cast<BoundFunctionExpression>();
+	vector<pair<int, const Expression *>> addends;
+	if (add_func.function.name == "+") {
+		for (auto &c : add_func.children) addends.push_back({1, c.get()});
+	} else { // "-"
+		if (add_func.children.size() == 2) {
+			addends.push_back({1, add_func.children[0].get()});
+			addends.push_back({-1, add_func.children[1].get()});
+		} else {
+			addends.push_back({-1, add_func.children[0].get()});
+		}
+	}
+
+	for (auto &kv : addends) {
+		int s = kv.first;
+		const Expression *ad = kv.second;
+		vector<const Expression *> new_factors;
+		for (idx_t j = 0; j < factors.size(); j++) {
+			if ((int)j == additive_idx) continue;
+			new_factors.push_back(factors[j]);
+		}
+		new_factors.push_back(ad);
+		auto prod = BuildCoefficientFromFactors(new_factors, mul_expr);
+		out.push_back({s, std::move(prod)});
+	}
+	return out;
+}
+
 static bool TryGetBareDecideFactor(const Expression &expr, const PhysicalDecide &op, idx_t &var_idx) {
 	const Expression *cur = UnwrapBoundCasts(expr);
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
@@ -814,6 +875,24 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
 
         // Multiplication: extract variable and coefficient
         if (func.function.name == "*") {
+            // If the `*` chain has an additive factor (e.g. `K * (1 - pick)`),
+            // distribute first so each resulting product is `coef * var`-shaped.
+            // Without this, ExtractCoefficientWithoutVariable would silently
+            // drop the additive structure and produce a wrong coefficient.
+            auto distributed = TryDistributeMultiplyOverAdd(func);
+            if (!distributed.empty()) {
+                for (auto &kv : distributed) {
+                    idx_t before = out_terms.size();
+                    ExtractTerms(*kv.second, out_terms);
+                    if (kv.first == -1) {
+                        for (idx_t i = before; i < out_terms.size(); i++) {
+                            out_terms[i].sign *= -1;
+                        }
+                    }
+                }
+                return;
+            }
+
             idx_t var_idx = FindDecideVariable(func);
 
             if (var_idx == DConstants::INVALID_INDEX) {
@@ -1460,6 +1539,17 @@ public:
             // expansion; at physical planning we only flatten already-normalized
             // product factors for classification.
             if (fname == "*") {
+                // Distribute before ClassifyNormalizedProduct (which throws on
+                // additive factors). See ExtractConstraintTerms for rationale.
+                {
+                    auto distributed = TryDistributeMultiplyOverAdd(func);
+                    if (!distributed.empty()) {
+                        for (auto &kv : distributed) {
+                            ExtractLinearAndBilinearTerms(*kv.second, obj, sign * kv.first, filter);
+                        }
+                        return;
+                    }
+                }
                 NormalizedProductTerm product;
                 if (ClassifyNormalizedProduct(func, op, product)) {
                     if (product.decide_factors.size() == 2) {
@@ -1621,6 +1711,20 @@ public:
                                 }
                             }
                         }
+                    }
+                }
+                // Distribution must come BEFORE ClassifyNormalizedProduct, since
+                // the classifier throws on additive factors instead of returning
+                // false. Shapes like `K * (1 - pick)` reach here from MIN/MAX
+                // hard-direction rewrites and other paths the symbolic normalizer
+                // didn't fully expand.
+                {
+                    auto distributed = TryDistributeMultiplyOverAdd(func);
+                    if (!distributed.empty()) {
+                        for (auto &kv : distributed) {
+                            ExtractConstraintTerms(*kv.second, constr, sign * kv.first, filter);
+                        }
+                        return;
                     }
                 }
                 NormalizedProductTerm product;
@@ -2384,12 +2488,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                          chunk_expr_cache, context, gstate.data, num_rows,
                                          /*null_excludes=*/true, row_is_included,
                                          eval_const.row_group_ids, eval_const.num_groups);
-                // PER: empty groups are skipped silently. This applies whether
-                // some groups are empty or every group is empty (WHEN filtered
-                // out every row). With num_groups == 0 the aggregate emits no
-                // constraints — equivalent to writing no constraint at all.
-                // This matches the documented spec ("Empty groups are skipped")
-                // and the M9/N5 stress-test comments.
+                // PER: individual empty groups are skipped silently, but the
+                // aggregate as a whole must see at least one group. Per-row
+                // constraints are exempt — a per-row WHEN matching zero rows is
+                // a valid no-op. Easy-direction MIN/MAX have been rewritten to
+                // per-row form by the optimizer but still count as aggregates
+                // for rejection. Spec: when/done.md → "Empty Row Sets" — reject
+                // when *every* group is empty.
+                if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+                    RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+                }
             } else {
                 eval_const.row_group_ids.resize(num_rows);
                 // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
@@ -3018,10 +3126,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t indicator_idx = ec.minmax_indicator_idx;
             bool is_max_agg = (ec.minmax_agg_type == "max");
 
-            // Compute Big-M from variable bounds
+            // Compute Big-M from variable bounds. Skip constant LHS terms
+            // (var_idx == INVALID_INDEX) — they have no associated variable
+            // bound; their contribution will be folded into the RHS by the
+            // per-row constraint emitter.
             double M = 1e6;
             for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
                 idx_t var_idx = ec.variable_indices[t];
+                if (var_idx == DConstants::INVALID_INDEX) continue;
                 double ub = solver_input.upper_bounds[var_idx];
                 if (ub < 1e20) {
                     double max_coef = 0.0;

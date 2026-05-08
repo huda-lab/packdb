@@ -167,12 +167,19 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
             }
             return DecideExpression::SUM;
 		} else {
-            // Non-aggregate outer function. Only additive composition of aggregates
-            // (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`) is allowed; wrapping
-            // an aggregate in a non-additive function (e.g. `POWER(AVG(x), 2)`,
-            // `SQRT(SUM(x))`, `LOG(...)`) is not a linearly-composable objective.
-            // Supported quadratic shape is SUM(POWER(_, 2)), not POWER(AGG(_), _).
+            // Non-aggregate outer function. Only additive/scalar composition of
+            // aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
+            // `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
+            // function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
+            // not a linearly-composable objective. Supported quadratic shape is
+            // SUM(POWER(_, 2)), not POWER(AGG(_), _).
             bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
+            // Division is scalar only when the divisor does not contain a
+            // decide aggregate (otherwise the result is genuinely non-linear).
+            if (fname == "/" && func.children.size() == 2 &&
+                !ContainsDecideAggregate(*func.children[1])) {
+                is_additive_or_scalar = true;
+            }
             if (is_additive_or_scalar && ContainsDecideAggregate(expr)) {
                 return DecideExpression::SUM;
             }

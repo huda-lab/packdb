@@ -369,3 +369,17 @@ WHERE p_size < 5
 DECIDE qty IS REAL, stock IS REAL
 SUCH THAT qty <= 10 AND stock <= 10
 MINIMIZE SUM(POWER(qty + stock - 8, 2));
+
+-- --- O42: MAXIMIZE SUM(ABS(expr)) — Big-M sign-indicator path ---------
+-- Branch: MAXIMIZE of SUM over ABS(linear-in-decide-var) is the one
+-- remaining ABS code path that uses Big-M with a per-row sign-indicator
+-- binary. After the 2026-05-07 ABS soundness gate, hard-direction ABS
+-- in constraints is rejected, leaving this objective shape as the only
+-- Big-M ABS user. Without this query that code path goes untested by
+-- the stress suite (the audit flagged this regression in coverage).
+-- The optimum picks qty=0 or qty=10 for every row to maximize |qty-5|.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10
+MAXIMIZE SUM(ABS(qty - 5));

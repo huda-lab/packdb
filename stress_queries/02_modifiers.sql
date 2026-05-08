@@ -75,12 +75,16 @@ SUCH THAT MAX(s_acctbal * pick) <= 7000 PER s_nationkey
   AND SUM(pick) >= 5
 MAXIMIZE SUM(pick);
 
--- --- M9: Empty-group skipping (WHEN filters out all rows in a group) --
--- Branch: empty groups silently skipped.
+-- --- M9: Empty-group skipping (WHEN filters out some, not all, groups) --
+-- Branch: individual empty groups silently skipped — the constraint emits
+-- one row per non-empty group. The WHEN bound is set high enough that a
+-- subset of nations have zero qualifying suppliers; those groups get no
+-- constraint, while qualifying groups do. (Filtering out *every* row
+-- across all groups is rejected — see when/done.md "Empty Row Sets".)
 SELECT s_suppkey, s_nationkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
-SUCH THAT SUM(pick) <= 2 WHEN s_acctbal > 9999999 PER s_nationkey
+SUCH THAT SUM(pick) <= 2 WHEN s_acctbal > 5000 PER s_nationkey
 MAXIMIZE SUM(pick);
 
 -- --- M10: WHEN on MIN aggregate ---------------------------------------

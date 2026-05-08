@@ -276,3 +276,49 @@ A correct hard-direction *constraint* implementation would mirror the existing M
 
 The audit that found this bug also identified several feature-composition gaps in the stress queries that have now been filled (C30/C31/C32 in `01_constraints.sql`, M19 in `02_modifiers.sql`, O37–O41 in `03_objectives.sql`, P15 in `04_problem_classes.sql`, OP17 in `07_operators.sql`). These are not bugs — just coverage additions for combinations the docs claim are supported but no test exercised.
 
+---
+
+## C6/C9/C14: Linear-After-Distribution Shapes Were Misclassified As Nonlinear
+
+### Symptom
+
+Three stress queries in `01_constraints.sql` failed even though the underlying expressions are linear in decision variables after algebraic distribution:
+
+- **C6**: `MIN(s_acctbal * pick + 1000 * (1 - pick)) <= 500` — linear in `pick`: `(s_acctbal - 1000) * pick + 1000`.
+- **C9**: `MIN(s_acctbal * pick + 100000 * (1 - pick)) >= 1000` — same shape, easy direction.
+- **C14**: `s_acctbal * pick >= (correlated_subq) * pick` — rearranges to `(s_acctbal - subq) * pick >= 0`.
+
+Errors observed:
+- C6/C9: `Invalid Input Error: DECIDE expression contains an unsupported product factor that still references decision variables after normalization (total degree > 2 or unexpanded nonlinear product).`
+- C14: `Invalid Input Error: Failed to add constraint to Gurobi: Problem adding constraints.`
+
+### Root cause
+
+Two interacting gaps in the constraint extraction pipeline:
+
+1. **No multiply-over-add distribution at the per-row constraint extractor.** The per-row constraint path (and the inner-of-aggregate path that feeds it) calls `ClassifyNormalizedProduct` on each `*` chain. The classifier expected each factor to be either a bare data expression or a bare decide-var reference; an additive sub-expression like `(1 - pick)` made it throw "unexpanded nonlinear product." The symbolic normalizer that handles SymEngine-based aggregate normalization didn't run on per-row constraints, so the additive factor reached the classifier intact.
+2. **No coefficient deduplication when the same decision variable appeared in multiple LHS terms of a single per-row constraint.** This affected C14 directly (`s_acctbal * pick` and `subq * pick` after move-to-LHS) and any post-distribution shape where the additive expansion produced multiple `*pick` terms (`s_acctbal*pick + (-1000*pick) + 1000`). The per-row emission in `ilp_model_builder.cpp` pushed each term as its own `(column_index, coefficient)` pair into the Gurobi constraint, producing duplicate column indices that `GRBaddconstr` rejected.
+
+### Fix
+
+Three coordinated changes:
+
+1. **`TryDistributeMultiplyOverAdd`** (`src/execution/operator/decide/physical_decide.cpp`): a new helper that, given a `*` chain with at least one `+`/`-`/unary-`-` factor, returns a vector of `(sign, product)` pairs where each product replaces the additive factor with one of its addends. Algebraically equivalent: `K * (a - b * x)` becomes `[(+1, K * a), (-1, K * b * x)]`.
+2. **Apply distribution before the classifier** at every `*` branch that previously fell into `ClassifyNormalizedProduct`: `ExtractConstraintTerms`, `ExtractLinearAndBilinearTerms` (objective), and the linear `ExtractTerms`. Distribution runs *before* classification (the classifier throws rather than returning false on additive factors). When distribution applies, the caller recurses into each distributed product with its sign; otherwise the existing logic runs unchanged.
+3. **Per-row coefficient aggregation** (`src/packdb/utility/ilp_model_builder.cpp`): the per-row constraint emission now sums coefficients into an `unordered_map<int, double>` keyed on Gurobi column index before pushing entries into `ModelConstraint`. Constants (LHS terms with `var_idx == INVALID_INDEX`) continue to be folded into the RHS adjustment as before.
+4. **Big-M constant skip** (same file's hard MIN/MAX finalize, around line 3128): the Big-M auto-tuner now skips `INVALID_INDEX` entries when scanning `variable_indices` for upper-bound lookup. Without this, a constant LHS term in a hard MIN/MAX inner expression caused an out-of-bounds vector access during finalization.
+
+### Verification
+
+- C6, C9, C14 all return solutions on `small.db`. Sums and constraints check out by hand on a few rows.
+- Existing easy-direction MIN/MAX (C4, C5, C22, C23, M10), per-row ABS (C21, R26–R28), bilinear (C11, C24, C32), nested-aggregate (M11, M12, M13, O37–O41), table-scoped variables (V8–V13, P13–P15), and feasibility (P11, P12) all continue to work.
+- `make decide-test`: 547 passed, 0 failed.
+- All 9 stress files: only the previously-documented expected rejections remain (R-series, N6, N7-N12, R17 silent-accept).
+
+### Code pointers
+
+- Distribution helper: `src/execution/operator/decide/physical_decide.cpp` (`TryDistributeMultiplyOverAdd`).
+- Wire-in sites (all in same file): `ExtractTerms` `*` branch; `ExtractLinearAndBilinearTerms` `*` branch; `ExtractConstraintTerms` `*` branch.
+- Per-row coefficient aggregation: `src/packdb/utility/ilp_model_builder.cpp` (per-row constraint loop, ~line 642).
+- Big-M constant skip: `src/execution/operator/decide/physical_decide.cpp` (hard MIN/MAX finalize Big-M scan, ~line 3128).
+

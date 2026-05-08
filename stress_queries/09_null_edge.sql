@@ -49,12 +49,15 @@ DECIDE pick IS BOOLEAN
 SUCH THAT SUM(pick) <= 2 PER (k1, k2)
 MAXIMIZE SUM(s_acctbal * pick);
 
--- --- N5: Empty aggregate after WHEN (PER-grouped, empty group) -------
--- Branch: WHEN filters out all rows in a PER group → group skipped silently.
+-- --- N5: Empty aggregate after WHEN (PER-grouped, partial empty groups) --
+-- Branch: WHEN excludes some, not all, of the PER groups. Empty groups
+-- are skipped silently; non-empty groups still produce constraints. Per
+-- docs (when/done.md "Empty Row Sets"), the *all-empty* case is rejected
+-- — that's the dedicated rejection in 05_rejected.sql / N6.
 SELECT s_suppkey, s_nationkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
-SUCH THAT SUM(pick) <= 2 WHEN (s_acctbal > 9999999) PER s_nationkey
+SUCH THAT SUM(pick) <= 2 WHEN (s_acctbal > 5000) PER s_nationkey
 MAXIMIZE SUM(pick);
 
 -- --- N6: Empty aggregate after WHEN (non-PER, all rows filtered) -----

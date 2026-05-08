@@ -54,10 +54,10 @@ MAXIMIZE SUM(level);
 
 -- --- C6: MIN(expr) <= K (hard, Big-M indicators) ----------------------
 -- Branch: MIN aggregate, hard direction, binary indicator per row.
--- Verified 2026-05-07: now rejected cleanly with
---   "Invalid Input Error: DECIDE expression contains an unsupported product
---    factor that still references decision variables after normalization..."
--- (Earlier crash / "Failed to add constraint to Gurobi" no longer reproduces.)
+-- Inner expression `s_acctbal * pick + 1000 * (1 - pick)` is linear in
+-- pick after distribution: `(s_acctbal - 1000) * pick + 1000`. The
+-- multiply-over-add distributor + per-row LHS-constant-to-RHS handling
+-- now make this work end-to-end.
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
@@ -83,10 +83,9 @@ SUCH THAT SUM(flag) = 7
 MAXIMIZE SUM(n_nationkey * flag);
 
 -- --- C9: Composed MIN with SUM inside ---------------------------------
--- Branch: composed aggregate — MIN of per-row expression + SUM constraint.
--- Verified 2026-05-07: now rejected cleanly with the same Invalid Input
--- Error class as C6 ("unsupported product factor ..."). Earlier
--- "Failed to add constraint to Gurobi" no longer reproduces.
+-- Branch: composed aggregate — MIN(linear-in-pick) >= K (easy direction,
+-- strips to per-row) + SUM constraint. Same shape as C6 inside the MIN;
+-- works after distribution of `100000 * (1 - pick)`.
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
@@ -134,10 +133,10 @@ SUCH THAT SUM(s_acctbal * pick) <= (SELECT AVG(s_acctbal) * 20 FROM supplier)
 MAXIMIZE SUM(pick);
 
 -- --- C14: Correlated scalar subquery in constraint --------------------
--- Branch: per-row correlated subquery RHS.
--- BUG: "Failed to add constraint to Gurobi" when the correlated subquery
---      result is multiplied by a decision variable on both sides.
---      Needs a minimal repro; simpler correlated-subquery shapes may work.
+-- Branch: per-row correlated subquery RHS, decision variable on both
+-- sides. Rearranges to `(s_acctbal - subq) * pick >= 0` per row. Two
+-- terms reference the same `pick` variable; the per-row LHS coefficient
+-- aggregator merges them into a single Gurobi column entry.
 SELECT s_suppkey, s_nationkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN

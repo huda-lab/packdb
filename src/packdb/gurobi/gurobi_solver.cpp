@@ -185,17 +185,12 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 api.geterrormsg(guard.env));
     }
 
-    // For terminations that may still carry a feasible incumbent (time/iter/node/solution
-    // limit, user interrupt, suboptimal), accept the best solution found if one exists.
-    if (status == GRB_TIME_LIMIT || status == GRB_ITERATION_LIMIT ||
-        status == GRB_NODE_LIMIT || status == GRB_SOLUTION_LIMIT ||
-        status == GRB_INTERRUPTED || status == GRB_SUBOPTIMAL) {
-        int sol_count = 0;
-        if (api.getintattr(guard.model, "SolCount", &sol_count) == 0 && sol_count > 0) {
-            status = GRB_OPTIMAL; // proceed to solution extraction below
-        }
-    }
-
+    // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
+    // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
+    // not a proof of optimality; returning it as if it were would silently
+    // mislead the caller. We throw a clear error instead. The TimeLimit set
+    // above keeps the session from hanging; surfacing it as a query error
+    // (rather than relabeling to OPTIMAL) preserves correctness.
     if (status != GRB_OPTIMAL) {
         if (status == GRB_INFEASIBLE) {
             throw InvalidInputException(
