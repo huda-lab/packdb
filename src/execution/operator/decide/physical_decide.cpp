@@ -3243,6 +3243,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
         return true;
     };
+    // Companion check on the RHS. With integer-valued LHS and a non-integer K,
+    // `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite
+    // would emit `LHS <= K-1 ∨ LHS >= K+1`, which on the integer lattice
+    // wrongly excludes floor(K) and ceil(K) — both of which the original
+    // predicate accepted. Treat such RHS values as a silent drop.
+    auto NEIsIntegerValuedRhs = [](double k) {
+        return std::abs(k - std::round(k)) < 1e-9;
+    };
 
     if (!ne_indicator_indices.empty()) {
         vector<EvaluatedConstraint> new_constraints;
@@ -3277,13 +3285,47 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (ec.lhs_is_aggregate) {
                     // Aggregate NE: defer to after var_indexer is built.
                     // Will be expanded with a single global z per group.
+                    // The per-group integer-RHS check (for AVG <> where the
+                    // rescaled K*N_g may or may not be integer) lives in the
+                    // deferred expansion below; we don't filter here.
                     DeferredAggregateNE deferred;
                     deferred.original = ec; // copy before the loop moves on
                     deferred.big_M = M;
                     deferred_ne_aggregate.push_back(std::move(deferred));
                     // Don't add to new_constraints — handled via global_constraints later
                 } else {
-                    // Per-row NE: expand inline with row-scoped indicator variable
+                    // Per-row NE: expand inline with row-scoped indicator variable.
+                    //
+                    // Integer-valued RHS guard. If RHS is uniform and non-integer,
+                    // every row's `LHS <> K` is a tautology — drop the whole
+                    // constraint. If RHS varies per row (e.g. correlated subquery),
+                    // mask out only the non-integer rows by adding them to
+                    // row_group_ids as INVALID_INDEX so the model builder skips
+                    // them. The remaining rows still get the real Big-M pair.
+                    if (ec.rhs_values.IsUniform()) {
+                        if (!NEIsIntegerValuedRhs(ec.rhs_values.UniformValue())) {
+                            continue; // drop ec entirely (tautology)
+                        }
+                    } else {
+                        // Build/extend a mask. row_group_ids may be empty (no WHEN/PER);
+                        // in that case materialize one initialised to group 0 so we can
+                        // exclude individual rows by setting INVALID_INDEX.
+                        if (ec.row_group_ids.empty()) {
+                            ec.row_group_ids.assign(num_rows, 0);
+                            ec.num_groups = 1;
+                        }
+                        idx_t dropped = 0;
+                        for (idx_t r = 0; r < num_rows; r++) {
+                            if (ec.row_group_ids[r] == DConstants::INVALID_INDEX) continue;
+                            if (!NEIsIntegerValuedRhs(ec.rhs_values.Get(r))) {
+                                ec.row_group_ids[r] = DConstants::INVALID_INDEX;
+                                dropped++;
+                            }
+                        }
+                        if (dropped == num_rows) {
+                            continue; // every row is a tautology — drop the constraint
+                        }
+                    }
                     idx_t indicator_var_idx = ec.ne_indicator_idx;
 
                     // Build indicator coefficient column. If no WHEN/PER filter, every
@@ -3737,6 +3779,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             double rhs = base_rhs;
             if (ec.ne_avg_rhs_scale) {
                 rhs *= static_cast<double>(g_size);
+            }
+
+            // Integer-RHS guard: with integer LHS (already enforced by
+            // NELhsIsIntegerValued at deferral time) and a non-integer K,
+            // `LHS <> K` is a tautology — every integer LHS satisfies it.
+            // The ±1 Big-M rewrite would wrongly cut floor(K) and ceil(K).
+            // Skip the group entirely. For AVG <> with mixed group sizes,
+            // some groups may have integer K*N_g and others not — each is
+            // handled independently. No global z is allocated for skipped
+            // groups, so the model stays clean.
+            if (std::abs(rhs - std::round(rhs)) >= 1e-9) {
+                continue;
             }
 
             // Allocate one global binary z for this group
