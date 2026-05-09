@@ -101,15 +101,13 @@ INSERT INTO Assignments VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT worker_id, task_id, skill_match, hours, x as assigned, y as hours_allocated
 FROM Assignments
-DECIDE x, y
+DECIDE x IS BOOLEAN, y IS INTEGER
 SUCH THAT
-    x IS BINARY AND y IS INTEGER AND
     y = x * hours AND
     SUM(x) PER worker_id <= 1 AND
     SUM(x) PER task_id = 1
 MAXIMIZE SUM(x * skill_match);</code></pre>
       </div>
-      <p class="text-sm text-fg-subtle italic mt-3">Note: PER (grouped constraints) is a planned feature — coming soon.</p>
     </section>
 
     <section class="example-section">
